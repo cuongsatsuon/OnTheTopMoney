@@ -69,7 +69,7 @@ export const PROVIDER_LABEL: Record<OAuthProvider, string> = { facebook: 'Meta',
  * còn đọc dữ liệu mẫu (Chi tiết trang, Chi tiết nhóm, bộ chọn phạm vi…) thấy trang thật cho tới khi story của
  * chúng chuyển sang API.
  */
-export function usePages() {
+export function usePages(options: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: PAGES_KEY,
     queryFn: async ({ signal }) => {
@@ -78,6 +78,7 @@ export function usePages() {
       return data
     },
     select: (data) => data.items,
+    enabled: options.enabled ?? true,
   })
 }
 

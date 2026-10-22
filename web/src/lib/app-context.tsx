@@ -1,11 +1,15 @@
 import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react'
-import { groupById, pageById, pages, type Page } from '../data/mock'
+import { ALL_SCOPE, type Scope } from '@ottm/shared'
+import { groups, pages, type Page } from '../data/mock'
 import { Toast } from '../components/ui'
+import { usePages } from './connections'
+import { useGroups } from './groups'
 import { aiLock as aiLockOf, openAiKeyStatusOf, useOpenAiSettings, type AiKeyState, type AiLock } from './openai'
+import { deriveScopeView, parseStoredScope } from './scope'
 import { useMe } from './session'
 
-/** Phạm vi: tất cả trang, một nhóm, hoặc một trang (EXPERIENCE.md › Mô hình khái niệm). */
-export type Scope = { kind: 'all' } | { kind: 'group'; id: string } | { kind: 'page'; id: string }
+/** Phạm vi: tất cả trang, một nhóm, hoặc một trang (EXPERIENCE.md › Mô hình khái niệm). Kiểu dùng chung ở `@ottm/shared`. */
+export type { Scope }
 
 interface AppState {
   scope: Scope
@@ -26,14 +30,16 @@ const AppContext = createContext<AppState | null>(null)
 
 const STORAGE_KEY = 'ottm.scope'
 
+/**
+ * Lựa chọn đã nhớ (chỉ kiểm shape; id đã biến mất hạ về `all` ở `deriveScopeView` khi đã có danh sách).
+ * `parseStoredScope` không ném — try/catch chỉ để chắn `localStorage.getItem` (có thể ném ở chế độ riêng tư).
+ */
 function loadScope(): Scope {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (raw) return JSON.parse(raw) as Scope
+    return parseStoredScope(localStorage.getItem(STORAGE_KEY))
   } catch {
-    /* bỏ qua */
+    return ALL_SCOPE
   }
-  return { kind: 'all' }
 }
 
 export function AppProvider({ children }: { children: ReactNode }) {
@@ -42,8 +48,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // Trạng thái khoá OpenAI lấy từ server; `settings.updated` (realtime) vô hiệu hoá query → refetch.
   // Chỉ hỏi khi đã đăng nhập để màn đăng nhập không gọi route cần phiên.
   const me = useMe()
-  const openAi = useOpenAiSettings({ enabled: Boolean(me.data) })
+  const authed = Boolean(me.data)
+  const openAi = useOpenAiSettings({ enabled: authed })
   const openAiKeyStatus = openAiKeyStatusOf(openAi)
+  // Danh sách trang/nhóm thật (đã chép vào kho mẫu) cho bộ chọn phạm vi và khôi phục an toàn; chỉ hỏi khi đã
+  // đăng nhập. `.data` đưa vào deps để `useMemo` tính lại phạm vi sau khi danh sách cập nhật.
+  const pagesQuery = usePages({ enabled: authed })
+  const groupsQuery = useGroups({ enabled: authed })
 
   const setScope = useCallback((s: Scope) => {
     setScopeState(s)
@@ -55,13 +66,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const value = useMemo<AppState>(() => {
-    const scopedPages =
-      scope.kind === 'all' ? pages : scope.kind === 'group' ? pages.filter((p) => p.groupId === scope.id) : pages.filter((p) => p.id === scope.id)
+    // Lựa chọn cũ trỏ tới trang/nhóm đã biến mất → về `all` (dữ liệu không bị lọc rỗng); nhãn luôn khớp scope.
+    const { scope: eff, scopedPages, scopeLabel } = deriveScopeView(scope, pages, groups)
     const ids = new Set(scopedPages.map((p) => p.id))
-    const scopeLabel =
-      scope.kind === 'all' ? 'Tất cả trang' : scope.kind === 'group' ? (groupById(scope.id)?.name ?? '') : pageById(scope.id).name
     return {
-      scope,
+      scope: eff,
       setScope,
       scopeLabel,
       scopedPages,
@@ -71,7 +80,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       openAiKeyStatus,
       aiLock: aiLockOf(openAiKeyStatus),
     }
-  }, [scope, setScope, openAiKeyStatus])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `pages`/`groups` là kho mẫu bị biến đổi tại chỗ; `*.data` là tín hiệu đã cập nhật.
+  }, [scope, setScope, openAiKeyStatus, pagesQuery.data, groupsQuery.data])
 
   return (
     <AppContext.Provider value={value}>

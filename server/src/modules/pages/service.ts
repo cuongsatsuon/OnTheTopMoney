@@ -2,10 +2,11 @@
 // - `upsertFromPlatform`, `setConnectionStatus`: CHỈ `connections` được gọi (AD-5: trạng thái tính ở
 //   `connections`, lưu ở đây). Cả hai nhận executor để chạy trong transaction của bên gọi.
 // - `listPages`, `getPage`: đọc cho api và module khác.
-import type { ConnectionStatus, PageDto, Platform } from '@ottm/shared'
-import { and, asc, eq, getTableColumns, isNull, sql } from 'drizzle-orm'
+import { ALL_SCOPE, type ConnectionStatus, type PageDto, type Platform, type Scope } from '@ottm/shared'
+import { and, asc, eq, getTableColumns, inArray, isNull, sql, type SQL } from 'drizzle-orm'
 import type { DbExecutor } from '../../platform/db/index.ts'
-import { pages } from './schema.ts'
+import { AppError } from '../../platform/errors/index.ts'
+import { groups, pages } from './schema.ts'
 
 export interface PlatformAccount {
   platform: Platform
@@ -97,13 +98,41 @@ export async function setConnectionStatus(
   return row ? toPageDto(row) : null
 }
 
-/** Trang chưa gỡ, cũ nhất trước (ổn định khi kết nối thêm). */
-export async function listPages(db: DbExecutor): Promise<PageDto[]> {
-  const rows = await db
-    .select()
+/**
+ * Helper DUY NHẤT dịch phạm vi → tập `pageId` của các trang CHƯA gỡ (AD-18). Mọi màn/endpoint lọc theo phạm vi
+ * phải đi qua đây, không nhân bản logic dịch:
+ * - `all` → mọi trang chưa gỡ;
+ * - `group:<id>` → trang thuộc nhóm (nhóm rỗng → `[]`); nhóm không tồn tại → 404;
+ * - `page:<id>` → `[pageId]`; trang không tồn tại hoặc đã gỡ → 404.
+ * Trả theo thứ tự `connected_at` rồi `id` (ổn định). Thực thể nhiều trang (epic sau) thuộc phạm vi khi tập trang
+ * của nó giao tập này khác rỗng.
+ */
+export async function resolveScope(db: DbExecutor, scope: Scope): Promise<string[]> {
+  if (scope.kind === 'all') return scopedPageIds(db, isNull(pages.removedAt))
+  if (scope.kind === 'group') {
+    const [group] = await db.select({ id: groups.id }).from(groups).where(eq(groups.id, scope.id))
+    if (!group) throw new AppError('NOT_FOUND', 404, { message: 'Nhóm không tồn tại', details: { groupId: scope.id } })
+    return scopedPageIds(db, and(eq(pages.groupId, scope.id), isNull(pages.removedAt)))
+  }
+  const [row] = await db
+    .select({ id: pages.id })
     .from(pages)
-    .where(isNull(pages.removedAt))
-    .orderBy(asc(pages.connectedAt), asc(pages.id))
+    .where(and(eq(pages.id, scope.id), isNull(pages.removedAt)))
+  if (!row) throw new AppError('NOT_FOUND', 404, { message: 'Trang không tồn tại', details: { pageId: scope.id } })
+  return [row.id]
+}
+
+async function scopedPageIds(db: DbExecutor, where: SQL | undefined): Promise<string[]> {
+  const rows = await db.select({ id: pages.id }).from(pages).where(where).orderBy(asc(pages.connectedAt), asc(pages.id))
+  return rows.map((r) => r.id)
+}
+
+/** Trang chưa gỡ theo phạm vi (mặc định: mọi trang), cũ nhất trước (ổn định khi kết nối thêm). */
+export async function listPages(db: DbExecutor, scope: Scope = ALL_SCOPE): Promise<PageDto[]> {
+  // `resolveScope` là nguồn DUY NHẤT dịch phạm vi — đã lọc "trang chưa gỡ" và ném 404 khi nhóm/trang không tồn tại.
+  const ids = await resolveScope(db, scope)
+  if (ids.length === 0) return []
+  const rows = await db.select().from(pages).where(inArray(pages.id, ids)).orderBy(asc(pages.connectedAt), asc(pages.id))
   return rows.map(toPageDto)
 }
 

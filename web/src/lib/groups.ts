@@ -69,7 +69,7 @@ export function mirrorRealGroups(dtos: readonly GroupDto[], store: Group[] = moc
 }
 
 /** Danh sách nhóm thật; mỗi lần tải xong chép vào kho mẫu để các màn khác thấy. */
-export function useGroups() {
+export function useGroups(options: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: GROUPS_KEY,
     queryFn: async ({ signal }) => {
@@ -78,6 +78,7 @@ export function useGroups() {
       return data
     },
     select: (data) => data.items,
+    enabled: options.enabled ?? true,
   })
 }
 

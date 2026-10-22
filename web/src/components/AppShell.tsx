@@ -22,6 +22,7 @@ import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { conversations, groups, pages, pagesInGroup } from '../data/mock'
 import { BUDGET_BANNER_ACTION, BUDGET_BANNER_TEXT, budgetView, useAiBudget, useAiBudgetToasts } from '../lib/ai-budget'
 import { useApp, type Scope } from '../lib/app-context'
+import { matchesQuery } from '../lib/scope'
 import { usePages } from '../lib/connections'
 import { useLogout } from '../lib/session'
 import { errorMessageOf } from '../lib/error-messages'
@@ -170,7 +171,8 @@ function ScopeSwitcher() {
     setQ('')
   }
   const isSel = (s: Scope) => JSON.stringify(s) === JSON.stringify(scope)
-  const match = (name: string) => name.toLowerCase().includes(q.toLowerCase())
+  // Tìm KHÔNG DẤU: gõ "my pham" khớp "Mỹ phẩm" (chuẩn hoá cả nhãn lẫn truy vấn).
+  const match = (name: string) => matchesQuery(name, q)
 
   return (
     <div className="relative" ref={ref}>

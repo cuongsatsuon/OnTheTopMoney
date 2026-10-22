@@ -5,6 +5,7 @@ export const MODULE = 'pages'
 export {
   getPage,
   listPages,
+  resolveScope,
   setConnectionStatus,
   toPageDto,
   upsertFromPlatform,
