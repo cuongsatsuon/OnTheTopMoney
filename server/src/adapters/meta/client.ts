@@ -3,7 +3,7 @@
 // - Trước khi gửi: kiểm ngân sách tần suất theo hạng (`rate.ts`). Sau MỖI phản hồi: ghi usage từ header.
 // - Token đi trong query `access_token`, kèm `appsecret_proof` = HMAC-SHA256(token, app secret) khi có secret.
 // - Log chỉ path (bỏ query), HTTP status, mã/subcode và fbtrace id; không bao giờ log token, proof, query hay body.
-import { createHmac } from 'node:crypto'
+import { createHmac, timingSafeEqual } from 'node:crypto'
 import { abortedFailure, classifyMetaError, transientFailure, APP_LEVEL_RATE_LIMIT_CODES, type MetaFailure } from './errors.ts'
 import {
   DEFAULT_BLOCK_MS,
@@ -89,6 +89,26 @@ export interface MetaClientOptions {
 /** `appsecret_proof` = HMAC-SHA256 của token với khoá là app secret, dạng hex. */
 export function appSecretProof(token: string, appSecret: string): string {
   return createHmac('sha256', appSecret).update(token).digest('hex')
+}
+
+/** Tiền tố header `X-Hub-Signature-256` của Meta. */
+export const WEBHOOK_SIGNATURE_PREFIX = 'sha256='
+
+/**
+ * Kiểm chữ ký webhook `X-Hub-Signature-256` (AD-4): HMAC-SHA256 của **raw body** với app secret của đúng app,
+ * so sánh constant-time (`timingSafeEqual`). Header dạng `sha256=<hex>`. Thiếu header, sai tiền tố, hex hỏng,
+ * sai độ dài hay sai giá trị đều trả `false` — bên gọi trả 401, không ghi gì. Không log chữ ký (AD-12).
+ */
+export function verifyWebhookSignature(rawBody: Buffer, header: string | undefined, appSecret: string): boolean {
+  if (!appSecret || !header || !header.startsWith(WEBHOOK_SIGNATURE_PREFIX)) return false
+  const provided = header.slice(WEBHOOK_SIGNATURE_PREFIX.length).trim()
+  // Chỉ nhận hex chẵn byte; khác thì Buffer.from bỏ ký tự lạ và lệch độ dài → coi như sai.
+  if (provided.length === 0 || provided.length % 2 !== 0 || !/^[0-9a-fA-F]+$/.test(provided)) return false
+  const expected = createHmac('sha256', appSecret).update(rawBody).digest()
+  const given = Buffer.from(provided, 'hex')
+  // timingSafeEqual ném khi khác độ dài → kiểm trước (độ dài không phải bí mật).
+  if (expected.length !== given.length) return false
+  return timingSafeEqual(expected, given)
 }
 
 /** Path để log: bỏ query/fragment (có thể mang token) — chỉ giữ phần trước `?`/`#`. */

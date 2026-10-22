@@ -40,3 +40,9 @@
 - source_spec: `spec-3-1-ho-so-thuong-hieu.md`
   summary: Guard điều hướng TRONG APP khi form có thay đổi chưa lưu (hiện chỉ beforeunload cho đóng/tải lại tab) — áp cả app.
   evidence: React Router chưa dùng data API/useBlocker; AutoReply cũng chỉ beforeunload. Làm khi nâng router hoặc thêm cơ chế confirm điều hướng dùng chung.
+- source_spec: `spec-4-1-cong-webhook.md`
+  summary: GC/retention cho bảng `webhook_events` (payload chứa nội dung tin của khách — PII, tăng vô hạn).
+  evidence: 4.1 ghi mọi mục webhook vĩnh viễn, chưa có cron dọn. Làm cùng vòng đời dữ liệu AD-22 / Story 9.3 (privacy retention).
+- source_spec: `spec-4-1-cong-webhook.md`
+  summary: Nhật ký webhook ở Cài đặt phân trang "xem thêm" (hiện cap 50 mục mới nhất; API đã trả nextCursor).
+  evidence: useWebhookEvents chưa đọc nextCursor; panel chẩn đoán nên đủ 50 trước mắt.

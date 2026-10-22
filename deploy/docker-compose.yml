@@ -48,6 +48,9 @@ x-app-env: &app-env
   META_APP_SECRET: ${META_APP_SECRET:-}
   # Tuỳ chọn: Configuration ID của Facebook Login for Business; trống → app gửi `scope`.
   META_LOGIN_CONFIG_ID: ${META_LOGIN_CONFIG_ID:-}
+  # Verify token webhook (Story 4.1): chuỗi tự đặt (≥16 ký tự, openssl rand -hex 16) dán vào Meta ở bước xác minh
+  # callback. Không phải secret bên thứ ba — API trả đầy đủ để chủ shop xem. Trống → GET /webhooks/* trả 403.
+  META_VERIFY_TOKEN: ${META_VERIFY_TOKEN:-}
   THREADS_APP_ID: ${THREADS_APP_ID:-}
   THREADS_APP_SECRET: ${THREADS_APP_SECRET:-}
   THREADS_APP_ENV: ${THREADS_APP_ENV:-}

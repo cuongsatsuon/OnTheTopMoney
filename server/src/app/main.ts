@@ -6,7 +6,7 @@ import { createEventPublisher } from '../platform/events/index.ts'
 import { createBoss } from '../platform/jobs/index.ts'
 import { createRealtimeHub } from '../platform/realtime/index.ts'
 import { buildApp } from './app.ts'
-import { aiOptionsFromConfig, connectionsOptionsFromConfig, mediaStoresFromConfig } from './deps.ts'
+import { aiOptionsFromConfig, connectionsOptionsFromConfig, mediaStoresFromConfig, webhooksOptionsFromConfig } from './deps.ts'
 
 const config = getConfig()
 const logger = createLogger({ level: config.LOG_LEVEL, name: 'api' })
@@ -38,7 +38,14 @@ const app = buildApp({
   ai,
   connections: connectionsOptionsFromConfig(config, dbHandle.db, logger),
   media: mediaStoresFromConfig(config),
+  webhooks: webhooksOptionsFromConfig(config, boss),
 })
+if (!config.META_VERIFY_TOKEN) logger.warn('META_VERIFY_TOKEN chưa đặt — GET /webhooks/* trả 403 (chưa xác minh được với Meta)')
+// Thiếu app secret → không verify được chữ ký webhook → POST /webhooks/* luôn 401, Meta có thể tắt subscription.
+if (!config.META_FAKE) {
+  if (!config.META_APP_SECRET) logger.warn('META_APP_SECRET chưa đặt — POST /webhooks/meta trả 401 (không verify được chữ ký; Meta có thể tắt subscription)')
+  if (!config.THREADS_APP_SECRET) logger.warn('THREADS_APP_SECRET chưa đặt — POST /webhooks/threads trả 401 (không verify được chữ ký)')
+}
 if (!config.CLOUDINARY_URL) logger.warn('CLOUDINARY_URL chưa đặt — tải logo hồ sơ thương hiệu trả MEDIA_NOT_CONFIGURED (phần chữ vẫn lưu được)')
 
 let closing = false

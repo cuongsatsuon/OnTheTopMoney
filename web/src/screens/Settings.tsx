@@ -16,7 +16,6 @@ import {
   type PageDto,
 } from '@ottm/shared'
 import { Skeleton } from '../components/Skeleton'
-import { pageById } from '../data/mock'
 import { budgetToneOf, categoryRows, formatVnd, useAiBudget } from '../lib/ai-budget'
 import { useApp } from '../lib/app-context'
 import {
@@ -37,6 +36,16 @@ import {
 } from '../lib/connections'
 import { errorMessage, errorMessageOf } from '../lib/error-messages'
 import { useNotificationPrefs, useSaveNotificationPrefs } from '../lib/notifications'
+import {
+  canRetry,
+  useRetryWebhookEvent,
+  useSendTestEvent,
+  useWebhookConfig,
+  useWebhookEvents,
+  webhookEventTime,
+  webhookFieldLabel,
+  webhookStatusView,
+} from '../lib/webhooks'
 import {
   IMAGE_SIZE_LABEL,
   formatMoney,
@@ -68,20 +77,6 @@ const KEY_STATUS_TONE: Record<OpenAiKeyStatus, 'success' | 'neutral' | 'danger'>
 const IMAGE_SIZE_OPTIONS = IMAGE_SIZES.map((size) => ({ value: size, label: IMAGE_SIZE_LABEL[size] }))
 
 const NO_ACTIVE_MODEL = 'Chưa có model nào đang bật'
-
-const CALLBACK_URL = 'https://api.onthetopmoney.app/webhook/meta'
-const VERIFY_TOKEN = 'ottm_vt_7Hq2pX8mKd9c41'
-
-type LogRow = { id: number; time: string; pageId: string; event: string; ok: boolean; note?: string }
-
-const INITIAL_LOG: LogRow[] = [
-  { id: 6, time: '20:43:12', pageId: 'p1', event: 'messages', ok: true },
-  { id: 5, time: '20:32:40', pageId: 'p4', event: 'messages', ok: true },
-  { id: 4, time: '20:18:05', pageId: 'p2', event: 'messages', ok: true },
-  { id: 3, time: '20:03:51', pageId: 'p5', event: 'feed', ok: true },
-  { id: 2, time: '19:58:27', pageId: 'p7', event: 'messaging_postbacks', ok: false, note: 'Lỗi: trang mất kết nối' },
-  { id: 1, time: '19:40:09', pageId: 'p3', event: 'feed', ok: true },
-]
 
 /**
  * Cài đặt › Tài khoản Meta: hai tài khoản đăng nhập riêng (Story 2.3). Facebook Login cấp Fanpage + Instagram
@@ -146,9 +141,12 @@ export default function Settings() {
   const [newKey, setNewKey] = useState('')
   const [keyError, setKeyError] = useState('')
 
-  // Webhook
+  // Webhook (Story 4.1): URL callback + verify token + nhật ký — tất cả từ API thật.
   const [showToken, setShowToken] = useState(false)
-  const [log, setLog] = useState<LogRow[]>(INITIAL_LOG)
+  const webhookConfig = useWebhookConfig()
+  const webhookEvents = useWebhookEvents()
+  const sendTestEvent = useSendTestEvent()
+  const retryEvent = useRetryWebhookEvent()
 
   // Tài khoản Meta: trang thật, tách khối Facebook và Threads. "Kết nối" / "Kết nối lại" chạy lại OAuth đúng nền
   // tảng; callback đưa về đây (`from: 'settings'`) và mở bước chọn trang ngay trong Cài đặt.
@@ -274,11 +272,26 @@ export default function Settings() {
     notify('Đã kết nối khoá OpenAI')
   }
 
-  const sendTest = () => {
-    const now = new Date()
-    const time = now.toTimeString().slice(0, 8)
-    setLog((l) => [{ id: Date.now(), time, pageId: 'p1', event: 'messages (thử)', ok: true }, ...l].slice(0, 6))
-    notify('Đã gửi sự kiện thử — webhook phản hồi 200')
+  const sendTest = async () => {
+    if (sendTestEvent.isPending) return
+    try {
+      await sendTestEvent.mutateAsync('meta')
+    } catch (err) {
+      notify(errorMessageOf(err))
+      return
+    }
+    notify('Đã gửi sự kiện thử — xem nhật ký bên dưới')
+  }
+
+  const retryWebhook = async (id: string) => {
+    if (retryEvent.isPending) return
+    try {
+      await retryEvent.mutateAsync(id)
+    } catch (err) {
+      notify(errorMessageOf(err))
+      return
+    }
+    notify('Đã xếp lại để xử lý')
   }
 
   const recheck = async () => {
@@ -602,97 +615,174 @@ export default function Settings() {
           {section === 'webhook' && (
             <>
               <Card>
-                <CardHeader
-                  title="Webhook tin nhắn"
-                  subtitle="Meta gửi tin nhắn và bình luận mới về địa chỉ này"
-                  action={
-                    <span className="flex items-center gap-1.5 text-[13px] font-medium text-success-foreground">
-                      <span className="size-2 rounded-full bg-success" />
-                      Nhận tin gần nhất: 2 phút trước
-                    </span>
-                  }
-                />
-                <div className="space-y-4 p-4">
-                  <Field label="Callback URL">
-                    <div className="flex gap-2">
-                      <Input readOnly value={CALLBACK_URL} className="font-mono" onFocus={(e) => e.target.select()} />
-                      <Button icon={<Copy size={15} />} onClick={() => copy(CALLBACK_URL)}>
-                        Sao chép
-                      </Button>
-                    </div>
-                  </Field>
-                  <Field label="Verify token">
-                    <div className="flex gap-2">
-                      <div className="relative flex-1">
-                        <Input readOnly value={showToken ? VERIFY_TOKEN : 'ottm_vt_••••••••••9c41'} className="pr-10 font-mono" />
-                        <button
-                          type="button"
-                          onClick={() => setShowToken((v) => !v)}
-                          className="absolute top-1/2 right-2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:text-foreground"
-                          aria-label={showToken ? 'Ẩn token' : 'Hiện token'}
-                        >
-                          {showToken ? <EyeOff size={15} /> : <Eye size={15} />}
-                        </button>
+                <CardHeader title="Webhook tin nhắn" subtitle="Meta gửi tin nhắn và bình luận mới về các địa chỉ này" />
+                {webhookConfig.data ? (
+                  <div className="space-y-4 p-4">
+                    <Field label="Callback URL — Facebook / Instagram">
+                      <div className="flex gap-2">
+                        <Input readOnly value={webhookConfig.data.callbacks.meta} className="font-mono" onFocus={(e) => e.target.select()} />
+                        <Button icon={<Copy size={15} />} onClick={() => copy(webhookConfig.data!.callbacks.meta)}>
+                          Sao chép
+                        </Button>
                       </div>
-                      <Button icon={<Copy size={15} />} onClick={() => copy(VERIFY_TOKEN)}>
-                        Sao chép
-                      </Button>
-                    </div>
-                  </Field>
-                  <div>
-                    <span className="mb-1.5 block text-[13px] font-medium">Sự kiện đã đăng ký</span>
-                    <div className="flex flex-wrap gap-2">
-                      {['messages', 'messaging_postbacks', 'feed'].map((e) => (
-                        <Chip key={e} tone="primary" icon={<Check size={11} />} className="font-mono">
-                          {e}
-                        </Chip>
-                      ))}
+                    </Field>
+                    <Field label="Callback URL — Threads">
+                      <div className="flex gap-2">
+                        <Input readOnly value={webhookConfig.data.callbacks.threads} className="font-mono" onFocus={(e) => e.target.select()} />
+                        <Button icon={<Copy size={15} />} onClick={() => copy(webhookConfig.data!.callbacks.threads)}>
+                          Sao chép
+                        </Button>
+                      </div>
+                    </Field>
+                    <Field label="Verify token">
+                      {webhookConfig.data.verifyTokenConfigured && webhookConfig.data.verifyToken ? (
+                        <div className="flex gap-2">
+                          <div className="relative flex-1">
+                            <Input
+                              readOnly
+                              value={showToken ? webhookConfig.data.verifyToken : '•'.repeat(Math.min(24, webhookConfig.data.verifyToken.length))}
+                              className="pr-10 font-mono"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setShowToken((v) => !v)}
+                              className="absolute top-1/2 right-2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:text-foreground"
+                              aria-label={showToken ? 'Ẩn token' : 'Hiện token'}
+                            >
+                              {showToken ? <EyeOff size={15} /> : <Eye size={15} />}
+                            </button>
+                          </div>
+                          <Button icon={<Copy size={15} />} onClick={() => copy(webhookConfig.data!.verifyToken ?? '')}>
+                            Sao chép
+                          </Button>
+                        </div>
+                      ) : (
+                        <p className="text-[13px] text-muted-foreground">
+                          Máy chủ chưa đặt <code className="font-mono">META_VERIFY_TOKEN</code>. Đặt biến này rồi khởi động lại để xác minh webhook với Meta.
+                        </p>
+                      )}
+                    </Field>
+                    <div>
+                      <span className="mb-1.5 block text-[13px] font-medium">Field cần bật ở Meta</span>
+                      <div className="flex flex-wrap gap-2">
+                        {[...webhookConfig.data.fields.page, ...webhookConfig.data.fields.instagram, ...webhookConfig.data.fields.threads]
+                          .filter((e, i, a) => a.indexOf(e) === i)
+                          .map((e) => (
+                            <Chip key={e} tone="primary" icon={<Check size={11} />} className="font-mono">
+                              {e}
+                            </Chip>
+                          ))}
+                      </div>
                     </div>
                   </div>
-                </div>
+                ) : webhookConfig.isError ? (
+                  <div className="px-4 py-6 text-center" role="alert">
+                    <p className="text-sm">{errorMessageOf(webhookConfig.error)}</p>
+                    <Button className="mt-3" onClick={() => void webhookConfig.refetch()}>
+                      Thử lại
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="space-y-4 p-4" aria-busy="true">
+                    <Skeleton className="h-9 w-full" />
+                    <Skeleton className="h-9 w-full" />
+                    <Skeleton className="h-9 w-2/3" />
+                  </div>
+                )}
               </Card>
 
               <Card>
                 <CardHeader
                   title="Nhật ký sự kiện"
-                  subtitle="6 sự kiện gần nhất"
+                  subtitle="Các sự kiện webhook gần nhất"
                   action={
-                    <Button size="sm" icon={<Send size={14} />} onClick={sendTest}>
-                      Gửi sự kiện thử
-                    </Button>
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        icon={<RefreshCw size={14} />}
+                        onClick={() => void webhookEvents.refetch()}
+                        disabled={webhookEvents.isFetching}
+                      >
+                        {webhookEvents.isFetching ? 'Đang tải…' : 'Làm mới'}
+                      </Button>
+                      <Button size="sm" icon={<Send size={14} />} onClick={() => void sendTest()} disabled={sendTestEvent.isPending}>
+                        {sendTestEvent.isPending ? 'Đang gửi…' : 'Gửi sự kiện thử'}
+                      </Button>
+                    </div>
                   }
                 />
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-border text-left text-[13px] text-muted-foreground">
-                      <th className="px-4 py-2 font-medium">Thời gian</th>
-                      <th className="px-4 py-2 font-medium">Trang</th>
-                      <th className="px-4 py-2 font-medium">Sự kiện</th>
-                      <th className="px-4 py-2 font-medium">Trạng thái</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border">
-                    {log.map((r) => (
-                      <tr key={r.id}>
-                        <td className="tabular px-4 py-2.5 text-muted-foreground">Hôm nay {r.time}</td>
-                        <td className="px-4 py-2.5">
-                          <span className="flex items-center gap-2">
-                            <PlatformIcon platform={pageById(r.pageId).platform} size={14} />
-                            {pageById(r.pageId).name}
-                          </span>
-                        </td>
-                        <td className="px-4 py-2.5 font-mono text-[13px]">{r.event}</td>
-                        <td className="px-4 py-2.5">
-                          {r.ok ? (
-                            <Chip tone="success">200 OK</Chip>
-                          ) : (
-                            <Chip tone="danger">{r.note ?? 'Lỗi'}</Chip>
-                          )}
-                        </td>
-                      </tr>
+                {webhookEvents.data ? (
+                  webhookEvents.data.items.length === 0 ? (
+                    <p className="px-4 py-6 text-center text-sm text-muted-foreground">
+                      Chưa có sự kiện nào. Bấm "Gửi sự kiện thử" để kiểm tra nhật ký.
+                    </p>
+                  ) : (
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-border text-left text-[13px] text-muted-foreground">
+                          <th className="px-4 py-2 font-medium">Thời gian</th>
+                          <th className="px-4 py-2 font-medium">Trang</th>
+                          <th className="px-4 py-2 font-medium">Sự kiện</th>
+                          <th className="px-4 py-2 font-medium">Trạng thái</th>
+                          <th className="px-4 py-2">
+                            <span className="sr-only">Hành động</span>
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border">
+                        {webhookEvents.data.items.map((ev) => {
+                          const status = webhookStatusView(ev)
+                          return (
+                            <tr key={ev.id}>
+                              <td className="tabular px-4 py-2.5 text-muted-foreground">{webhookEventTime(ev.receivedAt)}</td>
+                              <td className="px-4 py-2.5">
+                                {ev.page ? (
+                                  <span className="flex items-center gap-2">
+                                    <PlatformIcon platform={ev.page.platform} size={14} />
+                                    {ev.page.name}
+                                  </span>
+                                ) : (
+                                  <span className="text-muted-foreground">{ev.test ? '— (thử)' : '—'}</span>
+                                )}
+                              </td>
+                              <td className="px-4 py-2.5 font-mono text-[13px]">{webhookFieldLabel(ev)}</td>
+                              <td className="px-4 py-2.5">
+                                <Chip tone={status.tone}>{status.label}</Chip>
+                              </td>
+                              <td className="px-4 py-2.5 text-right">
+                                {canRetry(ev.status) && (
+                                  <Button
+                                    size="sm"
+                                    variant="secondary"
+                                    icon={<RefreshCw size={13} />}
+                                    onClick={() => void retryWebhook(ev.id)}
+                                    disabled={retryEvent.isPending}
+                                  >
+                                    Xử lý lại
+                                  </Button>
+                                )}
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  )
+                ) : webhookEvents.isError ? (
+                  <div className="px-4 py-6 text-center" role="alert">
+                    <p className="text-sm">{errorMessageOf(webhookEvents.error)}</p>
+                    <Button className="mt-3" onClick={() => void webhookEvents.refetch()}>
+                      Thử lại
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="space-y-2 p-4" aria-busy="true">
+                    {[0, 1, 2].map((i) => (
+                      <Skeleton key={i} className="h-8 w-full" />
                     ))}
-                  </tbody>
-                </table>
+                  </div>
+                )}
               </Card>
             </>
           )}

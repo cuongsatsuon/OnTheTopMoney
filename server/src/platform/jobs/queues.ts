@@ -51,6 +51,7 @@ export interface QueuePayloads {
   'ai.reservations_gc': Record<string, never>
   'connections.oauth_gc': Record<string, never>
   'connections.token_check': Record<string, never>
+  'webhook.route': { eventId: string }
 }
 
 export const QUEUES = {
@@ -125,6 +126,20 @@ export const QUEUES = {
     concurrency: 1,
     expireInSeconds: 300,
     cron: { expression: '0 3 * * *', tz: CRON_TZ },
+  },
+  // Module `webhooks` (Story 4.1, AD-4): mỗi mục webhook một job — chuẩn hoá + đặt `status`. Chống trùng bằng
+  // UNIQUE(product, dedupe_key) ở lúc ghi (mỗi mục một job duy nhất) + handler idempotent (tính lại trạng thái
+  // xác định), nên retry an toàn. Retry 5 backoff, concurrency 10 (AD-24). Chưa `critical` ở 4.1 → job hết retry
+  // vẫn phát `job.failed` nhưng KHÔNG sinh thông báo (consumer `events.notifications` chỉ báo queue critical).
+  // Việc ghi mục `failed` do handler webhook.route tự làm ở lần thử cuối (không qua `job.failed`). Dead-letter +
+  // thông báo để ở story webhook health 4.2.
+  'webhook.route': {
+    policy: 'standard',
+    retryLimit: 5,
+    retryDelay: 2,
+    retryBackoff: true,
+    concurrency: 10,
+    expireInSeconds: 120,
   },
 } as const satisfies { [N in keyof QueuePayloads]: QueueDef }
 

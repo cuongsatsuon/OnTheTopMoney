@@ -164,3 +164,30 @@ export async function getPage(db: DbExecutor, id: string): Promise<PageDto | nul
     .where(and(eq(pages.id, id), isNull(pages.removedAt)))
   return row ? toPageDto(row) : null
 }
+
+/**
+ * Trang CHƯA gỡ theo id nền tảng (AD-6: webhook mang id nền tảng, không phải id nội bộ). Dùng ở job
+ * `webhook.route` để định tuyến mục webhook: không khớp (chưa kết nối hoặc đã gỡ) → `null` (mục chỉ lưu,
+ * không route). `platform_account_id` chỉ duy nhất TRONG từng nền tảng, nên lọc theo `platforms` (suy từ
+ * sản phẩm webhook) để không route chéo khi hai nền tảng trùng id; thứ tự `connected_at`/`id` ổn định làm
+ * backstop khi vẫn có nhiều dòng khớp.
+ */
+export async function findPageByPlatformAccountId(
+  db: DbExecutor,
+  platformAccountId: string,
+  platforms?: readonly Platform[],
+): Promise<PageDto | null> {
+  const [row] = await db
+    .select()
+    .from(pages)
+    .where(
+      and(
+        eq(pages.platformAccountId, platformAccountId),
+        isNull(pages.removedAt),
+        platforms && platforms.length > 0 ? inArray(pages.platform, [...platforms]) : undefined,
+      ),
+    )
+    .orderBy(asc(pages.connectedAt), asc(pages.id))
+    .limit(1)
+  return row ? toPageDto(row) : null
+}

@@ -3,6 +3,7 @@
 export const MODULE = 'pages'
 
 export {
+  findPageByPlatformAccountId,
   getPage,
   listPages,
   resolveScope,

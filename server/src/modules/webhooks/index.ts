@@ -1,0 +1,39 @@
+// Module `webhooks` (AD-1, AD-4): cổng nhận webhook Meta/Threads. Public API chỉ export từ file này.
+// Được gọi: `pages` (base), `connections`, `inbox` (story sau), `adapters/meta` — theo bảng mũi tên AD-1.
+export const MODULE = 'webhooks'
+
+export {
+  createTestEvent,
+  ingestWebhook,
+  listWebhookEvents,
+  markEventFailed,
+  parseWebhookBody,
+  retryEvent,
+  toDto,
+  type IngestDeps,
+  type IngestOutcome,
+  type IngestWebhookInput,
+  type RetryOutcome,
+} from './service.ts'
+
+export {
+  parseMetaBody,
+  parseThreadsBody,
+  hashItem,
+  type WebhookItem,
+} from './parse.ts'
+
+export {
+  WEBHOOK_ROUTE_FAILED,
+  handleRouteJob,
+  parseRouteJobData,
+  platformsForProduct,
+  routeWebhookEvent,
+  type RouteDeps,
+  type RouteJobData,
+  type RouteJobHandlerDeps,
+  type RouteResult,
+} from './route-job.ts'
+
+/** Chỉ để khai khoá ngoại / join tới `webhook_events` từ test; không truy vấn trực tiếp ngoài module. */
+export { webhookEvents as webhookEventsTable } from './schema.ts'

@@ -1,4 +1,5 @@
 // Entrypoint `worker`: node src/worker/main.ts — pg-boss job, cron, consumer sự kiện.
+import type { JobWithMetadata } from 'pg-boss'
 import { getConfig } from '../platform/config/index.ts'
 import { createLogger } from '../platform/log/index.ts'
 import { assertBossDbSupported, createDb, newId } from '../platform/db/index.ts'
@@ -9,6 +10,7 @@ import { gcReservations, handleAiEvent } from '../modules/ai/index.ts'
 import { cleanupExpiredOAuth, createMetaClients, runTokenCheck } from '../modules/connections/index.ts'
 import { handleEvent } from '../modules/notifications/index.ts'
 import { handleProfilesEvent } from '../modules/profiles/index.ts'
+import { handleRouteJob, markEventFailed, routeWebhookEvent } from '../modules/webhooks/index.ts'
 import { HEARTBEAT_INTERVAL_MS, writeHeartbeat } from './heartbeat.ts'
 
 const config = getConfig()
@@ -86,6 +88,17 @@ try {
         })
         logger.info({ refreshed, expiring }, 'connections: kiểm hạn token xong')
       },
+      // Module `webhooks` (Story 4.1, AD-4): chuẩn hoá + đặt `status` cho một mục. Logic nhánh catch (lần thử
+      // cuối → ghi `failed`) nằm trong `handleRouteJob` (đã unit-test). startWorkers chạy includeMetadata nên
+      // job có retryCount/retryLimit lúc chạy.
+      'webhook.route': (job) =>
+        handleRouteJob(
+          {
+            route: (data) => routeWebhookEvent({ db: dbHandle.db }, data),
+            markFailed: (eventId, errorCode) => markEventFailed(dbHandle.db, eventId, errorCode),
+          },
+          job as JobWithMetadata<unknown>,
+        ),
     },
     logger,
     QUEUES,

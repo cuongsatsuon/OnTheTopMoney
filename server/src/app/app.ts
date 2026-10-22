@@ -24,6 +24,7 @@ import { registerOAuth } from './oauth.ts'
 import { registerOpenAiSettings } from './openai-settings.ts'
 import { registerPages } from './pages.ts'
 import { registerStream } from './stream.ts'
+import { registerWebhooks, type WebhooksDeps } from './webhooks.ts'
 
 const VALIDATION_STATUSES = new Set([400, 413, 415, 422])
 const STATUS_CODES: Partial<Record<number, ErrorCode>> = {
@@ -70,12 +71,17 @@ export interface AppDeps {
    * lưu logo trả `MEDIA_NOT_CONFIGURED`, phần chữ của hồ sơ vẫn lưu được.
    */
   media?: MediaStores
+  /**
+   * Cổng webhook Meta/Threads (Story 4.1, AD-4): hàng đợi `webhook.route`, verify token + app secret, gốc công
+   * khai để dựng URL callback. Không truyền → không đăng ký route webhook (vd test chỉ kiểm phần khác).
+   */
+  webhooks?: Omit<WebhooksDeps, 'db' | 'log'>
 }
 
 /** Như `trustProxy: 1` của proxy-addr (kiểu Fastify không nhận số): chỉ tin hop đầu tiên. */
 const trustOneHop = (_address: string, hop: number): boolean => hop < 1
 
-export function buildApp({ sql, db, logger, http = {}, loginLimiter, health, events, realtime, ai, clock, connections, media }: AppDeps): FastifyInstance {
+export function buildApp({ sql, db, logger, http = {}, loginLimiter, health, events, realtime, ai, clock, connections, media, webhooks }: AppDeps): FastifyInstance {
   // Sau một hop reverse proxy (nginx): chỉ tin địa chỉ cuối của X-Forwarded-For, không tin cả chuỗi client gửi.
   const app = Fastify({ loggerInstance: logger as FastifyBaseLogger, trustProxy: http.trustProxy ? trustOneHop : false })
 
@@ -139,5 +145,7 @@ export function buildApp({ sql, db, logger, http = {}, loginLimiter, health, eve
     registerConnections(app, deps)
     registerOAuth(app, deps)
   }
+  // Cổng webhook (Story 4.1): cần `jobs` (enqueue `webhook.route`) — main.ts truyền từ pg-boss của api.
+  if (webhooks) registerWebhooks(app, { ...webhooks, db, log: logger.child({ component: 'webhooks' }) })
   return app
 }

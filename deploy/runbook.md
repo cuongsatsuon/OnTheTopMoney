@@ -525,8 +525,18 @@ Cần quyền Admin trên app chính ở <https://developers.facebook.com/apps>.
    Tuỳ chọn: **Facebook Login for Business › Configurations › Create configuration** (loại *User access token*,
    chọn đủ quyền ở mục 6.6) rồi đặt Configuration ID vào `META_LOGIN_CONFIG_ID`. Không đặt thì app tự gửi danh
    sách quyền qua `scope`.
-5. Webhooks (dùng từ Epic 4): **Webhooks** → Page / Instagram → callback `https://<tunnel>/webhooks/meta`,
-   verify token = giá trị `META_VERIFY_TOKEN` trong `server/.env` (`openssl rand -hex 16`).
+5. Webhooks (dùng từ Epic 4, Story 4.1): **Webhooks** → Page / Instagram → callback `https://<tunnel>/webhooks/meta`,
+   verify token = giá trị `META_VERIFY_TOKEN` trong `server/.env` (`openssl rand -hex 16`). Bật field tối thiểu:
+   Page `messages`, `messaging_postbacks`, `message_echoes`, `feed`; Instagram `messages`, `comments`. Threads
+   webhook: app Threads → **Webhooks** → callback `https://<tunnel>/webhooks/threads`, cùng verify token, field
+   `replies`.
+   - **Production** (app Live): cùng các bước trên nhưng callback dùng tên miền thật —
+     `https://<tên miền>/webhooks/meta` và `https://<tên miền>/webhooks/threads` (= `PUBLIC_BASE_URL` +
+     `/webhooks/{meta,threads}`); verify token = `META_VERIFY_TOKEN` trong `deploy/.env`. Chủ shop cũng xem được
+     URL + verify token ở **Cài đặt › Webhook** (có nút sao chép). Đây là bước triển khai một lần (AD-4).
+   - **Chữ ký webhook Threads [ASSUMPTION]**: tài liệu Meta chưa nói rõ app secret nào ký `X-Hub-Signature-256`
+     của webhook Threads. App hiện kiểm chữ ký `/webhooks/threads` bằng **Threads app secret** (`THREADS_APP_SECRET`).
+     Khi có sự kiện Threads thật, xác nhận lại tại đây và ghi secret đúng: ______________________________________.
 
 ### 6.2 Thêm tester cho Test App
 
