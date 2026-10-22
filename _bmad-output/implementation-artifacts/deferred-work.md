@@ -37,3 +37,6 @@
 - source_spec: `spec-2-4-han-token-va-ket-noi-lai.md`
   summary: Reconnect chặt: xác nhận account Meta vừa re-auth đúng là account của pageId đã bấm (lưu platform_account_id kỳ vọng vào intent, so ở confirm).
   evidence: Hiện confirm khớp theo (platform, platformAccountId); nếu auth account khác thì cập nhật/ tạo dòng khác, pageId intent không được ép. App một chủ nên rủi ro thấp.
+- source_spec: `spec-3-1-ho-so-thuong-hieu.md`
+  summary: Guard điều hướng TRONG APP khi form có thay đổi chưa lưu (hiện chỉ beforeunload cho đóng/tải lại tab) — áp cả app.
+  evidence: React Router chưa dùng data API/useBlocker; AutoReply cũng chỉ beforeunload. Làm khi nâng router hoặc thêm cơ chế confirm điều hướng dùng chung.

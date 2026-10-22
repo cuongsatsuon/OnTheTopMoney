@@ -4,40 +4,36 @@ import { Link } from 'react-router-dom'
 import { AiLockHint } from './AiLockHint'
 import { brandProfile, groupById, pages, pagesInGroup, type Page } from '../data/mock'
 import { useApp } from '../lib/app-context'
+import { errorMessageOf } from '../lib/error-messages'
+import {
+  EMOJIS,
+  INDUSTRIES,
+  PRONOUNS,
+  TONES,
+  blankBrand,
+  brandDataOf,
+  brandNameError,
+  fieldErrorsOf,
+  isRealOwner,
+  logoFileError,
+  toSaveRequest,
+  useBrandProfile,
+  useClearBrandLogo,
+  useSaveBrandProfile,
+  useUploadBrandLogo,
+  type BrandForm,
+  type EmojiLabel,
+} from '../lib/profiles'
 import { AiBadge, Button, Card, CardHeader, Field, InheritanceBar, Input, Modal, PageAvatar, Segmented, Select, Textarea, cn } from './ui'
 
 /* ---------- Kiểu & dữ liệu mẫu ---------- */
 
-type Emoji = 'Không' | 'Vừa phải' | 'Nhiều'
-
-export interface BrandData {
-  name: string
-  tagline: string
-  industry: string
-  tones: string[]
-  formality: number
-  pronoun: string
-  emoji: Emoji
-  products: { name: string; price: string }[]
-  audience: string
-  colors: string[]
-  hashtags: string[]
-  banned: string[]
-  logo: string | null
-}
+type Emoji = EmojiLabel
+export type BrandData = BrandForm
 
 type Target = { kind: 'group' | 'page'; id: string }
 
-const TONES = ['Thân thiện', 'Chuyên gia', 'Trẻ trung', 'Sang trọng', 'Hài hước']
-const INDUSTRIES = ['Mỹ phẩm', 'Gia dụng', 'Thời trang', 'Thực phẩm', 'Mẹ & bé', 'Khác']
-const PRONOUNS = ['Shop – chị/bạn', 'Mình – bạn', 'Em – anh/chị', 'Chúng tôi – quý khách']
-const EMOJIS: { id: Emoji; label: string }[] = [
-  { id: 'Không', label: 'Không' },
-  { id: 'Vừa phải', label: 'Vừa phải' },
-  { id: 'Nhiều', label: 'Nhiều' },
-]
-
-const beauty: BrandData = { ...brandProfile, emoji: brandProfile.emoji as Emoji, logo: null }
+const beauty: BrandData = { ...brandProfile, emoji: brandProfile.emoji as Emoji, allowedDomains: [], logo: null }
 
 const home: BrandData = {
   name: 'Gia dụng Minh Phát',
@@ -56,6 +52,7 @@ const home: BrandData = {
   colors: ['#2563EB', '#DBEAFE', '#0F172A'],
   hashtags: ['#giadungminhphat', '#noichienkhongdau', '#meonhabep'],
   banned: ['rẻ nhất thị trường', 'bảo hành trọn đời'],
+  allowedDomains: [],
   logo: null,
 }
 
@@ -75,6 +72,7 @@ const fashion: BrandData = {
   colors: ['#EA580C', '#FFEDD5', '#292524'],
   hashtags: ['#mocfashion', '#toigian', '#ootd'],
   banned: ['hàng hiệu', 'fake'],
+  allowedDomains: [],
   logo: null,
 }
 
@@ -93,9 +91,7 @@ const saved = new Map<string, BrandData>()
 const keyOf = (t: Target) => `${t.kind}:${t.id}`
 const clone = (b: BrandData): BrandData => JSON.parse(JSON.stringify(b)) as BrandData
 
-function blankFor(name: string): BrandData {
-  return { name, tagline: '', industry: 'Khác', tones: ['Thân thiện'], formality: 60, pronoun: PRONOUNS[0], emoji: 'Vừa phải', products: [], audience: '', colors: [], hashtags: [], banned: [], logo: null }
-}
+const blankFor = blankBrand
 
 function loadProfile(t: Target): BrandData {
   const k = keyOf(t)
@@ -149,6 +145,7 @@ const SECTIONS = [
   { id: 'khach-hang', label: 'Khách hàng mục tiêu' },
   { id: 'hinh-anh', label: 'Hình ảnh thương hiệu' },
   { id: 'tranh', label: 'Điều cần tránh' },
+  { id: 'domain', label: 'Domain cho phép' },
 ] as const
 
 function Section({ id, title, hint, children }: { id: string; title: string; hint?: string; children: ReactNode }) {
@@ -221,10 +218,60 @@ function BrandProfileFormInner({ target }: { target: Target }) {
   const [active, setActive] = useState<string>(SECTIONS[0].id)
   const groupValue = group ? loadProfile({ kind: 'group', id: group.id }) : null
 
+  // Chủ thật (id uuid) nối API thật; id kho mẫu dùng mock như cũ (giữ UX demo + các epic khác còn mock).
+  const real = isRealOwner(target.id)
+  const owner = { ownerType: target.kind, ownerId: target.id } as const
+  const fallbackName = target.kind === 'group' ? (group?.name.replace(/^Nhóm\s+/, '') ?? '') : (page?.name ?? '')
+  const profileQuery = useBrandProfile(owner, { enabled: real })
+  const saveM = useSaveBrandProfile(owner)
+  const uploadM = useUploadBrandLogo(owner)
+  const clearM = useClearBrandLogo(owner)
+  const [nameError, setNameError] = useState<string | null>(null)
+  const [logoFile, setLogoFile] = useState<File | null>(null)
+  // id chủ đã nạp dữ liệu server (reseed khi owner đổi trên cùng instance, không chỉ khi remount theo key).
+  const loadedForRef = useRef<string | null>(null)
+  // object URL xem trước đang giữ (để revoke khi thay ảnh / unmount, tránh rò bộ nhớ).
+  const objectUrlRef = useRef<string | null>(null)
+
+  // Chủ thật: nạp hồ sơ từ server khi vào hoặc khi đổi owner (form chưa đụng); các lần sau giữ chỉnh sửa của người dùng.
+  useEffect(() => {
+    if (!real || profileQuery.data === undefined || loadedForRef.current === target.id) return
+    loadedForRef.current = target.id
+    const next = brandDataOf(profileQuery.data.profile, fallbackName)
+    setSavedValue(next)
+    setForm(next)
+  }, [real, profileQuery.data, fallbackName, target.id])
+
   const editable = !inheritable || own
   const data = editable ? form : groupValue!
-  const dirty = editable && JSON.stringify(form) !== JSON.stringify(savedValue)
+  const dirty = editable && (JSON.stringify(form) !== JSON.stringify(savedValue) || !!logoFile)
   const set = <K extends keyof BrandData>(k: K, v: BrandData[K]) => setForm((f) => ({ ...f, [k]: v }))
+
+  /** Đặt ảnh xem trước; revoke object URL cũ (nếu có) trước khi giữ cái mới. */
+  const setLogoPreview = (url: string | null) => {
+    if (objectUrlRef.current) {
+      URL.revokeObjectURL(objectUrlRef.current)
+      objectUrlRef.current = null
+    }
+    if (url?.startsWith('blob:')) objectUrlRef.current = url
+    set('logo', url)
+  }
+
+  // Revoke object URL còn lại khi rời component.
+  useEffect(() => () => {
+    if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current)
+  }, [])
+
+  // Rời trang khi chưa lưu (dirty) → trình duyệt hỏi lại (Interaction Primitives beforeunload).
+  useEffect(() => {
+    if (!dirty) return
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault()
+      e.returnValue = ''
+    }
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => window.removeEventListener('beforeunload', onBeforeUnload)
+  }, [dirty])
 
   /* Theo dõi mục đang xem để tô sáng menu trái */
   const rootRef = useRef<HTMLDivElement>(null)
@@ -267,22 +314,69 @@ function BrandProfileFormInner({ target }: { target: Target }) {
     notify(`Trang này giờ dùng hồ sơ của ${group?.name}`)
   }
 
+  const saving = saveM.isPending || uploadM.isPending || clearM.isPending
+
   const save = () => {
-    if (!form.name.trim()) {
-      notify('Nhập tên thương hiệu trước khi lưu')
+    const nErr = brandNameError(form.name)
+    if (nErr) {
+      setNameError(nErr)
       goTo('co-ban')
       return
     }
-    saved.set(keyOf(target), clone(form))
-    setSavedValue(clone(form))
-    if (target.kind === 'group') {
-      const n = pagesInGroup(target.id).filter((p) => p.brandSource === 'group').length
-      notify(`Đã lưu hồ sơ. ${n} trang đang dùng hồ sơ của ${group?.name}`)
-    } else notify('Đã lưu hồ sơ thương hiệu')
+    setNameError(null)
+    if (!real) {
+      // Kho mẫu: lưu trong phiên như cũ.
+      saved.set(keyOf(target), clone(form))
+      setSavedValue(clone(form))
+      if (target.kind === 'group') {
+        const n = pagesInGroup(target.id).filter((p) => p.brandSource === 'group').length
+        notify(`Đã lưu hồ sơ. ${n} trang đang dùng hồ sơ của ${group?.name}`)
+      } else notify('Đã lưu hồ sơ thương hiệu')
+      return
+    }
+    void (async () => {
+      try {
+        // Lưu phần chữ trước → dù logo lỗi (vd chưa cấu hình Cloudinary) thì chữ vẫn được lưu.
+        let profile = await saveM.mutateAsync(toSaveRequest(form))
+        let logoError: string | null = null
+        if (logoFile) {
+          try {
+            profile = await uploadM.mutateAsync(logoFile)
+          } catch (err) {
+            logoError = errorMessageOf(err)
+          }
+          setLogoFile(null)
+        } else if (form.logo === null && savedValue.logo !== null) {
+          try {
+            profile = await clearM.mutateAsync()
+          } catch (err) {
+            logoError = errorMessageOf(err)
+          }
+        }
+        if (objectUrlRef.current) {
+          URL.revokeObjectURL(objectUrlRef.current)
+          objectUrlRef.current = null
+        }
+        const next = brandDataOf(profile, fallbackName)
+        setSavedValue(next)
+        setForm(next)
+        // Logo hỏng: MỘT toast rõ rằng chữ đã lưu, logo chưa tải được (không chồng toast thành công lên toast lỗi).
+        notify(logoError ? `Đã lưu hồ sơ, chưa tải được logo. ${logoError}` : 'Đã lưu hồ sơ thương hiệu')
+      } catch (err) {
+        const fe = fieldErrorsOf(err)
+        if (fe.name) {
+          setNameError(fe.name)
+          goTo('co-ban')
+        }
+        notify(errorMessageOf(err))
+      }
+    })()
   }
 
   const cancel = () => {
     setForm(clone(savedValue))
+    setLogoFile(null)
+    setNameError(null)
     notify('Đã huỷ thay đổi chưa lưu')
   }
 
@@ -327,8 +421,16 @@ function BrandProfileFormInner({ target }: { target: Target }) {
           <fieldset disabled={!editable} className={cn(!editable && 'opacity-70')}>
             <Section id="co-ban" title="Thông tin cơ bản" hint="AI dùng các thông tin này khi viết bài và trả lời khách.">
               <div className="grid grid-cols-2 gap-4">
-                <Field label="Tên thương hiệu">
-                  <Input value={data.name} onChange={(e) => set('name', e.target.value)} placeholder="VD: Mỹ phẩm Lan Anh" />
+                <Field label="Tên thương hiệu" hint={nameError ? <span className="text-danger">{nameError}</span> : undefined}>
+                  <Input
+                    value={data.name}
+                    aria-invalid={nameError ? true : undefined}
+                    onChange={(e) => {
+                      if (nameError) setNameError(null)
+                      set('name', e.target.value)
+                    }}
+                    placeholder="VD: Mỹ phẩm Lan Anh"
+                  />
                 </Field>
                 <Field label="Lĩnh vực">
                   <Select options={INDUSTRIES} value={data.industry} onChange={(e) => set('industry', e.target.value)} />
@@ -457,21 +559,38 @@ function BrandProfileFormInner({ target }: { target: Target }) {
                       <>
                         <ImagePlus size={20} />
                         Tải logo lên
-                        <span className="text-[11px]">PNG, SVG ≤ 2MB</span>
+                        <span className="text-[11px]">PNG, JPEG, WebP ≤ 2MB</span>
                       </>
                     )}
                     <input
                       type="file"
-                      accept="image/*"
+                      accept="image/png,image/jpeg,image/webp"
                       className="sr-only"
                       onChange={(e) => {
                         const f = e.target.files?.[0]
-                        if (f) set('logo', URL.createObjectURL(f))
+                        e.target.value = ''
+                        if (!f) return
+                        if (real) {
+                          const err = logoFileError(f)
+                          if (err) {
+                            notify(err)
+                            return
+                          }
+                          setLogoFile(f)
+                        }
+                        setLogoPreview(URL.createObjectURL(f))
                       }}
                     />
                   </label>
                   {data.logo && editable && (
-                    <button type="button" onClick={() => set('logo', null)} className="mt-1 text-xs text-muted-foreground hover:text-danger">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setLogoFile(null)
+                        setLogoPreview(null)
+                      }}
+                      className="mt-1 text-xs text-muted-foreground hover:text-danger"
+                    >
                       Gỡ logo
                     </button>
                   )}
@@ -517,6 +636,13 @@ function BrandProfileFormInner({ target }: { target: Target }) {
                 <TagEditor values={data.banned} onChange={(v) => set('banned', v)} placeholder="VD: cam kết 100%" tone="danger" disabled={!editable} />
               </div>
             </Section>
+
+            <Section id="domain" title="Domain cho phép" hint="AI chỉ chèn liên kết thuộc các domain này (website, trang bán hàng chính thức).">
+              <div>
+                <span className="mb-1.5 block text-[13px] font-medium">Domain</span>
+                <TagEditor values={data.allowedDomains} onChange={(v) => set('allowedDomains', v)} placeholder="VD: shopa.vn (gõ rồi Enter)" tone="neutral" disabled={!editable} />
+              </div>
+            </Section>
           </fieldset>
         </Card>
 
@@ -529,11 +655,11 @@ function BrandProfileFormInner({ target }: { target: Target }) {
         {editable ? (
           <>
             <span className="mr-auto text-[13px] text-muted-foreground">{dirty ? '● Có thay đổi chưa lưu' : 'Đã lưu mọi thay đổi'}</span>
-            <Button onClick={cancel} disabled={!dirty}>
+            <Button onClick={cancel} disabled={!dirty || saving}>
               Huỷ
             </Button>
-            <Button variant="primary" onClick={save}>
-              Lưu hồ sơ
+            <Button variant="primary" onClick={save} disabled={saving}>
+              {saving ? 'Đang lưu…' : 'Lưu hồ sơ'}
             </Button>
           </>
         ) : (

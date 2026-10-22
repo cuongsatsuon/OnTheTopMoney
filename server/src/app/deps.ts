@@ -1,5 +1,6 @@
 // Dựng phụ thuộc của api từ config — tách khỏi main.ts để test được mà không khởi động tiến trình.
 import { createSecretCipher, type SecretCipher } from '../adapters/crypto/index.ts'
+import { createMediaStores, type MediaStores } from '../adapters/media/index.ts'
 import { createMetaClients, type ConnectionsDeps } from '../modules/connections/index.ts'
 import type { Config } from '../platform/config/index.ts'
 import type { Db } from '../platform/db/index.ts'
@@ -13,6 +14,11 @@ import type { Logger } from '../platform/log/index.ts'
 export function cipherFromConfig(config: Pick<Config, 'APP_ENCRYPTION_KEYS' | 'APP_ENCRYPTION_ACTIVE_KEY'>): SecretCipher | null {
   if (!config.APP_ENCRYPTION_KEYS || !config.APP_ENCRYPTION_ACTIVE_KEY) return null
   return createSecretCipher({ keys: config.APP_ENCRYPTION_KEYS, activeKeyId: config.APP_ENCRYPTION_ACTIVE_KEY })
+}
+
+/** Kho ảnh/file Cloudinary (AD-14) từ config cho logo hồ sơ (Story 3.1); thiếu `CLOUDINARY_URL` → kho chưa cấu hình. */
+export function mediaStoresFromConfig(config: Pick<Config, 'CLOUDINARY_URL' | 'CLOUDINARY_FOLDER'>): MediaStores {
+  return createMediaStores({ CLOUDINARY_URL: config.CLOUDINARY_URL, CLOUDINARY_FOLDER: config.CLOUDINARY_FOLDER })
 }
 
 /** Phần `ai` của `buildApp` cho entrypoint thật. */

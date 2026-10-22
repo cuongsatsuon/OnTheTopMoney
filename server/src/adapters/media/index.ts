@@ -51,6 +51,11 @@ export interface PutImageRequest {
   mime: PublicImageMime
   /** Cloudinary đổi sang JPEG khi upload (Instagram chỉ nhận JPEG). */
   asJpeg?: boolean
+  /**
+   * Loại metadata/ICC profile của ảnh gốc được lưu (incoming transformation `fl_strip_profile`) — tường minh, không
+   * dựa vào mặc định. Cloudinary còn tự loại metadata trên ảnh phái sinh; cờ này đảm bảo cả bản gốc đã lưu cũng sạch.
+   */
+  stripMetadata?: boolean
 }
 
 export interface StoredImage {
@@ -249,7 +254,12 @@ export function createMediaStores(config: MediaConfig, options: MediaStoresOptio
     async put(request) {
       if (!isPublicMime(request.mime)) return { ok: false, kind: 'INVALID_REQUEST' }
       const publicId = newPublicId('public')
-      const result = await upload('image', { public_id: publicId, format: request.asJpeg ? 'jpg' : undefined }, request.data, request.mime)
+      const result = await upload(
+        'image',
+        { public_id: publicId, format: request.asJpeg ? 'jpg' : undefined, transformation: request.stripMetadata ? 'fl_strip_profile' : undefined },
+        request.data,
+        request.mime,
+      )
       if (!result.ok) return result
       const j = result.json
       const url = typeof j.secure_url === 'string' && j.secure_url.startsWith('https://') ? j.secure_url : undefined

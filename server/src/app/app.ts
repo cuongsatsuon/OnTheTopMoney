@@ -10,8 +10,10 @@ import { DEV_ALLOWED_ORIGINS } from '../platform/config/index.ts'
 import { AppError } from '../platform/errors/index.ts'
 import type { EventPublisher } from '../platform/events/index.ts'
 import type { RealtimeHub } from '../platform/realtime/index.ts'
+import { createMediaStores, type MediaStores } from '../adapters/media/index.ts'
 import { authPlugin, type LoginLimiter } from './auth/index.ts'
 import { registerAiBudget } from './ai-budget.ts'
+import { registerBrandProfiles } from './brand-profiles.ts'
 import { registerConnections } from './connections.ts'
 import { registerCors } from './cors.ts'
 import { registerGroups } from './groups.ts'
@@ -62,12 +64,17 @@ export interface AppDeps {
    * Đăng ký cùng `events` (xác nhận phát `page.connected` / `page.reconnected`).
    */
   connections?: Omit<ConnectionsDeps, 'db' | 'events' | 'log'>
+  /**
+   * Kho ảnh/file Cloudinary (AD-14) cho logo hồ sơ thương hiệu (Story 3.1). Không truyền → kho "chưa cấu hình":
+   * lưu logo trả `MEDIA_NOT_CONFIGURED`, phần chữ của hồ sơ vẫn lưu được.
+   */
+  media?: MediaStores
 }
 
 /** Như `trustProxy: 1` của proxy-addr (kiểu Fastify không nhận số): chỉ tin hop đầu tiên. */
 const trustOneHop = (_address: string, hop: number): boolean => hop < 1
 
-export function buildApp({ sql, db, logger, http = {}, loginLimiter, health, events, realtime, ai, clock, connections }: AppDeps): FastifyInstance {
+export function buildApp({ sql, db, logger, http = {}, loginLimiter, health, events, realtime, ai, clock, connections, media }: AppDeps): FastifyInstance {
   // Sau một hop reverse proxy (nginx): chỉ tin địa chỉ cuối của X-Forwarded-For, không tin cả chuỗi client gửi.
   const app = Fastify({ loggerInstance: logger as FastifyBaseLogger, trustProxy: http.trustProxy ? trustOneHop : false })
 
@@ -114,6 +121,8 @@ export function buildApp({ sql, db, logger, http = {}, loginLimiter, health, eve
   if (events) registerOpenAiSettings(app, { db, events, cipher: ai?.cipher ?? null, ...(ai?.openai ? { openai: ai.openai } : {}) })
   registerPages(app, { db })
   if (events) registerGroups(app, { db, events })
+  // Hồ sơ thương hiệu (Story 3.1): không cần `events`; `media` thiếu → kho chưa cấu hình (logo trả MEDIA_NOT_CONFIGURED).
+  registerBrandProfiles(app, { db, media: media ?? createMediaStores({ CLOUDINARY_FOLDER: 'ottm' }) })
   if (events && connections) {
     const deps: ConnectionsDeps = { ...connections, db, events, log: logger.child({ component: 'connections' }) }
     registerConnections(app, deps)

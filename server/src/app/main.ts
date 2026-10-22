@@ -6,7 +6,7 @@ import { createEventPublisher } from '../platform/events/index.ts'
 import { createBoss } from '../platform/jobs/index.ts'
 import { createRealtimeHub } from '../platform/realtime/index.ts'
 import { buildApp } from './app.ts'
-import { aiOptionsFromConfig, connectionsOptionsFromConfig } from './deps.ts'
+import { aiOptionsFromConfig, connectionsOptionsFromConfig, mediaStoresFromConfig } from './deps.ts'
 
 const config = getConfig()
 const logger = createLogger({ level: config.LOG_LEVEL, name: 'api' })
@@ -37,7 +37,9 @@ const app = buildApp({
   realtime,
   ai,
   connections: connectionsOptionsFromConfig(config, dbHandle.db, logger),
+  media: mediaStoresFromConfig(config),
 })
+if (!config.CLOUDINARY_URL) logger.warn('CLOUDINARY_URL chưa đặt — tải logo hồ sơ thương hiệu trả MEDIA_NOT_CONFIGURED (phần chữ vẫn lưu được)')
 
 let closing = false
 async function shutdown(signal: string): Promise<void> {
