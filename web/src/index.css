@@ -1,0 +1,70 @@
+@import "tailwindcss";
+
+/* Tokens mirror DESIGN.md (ux-OnTheTopMoney-2026-10-19). Spine wins on conflict. */
+@theme {
+  --font-sans: "Be Vietnam Pro", ui-sans-serif, system-ui, sans-serif;
+
+  --color-primary: #0f766e;
+  --color-primary-hover: #115e59;
+  --color-primary-foreground: #ffffff;
+  --color-primary-soft: #ccfbf1;
+  --color-ai: #7c3aed;
+  --color-ai-soft: #ede9fe;
+  --color-ai-foreground: #ffffff;
+  --color-background: #f8fafc;
+  --color-surface: #ffffff;
+  --color-border: #e2e8f0;
+  --color-foreground: #0f172a;
+  --color-muted-foreground: #64748b;
+  --color-success: #16a34a;
+  --color-warning: #d97706;
+  --color-warning-soft: #fef3c7;
+  --color-danger: #dc2626;
+  --color-platform-facebook: #1877f2;
+  --color-platform-instagram: #e1306c;
+  --color-platform-threads: #101010;
+  --color-sidebar: #0b1f1d;
+  --color-sidebar-foreground: #cbd5e1;
+  --color-sidebar-active: #134e4a;
+
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background: var(--color-background);
+  color: var(--color-foreground);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.scrollbar-thin {
+  scrollbar-width: thin;
+}
+
+/* Bổ sung theo review-rubric: chữ trạng thái đạt AA, bảng màu nhóm. */
+@theme {
+  --color-success-foreground: #15803d;
+  --color-success-soft: #f0fdf4;
+  --color-warning-foreground: #92400e;
+  --color-danger-foreground: #b91c1c;
+  --color-danger-soft: #fef2f2;
+}

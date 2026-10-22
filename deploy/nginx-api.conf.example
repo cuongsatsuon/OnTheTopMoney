@@ -1,0 +1,200 @@
+# OnTheTopMoney — mẫu site nginx cho CHẾ ĐỘ TÁCH (WEB_MODE=external): host API (vd api.example.com) trên VPS, do chủ
+# shop tự quản (TLS bằng certbot). Web tĩnh KHÔNG nằm ở đây: nó ở Hostinger (vd app.example.com, deploy/hostinger/),
+# gọi host này qua CORS có credentials. Chế độ cùng VPS (WEB_MODE=vps, mặc định) dùng deploy/nginx.conf.example.
+# Hướng dẫn: deploy/runbook.md mục 8 "Chế độ tách: web trên Hostinger".
+#
+# Cài: chép thành /etc/nginx/sites-available/ottm-api (Debian/Ubuntu) hoặc /etc/nginx/conf.d/ottm-api.conf, thay các
+# giá trị dưới đây cho khớp deploy/.env, rồi `sudo nginx -t && sudo systemctl reload nginx`. Tên map/upstream/zone
+# TLS khác mẫu cùng VPS (tiền tố ottm_api_) nên hai site cài cùng lúc được (lúc chuyển chế độ).
+#
+#   api.example.com          → host của PUBLIC_BASE_URL. Có ở: server_name, đường chứng chỉ, redirect.
+#   /var/lib/ottm/media      → MEDIA_DIR_HOST (thư mục media; api ghi bằng uid 1000, nginx chỉ đọc)
+#   127.0.0.1:3000           → 127.0.0.1:API_HOST_PORT (api chỉ nghe trên loopback)
+#   /var/www/letsencrypt     → thư mục webroot cho certbot (chỉ khi dùng `certbot certonly --webroot`)
+#
+# Sau mỗi lần deploy KHÔNG cần reload nginx.
+#
+# Hành vi phải giữ (CI `nginx -t` mẫu này; `SMOKE_MODE=api deploy/smoke-test.sh` kiểm hành vi):
+#   /healthz, /api, /api/*, /webhooks, /webhooks/*, /oauth, /oauth/*, /privacy, /privacy/*  → api
+#   /media/*   → file trong MEDIA_DIR_HOST; thiếu → 404; CSP riêng sandbox + nosniff
+#   /, đường lạ → JSON 404 {"error":{"code":"NOT_FOUND",…}} (host này không phục vụ trang web)
+#   CORS của /api/v1/* do api tự đặt (ALLOWED_ORIGINS) — nginx KHÔNG thêm/ghi đè header Access-Control-*
+#   mọi response (kể cả lỗi) có CSP, HSTS, X-Content-Type-Options, Referrer-Policy, X-Frame-Options, Permissions-Policy
+#   SSE /api/v1/stream không đệm, không nén; đường api không bao giờ nén
+#   502/503/504 do nginx sinh trên đường api → JSON {"error":{"code":"INTERNAL","message":"api unavailable"}};
+#   body quá lớn (413) → JSON VALIDATION_FAILED; mọi response lỗi có Cache-Control: no-store
+#   không ghi access log cho /oauth và /webhooks (URL có thể mang `code`, `hub.verify_token`)
+#
+# Ký hiệu cho CI: CI bỏ khối giữa ">>> REDIRECT-80" và "<<< REDIRECT-80", bỏ mọi dòng `ssl_*`, đổi
+# `listen 443 ssl http2;` thành `listen 8081;`, bỏ dòng `listen [::]:443`. Giữ các dòng đó đúng dạng khi sửa.
+
+# ---------------------------------------------------------------- Biến tính theo request (cấp http)
+# Lưu ý quan trọng của nginx: một `add_header` bất kỳ trong một location làm location đó MẤT toàn bộ add_header của
+# server. Vì vậy mọi header chỉ đặt ở cấp server; phần khác nhau theo đường dẫn được tính bằng các map dưới đây.
+# KHÔNG thêm add_header vào location.
+
+# CSP. Host api chỉ trả JSON / chuyển hướng: không cho tải gì. /media (file do api ghi): chỉ ảnh, sandbox. Chỉ áp
+# cho response thành công của /media; lỗi (vd 404) dùng CSP chung.
+map "$status:$uri" $ottm_api_csp {
+    default "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
+    "~^(200|206|304):/media/" "default-src 'none'; img-src 'self'; sandbox";
+}
+
+# Cache-Control. Lỗi (4xx/5xx, kể cả JSON lỗi do nginx sinh) → no-store. Thành công: chuỗi rỗng = nginx không thêm
+# header (api tự quyết, /media để mặc định ETag/Last-Modified).
+map "$status:$uri" $ottm_api_cache_control_want {
+    default  "";
+    ~^[45]   "no-store";
+}
+# api đã tự đặt Cache-Control (vd SSE, trang OAuth) → giữ của api, không thêm cái thứ hai.
+map $upstream_http_cache_control $ottm_api_cache_control {
+    ""      $ottm_api_cache_control_want;
+    default "";
+}
+
+# Referrer-Policy: api đặt riêng `no-referrer` cho trang OAuth — giữ của api, không thêm cái thứ hai.
+map $upstream_http_referrer_policy $ottm_api_referrer_policy {
+    ""      "strict-origin-when-cross-origin";
+    default "";
+}
+
+# ---------------------------------------------------------------- api (docker compose, chỉ nghe trên loopback)
+upstream ottm_api_upstream {
+    server 127.0.0.1:3000;
+    keepalive 16;
+}
+
+# ---------------------------------------------------------------- HTTP → HTTPS
+# >>> REDIRECT-80
+server {
+    listen 80;
+    listen [::]:80;
+    server_name api.example.com;
+    server_tokens off;
+
+    # Chỉ cần khi lấy/gia hạn chứng chỉ bằng `certbot certonly --webroot -w /var/www/letsencrypt`.
+    # Với `certbot --nginx` certbot tự xử lý, khối này vô hại.
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/letsencrypt;
+        default_type text/plain;
+    }
+
+    location / {
+        return 301 https://api.example.com$request_uri;
+    }
+}
+# <<< REDIRECT-80
+
+# ---------------------------------------------------------------- HTTPS
+server {
+    # nginx ≥ 1.25.1: có thể đổi thành `listen 443 ssl;` + `http2 on;` (cách cũ chỉ in cảnh báo).
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name api.example.com;
+    server_tokens off;
+
+    # TLS — đường mặc định của certbot (/etc/letsencrypt/live/<tên miền>/…). certbot tự gia hạn (systemd timer);
+    # thêm `--deploy-hook "systemctl reload nginx"` lúc lấy chứng chỉ để nginx nạp chứng chỉ mới (runbook 1.6).
+    ssl_certificate     /etc/letsencrypt/live/api.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/api.example.com/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_session_cache   shared:ottm_api_tls:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+    # Header bảo mật (AD-19) — `always`: có cả trên 404/502 và trang lỗi.
+    add_header Content-Security-Policy $ottm_api_csp always;
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy $ottm_api_referrer_policy always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()" always;
+    add_header Cache-Control $ottm_api_cache_control always;
+
+    # Không nén: đường api (nhất là SSE) không bao giờ bị nén/gom, kể cả khi nginx.conf chung bật gzip.
+    gzip off;
+
+    # api giới hạn body 1 MB và tự trả lỗi JSON 413; nginx để rộng hơn một chút để lỗi đến từ api. Quá 2 MB thì
+    # nginx chặn trước — trả cùng dạng JSON (@ottm_api_too_large).
+    client_max_body_size 2m;
+
+    # Proxy tới api — đặt ở cấp server để mọi location api thừa hưởng (giống add_header: location nào tự đặt
+    # proxy_set_header sẽ mất hết các dòng này).
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_set_header Host $host;
+    # api tin đúng một hop (TRUST_PROXY=true) và lấy địa chỉ cuối của X-Forwarded-For. Ghi đè bằng $remote_addr,
+    # KHÔNG dùng $proxy_add_x_forwarded_for (client tự gửi X-Forwarded-For giả được).
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Host $host;
+
+    # api không trả lời được (đang khởi động lại, container dừng, quá hạn) → JSON đúng dạng lỗi của api, giữ mã.
+    # Chỉ áp cho lỗi do nginx sinh (proxy_intercept_errors tắt): 503 của chính api (/healthz) đi thẳng tới client.
+    # Các named location này không ghi access log: request của /oauth, /webhooks rơi vào đây mang nguyên query bí mật.
+    error_page 502 = @ottm_api_err_502;
+    error_page 503 = @ottm_api_err_503;
+    error_page 504 = @ottm_api_err_504;
+    error_page 413 = @ottm_api_too_large;
+
+    # ---- api: health, REST, SSE, webhook Meta/Threads, OAuth callback, trang quyền riêng tư
+    location = /healthz {
+        proxy_pass http://ottm_api_upstream;
+    }
+
+    # SSE: đẩy từng sự kiện ngay (không đệm), giữ kết nối lâu (api ping định kỳ).
+    location = /api/v1/stream {
+        proxy_pass http://ottm_api_upstream;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 1h;
+        proxy_send_timeout 1h;
+    }
+
+    location ~ ^/(api|privacy)(/|$) {
+        proxy_pass http://ottm_api_upstream;
+    }
+
+    # URL OAuth callback / webhook verify mang `code`, `hub.verify_token`: không ghi access log. error_log hạ xuống
+    # `crit` vì dòng lỗi upstream của nginx in nguyên request line (kèm query). api tự log đã che bí mật.
+    location ~ ^/(webhooks|oauth)(/|$) {
+        access_log off;
+        error_log /var/log/nginx/error.log crit;
+        proxy_pass http://ottm_api_upstream;
+    }
+
+    location @ottm_api_err_502 {
+        access_log off;
+        default_type application/json;
+        return 502 '{"error":{"code":"INTERNAL","message":"api unavailable"}}';
+    }
+    location @ottm_api_err_503 {
+        access_log off;
+        default_type application/json;
+        return 503 '{"error":{"code":"INTERNAL","message":"api unavailable"}}';
+    }
+    location @ottm_api_err_504 {
+        access_log off;
+        default_type application/json;
+        return 504 '{"error":{"code":"INTERNAL","message":"api unavailable"}}';
+    }
+    location @ottm_api_too_large {
+        access_log off;
+        default_type application/json;
+        return 413 '{"error":{"code":"VALIDATION_FAILED","message":"request body too large"}}';
+    }
+
+    # ---- /media: ảnh công khai từ thư mục media (web trên Hostinger nhúng <img src="https://api.example.com/media/…">).
+    # Không try_files → file thiếu là 404. disable_symlinks: thư mục này do api ghi — không đi theo symlink.
+    location ^~ /media/ {
+        alias /var/lib/ottm/media/;
+        disable_symlinks on from=/var/lib/ottm/media;
+        autoindex off;
+    }
+
+    # ---- Còn lại (/, đường lạ): host api không phục vụ trang web → JSON 404 giống api.
+    location / {
+        default_type application/json;
+        return 404 '{"error":{"code":"NOT_FOUND","message":"not found"}}';
+    }
+}

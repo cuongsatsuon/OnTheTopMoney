@@ -1,0 +1,2 @@
+ALTER TABLE "oauth_states" DROP CONSTRAINT "oauth_states_return_to_check";--> statement-breakpoint
+ALTER TABLE "oauth_states" ADD CONSTRAINT "oauth_states_return_to_check" CHECK ("oauth_states"."return_to" in ('pages', 'welcome', 'settings'));

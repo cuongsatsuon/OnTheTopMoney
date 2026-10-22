@@ -1,0 +1,62 @@
+# OnTheTopMoney — web tĩnh trên Hostinger (Apache/LiteSpeed), chế độ tách (WEB_MODE=external). File này do
+# `vite build` sinh từ deploy/hostinger/htaccess.template khi đặt VITE_API_ORIGIN (đừng sửa bản trong dist — sửa mẫu
+# rồi build lại). Hướng dẫn: deploy/runbook.md mục 8 "Chế độ tách: web trên Hostinger".
+#
+# api ở host khác: {{API_ORIGIN_LABEL}}
+# Mọi khối mod_* bọc <IfModule> để thiếu module thì site vẫn chạy (chỉ mất tính năng đó).
+
+# Không liệt kê thư mục; trang mặc định là index.html.
+Options -Indexes
+DirectoryIndex index.html
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # HTTP → HTTPS (Hostinger có thể đứng sau proxy: xét cả X-Forwarded-Proto). Bỏ qua localhost để thử cục bộ.
+    RewriteCond %{HTTPS} !=on
+    RewriteCond %{HTTP:X-Forwarded-Proto} !=https
+    RewriteCond %{HTTP_HOST} !^(localhost|127\.0\.0\.1|\[::1\])(:[0-9]+)?$ [NC]
+    RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+
+    # File ẩn (.htaccess, .git…) → 404; chừa .well-known/ cho chứng chỉ SSL của Hostinger.
+    RewriteRule (^|/)\.(?!well-known/) - [R=404,L]
+
+    # /assets/: file build có hash. Không rơi về index.html (thiếu → 404, tránh trả HTML với MIME sai sau deploy).
+    # Đánh dấu OTTM_ASSET để đặt cache immutable bên dưới.
+    RewriteRule ^assets/ - [E=OTTM_ASSET:1,L]
+
+    # File hoặc thư mục có thật → phục vụ nguyên.
+    RewriteCond %{REQUEST_FILENAME} -f [OR]
+    RewriteCond %{REQUEST_FILENAME} -d
+    RewriteRule ^ - [L]
+
+    # Còn lại (deep link của React Router, vd /trang-nhom/abc) → index.html (200).
+    RewriteRule ^ index.html [L]
+</IfModule>
+
+<IfModule mod_headers.c>
+    # Header bảo mật (AD-19) — `always`: có cả trên trang lỗi.
+    # connect-src / img-src gồm origin api (REST + SSE, ảnh /media do api phục vụ).
+    Header always set Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:{{API_SRC}} https://picsum.photos https://fastly.picsum.photos https://*.fbcdn.net https://*.cdninstagram.com; connect-src 'self'{{API_SRC}}; media-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+    Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains"
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set Referrer-Policy "strict-origin-when-cross-origin"
+    Header always set X-Frame-Options "DENY"
+    Header always set Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
+
+    # Cache: /assets/* (tên có hash) giữ 1 năm; còn lại (index.html, favicon…) luôn hỏi lại để thấy bản mới
+    # ngay sau mỗi lần xuất bản. Chỉ áp cho response thành công (không có `always`).
+    Header set Cache-Control "public, max-age=31536000, immutable" env=OTTM_ASSET
+    Header set Cache-Control "no-cache" env=!OTTM_ASSET
+</IfModule>
+
+# Hostinger có thể bật mod_expires mặc định → tắt để Cache-Control ở trên là duy nhất.
+<IfModule mod_expires.c>
+    ExpiresActive Off
+</IfModule>
+
+<IfModule mod_deflate.c>
+    <IfModule mod_filter.c>
+        AddOutputFilterByType DEFLATE text/html text/css application/javascript text/javascript application/json image/svg+xml
+    </IfModule>
+</IfModule>

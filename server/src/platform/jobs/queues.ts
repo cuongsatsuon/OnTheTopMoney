@@ -1,0 +1,197 @@
+// AD-24: mọi queue pg-boss khai báo DUY NHẤT ở file này (policy, retry, concurrency, cron).
+// - `singletonKey` chỉ dùng với policy `stately`; queue `standard` chống trùng bằng điều kiện trạng thái.
+// - Cron luôn `tz: 'Asia/Ho_Chi_Minh'`.
+// - `send()` từ chối tên không có trong registry (`UNKNOWN_QUEUE`).
+// - Consumer sự kiện (AD-3): queue khai báo `subscribes` — `ensureQueues` đồng bộ subscription pg-boss.
+// - Job hết retry phát `job.failed`; `critical: true` → thông báo `system_error` cho chủ shop.
+import { isEventName, type EventName } from '@ottm/shared'
+import type { Db as BossDb, PgBoss, SendOptions } from 'pg-boss'
+import type { EventEnvelope } from '../events/index.ts'
+
+export const CRON_TZ = 'Asia/Ho_Chi_Minh'
+
+interface QueueDefBase {
+  retryLimit: number
+  /** Giây giữa hai lần retry; với `retryBackoff` là giá trị khởi điểm. */
+  retryDelay?: number
+  retryBackoff?: boolean
+  /** Số worker song song mỗi tiến trình (`localConcurrency` của pg-boss). */
+  concurrency: number
+  expireInSeconds?: number
+  /** Cron 5 trường. pg-boss 12 gửi tối đa một job mỗi phút cho một lịch. */
+  cron?: { expression: string; tz: typeof CRON_TZ }
+  /** Giây giữa hai lần hỏi job mới (pg-boss mặc định 2, tối thiểu 0.5). */
+  pollingIntervalSeconds?: number
+  /** Sự kiện miền mà queue nhận (pg-boss subscribe); job mang `EventEnvelope`. */
+  subscribes?: readonly EventName[]
+  /** Hết retry ở queue này → thông báo `system_error` (qua `job.failed`). */
+  critical?: boolean
+}
+
+export interface StandardQueueDef extends QueueDefBase {
+  policy: 'standard'
+  singletonKey?: never
+}
+
+export interface StatelyQueueDef<D = never> extends QueueDefBase {
+  policy: 'stately'
+  /** Khoá singleton suy từ payload, vd `conversationId`. */
+  singletonKey: (data: D) => string
+  cron?: never
+}
+
+export type QueueDef = StandardQueueDef | StatelyQueueDef<never>
+
+/** Payload của từng queue — thêm khoá mới cùng lúc với khai báo trong `QUEUES`. */
+export interface QueuePayloads {
+  'platform.heartbeat': Record<string, never>
+  'events.notifications': EventEnvelope
+  'events.ai': EventEnvelope
+  'ai.reservations_gc': Record<string, never>
+  'connections.oauth_gc': Record<string, never>
+}
+
+export const QUEUES = {
+  // Ghi `worker_heartbeats` cho `/healthz` (AD-24 dòng Cron: retry 1, concurrency 1).
+  'platform.heartbeat': {
+    policy: 'standard',
+    retryLimit: 1,
+    concurrency: 1,
+    expireInSeconds: 60,
+    cron: { expression: '* * * * *', tz: CRON_TZ },
+  },
+  // Module `notifications` (Story 1.4): sự kiện → thông báo trong app. Idempotent theo `dedupe_key`,
+  // nên retry an toàn. Hỏi job mỗi 0,5 giây để toast tới trong ≤3 giây. Không `critical`: lỗi ở đây
+  // không được sinh thêm thông báo (tránh vòng lặp job.failed → thông báo → lỗi).
+  'events.notifications': {
+    policy: 'standard',
+    retryLimit: 3,
+    retryDelay: 2,
+    retryBackoff: true,
+    concurrency: 2,
+    expireInSeconds: 60,
+    pollingIntervalSeconds: 0.5,
+    subscribes: ['conversation.state_changed', 'page.expiring', 'post_target.failed', 'campaign.paused', 'job.failed'],
+  },
+  // Module `ai` (Story 1.6): đổi hạn mức / tỉ giá / cảnh báo 80% → tính lại cờ cảnh báo, phát
+  // `ai_budget.restored` khi xuống dưới ngưỡng. Idempotent (đối chiếu cờ với số đã tiêu) nên retry an toàn.
+  'events.ai': {
+    policy: 'standard',
+    retryLimit: 3,
+    retryDelay: 2,
+    retryBackoff: true,
+    concurrency: 1,
+    expireInSeconds: 60,
+    pollingIntervalSeconds: 0.5,
+    subscribes: ['settings.updated'],
+  },
+  // Dọn chỗ giữ chi phí AI bị bỏ rơi (tiến trình chết giữa lời gọi) cũ hơn 15 phút, mỗi 5 phút.
+  'ai.reservations_gc': {
+    policy: 'standard',
+    retryLimit: 1,
+    concurrency: 1,
+    expireInSeconds: 60,
+    cron: { expression: '*/5 * * * *', tz: CRON_TZ },
+  },
+  // Module `connections` (Story 2.2): xoá `oauth_states` / `oauth_results` hết hạn (kết quả giữ envelope token
+  // Page) mỗi giờ — kể cả khi không ai dùng OAuth nữa. Idempotent.
+  'connections.oauth_gc': {
+    policy: 'standard',
+    retryLimit: 1,
+    concurrency: 1,
+    expireInSeconds: 60,
+    cron: { expression: '0 * * * *', tz: CRON_TZ },
+  },
+} as const satisfies { [N in keyof QueuePayloads]: QueueDef }
+
+export type QueueName = keyof typeof QUEUES
+export type QueueRegistry = Readonly<Record<string, QueueDef>>
+
+export class UnknownQueueError extends Error {
+  readonly code = 'UNKNOWN_QUEUE'
+  readonly queue: string
+  constructor(queue: string) {
+    super(`UNKNOWN_QUEUE: queue "${queue}" không khai báo trong platform/jobs/queues.ts`)
+    this.name = 'UnknownQueueError'
+    this.queue = queue
+  }
+}
+
+export class InvalidQueueRegistryError extends Error {
+  readonly code = 'INVALID_QUEUE_REGISTRY'
+}
+
+const QUEUE_NAME = /^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/
+
+/** Kiểm luật AD-24 trên registry; ném lỗi ở lúc khởi động thay vì để pg-boss âm thầm bỏ qua. */
+export function validateRegistry(registry: QueueRegistry): void {
+  for (const [name, def] of Object.entries(registry)) {
+    const fail = (why: string) => {
+      throw new InvalidQueueRegistryError(`queue "${name}": ${why}`)
+    }
+    if (!QUEUE_NAME.test(name)) fail('tên phải dạng <module>.<action>')
+    if (def.policy !== 'standard' && def.policy !== 'stately') fail(`policy "${String((def as { policy: unknown }).policy)}" không được dùng`)
+    if (def.singletonKey !== undefined && def.policy !== 'stately') fail('singletonKey chỉ dùng với policy stately')
+    if (def.policy === 'stately' && typeof def.singletonKey !== 'function') fail('queue stately cần hàm singletonKey')
+    if (!Number.isInteger(def.concurrency) || def.concurrency < 1) fail('concurrency phải là số nguyên ≥ 1')
+    if (!Number.isInteger(def.retryLimit) || def.retryLimit < 0) fail('retryLimit phải là số nguyên ≥ 0')
+    if (def.cron) {
+      if (def.policy !== 'standard') fail('cron chỉ khai báo trên queue standard')
+      if (def.cron.tz !== CRON_TZ) fail(`cron phải dùng tz "${CRON_TZ}"`)
+    }
+    if (def.pollingIntervalSeconds !== undefined && !(def.pollingIntervalSeconds >= 0.5)) {
+      fail('pollingIntervalSeconds phải ≥ 0.5')
+    }
+    for (const event of def.subscribes ?? []) {
+      if (!isEventName(event)) fail(`subscribes "${String(event)}" không có trong packages/shared/events.ts`)
+    }
+  }
+}
+
+/** Queue có `critical: true` (job hết retry ở đây → thông báo `system_error`). */
+export function isCriticalQueue(name: string, registry: QueueRegistry = QUEUES): boolean {
+  return isQueueName(name, registry) && registry[name]!.critical === true
+}
+
+export function isQueueName(name: string, registry: QueueRegistry = QUEUES): boolean {
+  return Object.hasOwn(registry, name)
+}
+
+export function getQueueDef(name: string, registry: QueueRegistry = QUEUES): QueueDef {
+  if (!isQueueName(name, registry)) throw new UnknownQueueError(name)
+  return registry[name]!
+}
+
+export interface SendJobOptions {
+  startAfter?: Date | number | string
+  /** Executor của transaction đang mở (pg-boss `db`), để enqueue cùng transaction (AD-2). */
+  db?: BossDb
+}
+
+export interface JobSender {
+  send<N extends QueueName>(name: N, data: QueuePayloads[N], options?: SendJobOptions): Promise<string | null>
+}
+
+/** Wrapper duy nhất để enqueue: chỉ tên trong registry, singletonKey tự suy cho queue stately. */
+export function createJobSender(
+  boss: Pick<PgBoss, 'send'>,
+  registry: QueueRegistry = QUEUES,
+): JobSender {
+  validateRegistry(registry)
+  return {
+    async send(name, data, options = {}) {
+      const def = getQueueDef(name, registry)
+      const sendOptions: SendOptions = {}
+      if (options.startAfter !== undefined) sendOptions.startAfter = options.startAfter
+      if (options.db) sendOptions.db = options.db
+      if (def.policy === 'stately') {
+        const key = (def.singletonKey as (d: unknown) => string)(data)
+        if (typeof key !== 'string' || key === '') {
+          throw new InvalidQueueRegistryError(`queue "${name}": singletonKey suy từ payload rỗng`)
+        }
+        sendOptions.singletonKey = key
+      }
+      return boss.send(name, data as object, sendOptions)
+    },
+  }
+}

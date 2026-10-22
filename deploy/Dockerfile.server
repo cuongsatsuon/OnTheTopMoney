@@ -1,0 +1,33 @@
+# syntax=docker/dockerfile:1
+# Image `ottm-server` dùng chung cho api, worker, migrate (khác lệnh). Build context = gốc repo.
+#   docker compose build   (xem deploy/deploy.sh)
+FROM node:24-slim
+
+ENV NODE_ENV=production \
+    NPM_CONFIG_UPDATE_NOTIFIER=false
+
+WORKDIR /app
+
+# Chỉ manifest trước để cache lớp cài gói. web/package.json cần để lockfile workspace khớp
+# (không cài gì của web).
+COPY package.json package-lock.json ./
+COPY packages/shared/package.json packages/shared/
+COPY server/package.json server/
+COPY web/package.json web/
+RUN npm ci --omit=dev --workspace server --workspace packages/shared --no-audit --no-fund \
+ && npm cache clean --force
+
+# Node 24 chạy TS trực tiếp (type stripping): không có bước build.
+COPY packages/shared packages/shared
+COPY server/src server/src
+COPY server/scripts server/scripts
+COPY server/drizzle server/drizzle
+
+# Production mount MEDIA_DIR_HOST (thư mục máy chủ, chủ uid 1000 = `node`) đè lên đây; thư mục này chỉ dùng khi
+# chạy image không có mount.
+RUN mkdir -p /data/media && chown node:node /data/media
+
+USER node
+WORKDIR /app/server
+EXPOSE 3000
+CMD ["node", "src/app/main.ts"]

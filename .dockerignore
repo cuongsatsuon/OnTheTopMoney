@@ -1,0 +1,17 @@
+# Build context của deploy/Dockerfile.* là gốc repo: chỉ gửi mã nguồn, không gửi máy dev.
+**/node_modules
+**/dist
+**/dist-ssr
+**/coverage
+.data
+**/.env
+**/.env.*
+!**/.env.example
+deploy/.env
+.git
+.github
+.claude
+_bmad
+_bmad-output
+**/*.log
+**/.DS_Store

@@ -1,0 +1,5 @@
+ALTER TABLE "oauth_results" ADD COLUMN "truncated" boolean DEFAULT false NOT NULL;--> statement-breakpoint
+ALTER TABLE "oauth_results" ADD CONSTRAINT "oauth_results_meta_account_id_meta_accounts_id_fk" FOREIGN KEY ("meta_account_id") REFERENCES "public"."meta_accounts"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "page_credentials" ADD CONSTRAINT "page_credentials_page_id_pages_id_fk" FOREIGN KEY ("page_id") REFERENCES "public"."pages"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "page_credentials" ADD CONSTRAINT "page_credentials_meta_account_id_meta_accounts_id_fk" FOREIGN KEY ("meta_account_id") REFERENCES "public"."meta_accounts"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "page_credentials" ADD CONSTRAINT "page_credentials_token_source_page_id_pages_id_fk" FOREIGN KEY ("token_source_page_id") REFERENCES "public"."pages"("id") ON DELETE restrict ON UPDATE no action;

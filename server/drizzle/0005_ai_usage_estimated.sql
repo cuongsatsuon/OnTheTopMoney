@@ -1,0 +1,1 @@
+ALTER TABLE "ai_usage" ADD COLUMN "estimated" boolean DEFAULT false NOT NULL;

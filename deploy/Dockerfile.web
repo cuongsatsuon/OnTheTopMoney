@@ -1,0 +1,22 @@
+# syntax=docker/dockerfile:1
+# Image `ottm-web`: chỉ để build web/ và mang `dist` ra ngoài. Không chạy như service.
+# deploy.sh (lib.sh: publish_web) chép /dist của image này ra WEB_ROOT/<tag> trên máy chủ; nginx của chủ shop
+# phục vụ WEB_ROOT/current (deploy/nginx.conf.example). Build context = gốc repo.
+FROM node:24-slim AS web
+
+ENV NPM_CONFIG_UPDATE_NOTIFIER=false
+WORKDIR /app
+COPY package.json package-lock.json ./
+COPY packages/shared/package.json packages/shared/
+COPY server/package.json server/
+COPY web/package.json web/
+RUN npm ci --workspace web --workspace packages/shared --no-audit --no-fund
+
+COPY packages/shared packages/shared
+COPY web web
+RUN npm run build -w web \
+ && test -f web/dist/index.html
+
+# Chỉ còn dist: `docker create ottm-web:<tag> noop` rồi `docker cp <id>:/dist/. <đích>` (không cần chạy container).
+FROM scratch
+COPY --from=web /app/web/dist /dist

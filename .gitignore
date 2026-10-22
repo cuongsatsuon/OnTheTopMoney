@@ -1,0 +1,13 @@
+node_modules
+dist
+dist-ssr
+coverage
+.data
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+*.local
+# Khoá của deploy.sh / rollback.sh (deploy/lib.sh: take_lock)
+deploy/.deploy.lock

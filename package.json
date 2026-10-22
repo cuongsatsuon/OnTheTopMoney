@@ -1,0 +1,28 @@
+{
+  "name": "onthetopmoney",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/shared",
+    "server",
+    "web"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "node server/scripts/dev.ts",
+    "db:dev": "npm run db:dev -w server",
+    "db:migrate": "npm run db:migrate -w server",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "depcruise": "npm run depcruise -w server",
+    "test": "npm run test --workspaces --if-present",
+    "check": "npm run typecheck && npm run lint && npm run depcruise && npm run test"
+  },
+  "devDependencies": {
+    "concurrently": "10.0.6",
+    "oxlint": "^1.88.0",
+    "typescript": "7.0.2"
+  }
+}

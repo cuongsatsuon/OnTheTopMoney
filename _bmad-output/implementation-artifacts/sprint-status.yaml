@@ -1,0 +1,118 @@
+# STATUS DEFINITIONS:
+# ==================
+# Epic Status:
+#   - backlog: Epic not yet started
+#   - in-progress: Epic actively being worked on
+#   - done: All stories in epic completed
+
+# Story Status:
+#   - backlog: Story only exists in epic file
+#   - ready-for-dev: Story file created, ready for development
+#   - in-progress: Developer actively working on implementation
+#   - review: Implementation complete, ready for review
+#   - done: Story completed
+
+# Retrospective Status:
+#   - optional: Can be completed but not required
+#   - done: Retrospective has been completed
+
+# Action Item Status:
+#   - open: Committed during a retrospective, not yet addressed
+#   - in-progress: Actively being worked on
+#   - done: Completed
+
+# WORKFLOW NOTES:
+# ===============
+# - Epic transitions to 'in-progress' automatically when its first story starts (via build's sprint sync)
+# - Stories can be worked in parallel if team capacity allows
+# - Developer typically creates the next story after the previous one is 'done' to incorporate learnings
+# - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
+# - Retrospective appends its action items to action_items; the status view surfaces open ones
+generated: 10-20-2026 11:40
+last_updated: 10-22-2026 14:35
+project: OnTheTopMoney
+project_key: NOKEY
+tracking_system: file-system
+story_location: _bmad-output/implementation-artifacts
+development_status:
+  epic-1: in-progress
+  1-1-khung-monorepo-server-hai-tiến-trình-và-hợp-đồng-chung: review
+  1-2-đăng-nhập-chủ-sở-hữu-và-lớp-gọi-api-của-web: review
+  1-3-triển-khai-production-trên-một-vps: review
+  1-4-kênh-realtime-và-trung-tâm-thông-báo: review
+  1-5-nhập-và-kiểm-khoá-openai: review
+  1-6-ai-gateway-và-hạn-mức-chi-phí: review
+  epic-1-retrospective: optional
+
+  epic-2: in-progress
+  2-1-meta-client-và-meta-test-app-cho-môi-trường-dev: review
+  2-2-kết-nối-facebook-fanpage-và-instagram-business: review
+  2-3-kết-nối-threads: review
+  2-4-theo-dõi-hạn-token-và-kết-nối-lại: backlog
+  2-5-nhóm-và-gán-trang: backlog
+  2-6-bộ-chọn-phạm-vi-lọc-dữ-liệu-thật: backlog
+  2-7-gỡ-trang-khỏi-app: backlog
+  epic-2-retrospective: optional
+
+  epic-3: backlog
+  3-1-soạn-và-lưu-hồ-sơ-thương-hiệu: backlog
+  3-2-kế-thừa-hồ-sơ-và-dùng-hồ-sơ-riêng: backlog
+  3-3-đổi-thành-viên-nhóm-mà-không-mất-cấu-hình: backlog
+  3-4-viết-thử-bằng-ai-theo-hồ-sơ: backlog
+  epic-3-retrospective: optional
+
+  epic-4: backlog
+  4-1-cổng-nhận-webhook-meta-và-threads: backlog
+  4-2-tự-đăng-ký-webhook-trang-và-theo-dõi-sức-khoẻ-webhook: backlog
+  4-3-tin-messenger-và-instagram-direct-vào-hộp-thư: backlog
+  4-4-bình-luận-facebook-instagram-và-trả-lời-threads-vào-hộp-thư: backlog
+  4-5-nhận-diện-tin-của-chính-trang-echo: backlog
+  4-6-tab-hộp-thư-tiếp-quản-và-đánh-dấu-xong: backlog
+  4-7-gửi-tin-từ-hộp-thư-đúng-luật-24-giờ: backlog
+  4-8-gợi-ý-bằng-ai-khi-trả-lời: backlog
+  4-9-khách-hàng-danh-sách-thẻ-giai-đoạn-lịch-sử: backlog
+  4-10-tìm-nhanh-bằng-k: backlog
+  epic-4-retrospective: optional
+
+  epic-5: backlog
+  5-1-cấu-hình-ai-trả-lời-theo-nhóm-và-trang: backlog
+  5-2-kho-kiến-thức: backlog
+  5-3-thử-ai-trước-khi-bật: backlog
+  5-4-ai-tự-trả-lời-tin-nhắn-và-chuyển-cho-bạn: backlog
+  5-5-ai-trả-lời-bình-luận-công-khai-và-nhắn-riêng: backlog
+  5-6-ai-dừng-và-chạy-lại-đúng-lúc-khi-hết-hạn-mức-hoặc-khoá-lỗi: backlog
+  5-7-màn-chào-4-bước-chạy-trọn: backlog
+  epic-5-retrospective: optional
+
+  epic-6: backlog
+  6-1-soạn-bài-nháp-cho-nhiều-trang: backlog
+  6-2-viết-caption-bằng-ai-theo-hồ-sơ-từng-trang: backlog
+  6-3-sinh-ảnh-ai: backlog
+  6-4-lên-lịch-và-đăng-bài-theo-từng-trang: backlog
+  6-5-lịch-nội-dung-với-kéo-thả: backlog
+  epic-6-retrospective: optional
+
+  epic-7: backlog
+  7-1-wizard-tạo-chiến-dịch-mục-tiêu-trang-đích-nội-dung-và-lịch: backlog
+  7-2-xem-trước-7-bài-đầu: backlog
+  7-3-bắt-đầu-chiến-dịch: backlog
+  7-4-sinh-nội-dung-cuốn-chiếu-và-hàng-đợi-bài-chờ-duyệt: backlog
+  7-5-tạm-dừng-tiếp-tục-và-xoá-chiến-dịch: backlog
+  7-6-chiến-dịch-tự-tạm-dừng-khi-có-sự-cố: backlog
+  epic-7-retrospective: optional
+
+  epic-8: backlog
+  8-1-thu-thập-số-liệu-trang-và-bài: backlog
+  8-2-màn-hiệu-suất-theo-phạm-vi: backlog
+  8-3-hiệu-quả-ai: backlog
+  8-4-tạo-bài-tương-tự: backlog
+  8-5-tổng-quan-với-việc-cần-xử-lý-thật: backlog
+  epic-8-retrospective: optional
+
+  epic-9: backlog
+  9-1-trang-chính-sách-và-callback-xoá-dữ-liệu-của-meta: backlog
+  9-2-xoá-khách-và-dữ-liệu-theo-yêu-cầu: backlog
+  9-3-dọn-dữ-liệu-theo-thời-hạn: backlog
+  9-4-hồ-sơ-app-review-và-chuyển-live: backlog
+  9-5-diễn-tập-khôi-phục-backup: backlog
+  epic-9-retrospective: optional
