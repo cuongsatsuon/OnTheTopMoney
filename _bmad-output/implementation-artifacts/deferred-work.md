@@ -22,3 +22,12 @@
 - source_spec: `spec-1-3d-web-chay-trong-docker.md`
   summary: Test CI "build web lỗi → IMAGE_TAG và container đang chạy giữ nguyên".
   evidence: Bước CI "xuất bản web lỗi → không đổi current" bị bỏ cùng cơ chế WEB_ROOT; cần cách cố ý làm hỏng build `ottm-web` (vd nginx -t lỗi) trong CI.
+- source_spec: `spec-media-cloudinary.md`
+  summary: Ánh xạ lỗi adapter media (`AUTH_FAILED`, `RATE_LIMITED`, `INVALID_REQUEST`, `NOT_FOUND`, `TRANSIENT`) sang `ErrorCode` + câu tiếng Việt (vd "ảnh quá lớn").
+  evidence: Chỉ có `MEDIA_NOT_CONFIGURED`; làm ở story upload đầu tiên (3.1 logo hoặc ảnh bài).
+- source_spec: `spec-media-cloudinary.md`
+  summary: Dọn file mồ côi trên Cloudinary (liệt kê `<folder>/private|public/*`, so với tham chiếu trong DB), kể cả sau khi khôi phục backup.
+  evidence: Adapter chưa có thao tác liệt kê theo prefix; runbook chỉ nêu chiều ngược lại.
+- source_spec: `spec-media-cloudinary.md`
+  summary: Job CI tuỳ chọn chạy `runMediaCheck` với tài khoản Cloudinary thử (secret `CLOUDINARY_URL_TEST`).
+  evidence: Fake ký bằng chính `signParams` của adapter; tải file `authenticated` qua API download chưa được kiểm với Cloudinary thật.

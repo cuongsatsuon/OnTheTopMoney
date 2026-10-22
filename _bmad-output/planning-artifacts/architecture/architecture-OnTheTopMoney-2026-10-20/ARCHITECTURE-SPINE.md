@@ -196,9 +196,9 @@ stateDiagram-v2
 
 ### AD-12 — Bí mật mã hoá, không lộ qua API hay log
 
-- **Binds:** connections, settings, adapters/crypto, platform/log, backup
-- **Prevents:** token/khoá OpenAI lộ qua API, log, backup; dữ liệu cá nhân của khách vào log.
-- **Rule:** Khoá OpenAI và token Meta lưu dạng `v1:<keyId>:<iv>:<ciphertext>:<tag>` AES-256-GCM, khoá chủ từ env `APP_ENCRYPTION_KEYS` (nhiều khoá để xoay) + `APP_ENCRYPTION_ACTIVE_KEY`; job `crypto.reencrypt` chuyển bản ghi sang khoá active. API trả khoá OpenAI dạng `{configured, last4, status, checkedAt}`. Meta app secret, Threads app secret, session secret chỉ ở env. Verify token webhook cũng ở env nhưng không thuộc hạng bí mật: API trả đầy đủ để người dùng dán vào Meta. pino `redact` cho `access_token`, `authorization`, `apiKey`, `*.token`, `*.*.token`, `headers.cookie`, `body.password`; log chỉ ghi id, không ghi nội dung tin nhắn, prompt, SĐT; URL Graph log bỏ query. Backup được mã hoá; `APP_ENCRYPTION_KEYS` cất ở chỗ riêng, không nằm trong backup.
+- **Binds:** connections, settings, adapters/crypto, platform/log
+- **Prevents:** token/khoá OpenAI lộ qua API, log, file dump DB; dữ liệu cá nhân của khách vào log.
+- **Rule:** Khoá OpenAI và token Meta lưu dạng `v1:<keyId>:<iv>:<ciphertext>:<tag>` AES-256-GCM, khoá chủ từ env `APP_ENCRYPTION_KEYS` (nhiều khoá để xoay) + `APP_ENCRYPTION_ACTIVE_KEY`; job `crypto.reencrypt` chuyển bản ghi sang khoá active. API trả khoá OpenAI dạng `{configured, last4, status, checkedAt}`. Meta app secret, Threads app secret, session secret chỉ ở env. Verify token webhook cũng ở env nhưng không thuộc hạng bí mật: API trả đầy đủ để người dùng dán vào Meta. pino `redact` cho `access_token`, `authorization`, `apiKey`, `*.token`, `*.*.token`, `headers.cookie`, `body.password`; log chỉ ghi id, không ghi nội dung tin nhắn, prompt, SĐT; URL Graph log bỏ query. Không có backup tự động (chủ shop chọn bỏ hệ thống sao lưu tự động); file `pg_dump` tay chỉ chứa bí mật đã mã hoá; `APP_ENCRYPTION_KEYS` cất ở chỗ riêng, không nằm trong DB/file dump.
 
 ### AD-13 — Vòng đời `post_targets`: một cửa tạo, một bảng chuyển trạng thái
 
@@ -230,8 +230,9 @@ Kéo thả trên lịch = đổi `scheduled_at` cho target chưa `publishing`/`p
 - **Binds:** content, profiles, inbox, ai, adapters/media, campaigns
 - **Prevents:** IG/Threads không đăng được vì ảnh sau đăng nhập; bảng giá trong kho kiến thức thành công khai; hai module cùng ghi bảng ảnh; đĩa đầy vì ảnh bỏ.
 - **Rule:**
-  - Ảnh dùng cho IG được chuẩn hoá thành JPEG sRGB khi `put()` (IG chỉ nhận JPEG); ảnh AI xin `output_format: jpeg` qua Images API. Job đăng IG/Threads tạo container, chờ `status_code=FINISHED` rồi mới publish.
-  - `MediaStore` công khai chỉ dành cho ảnh dùng để đăng bài và logo: URL `/media/<uuidv7>.<ext>` do nginx phục vụ từ thư mục trên host (driver mặc định đĩa cục bộ; R2/S3 thay qua env, không đổi schema). File kho kiến thức và đính kèm của khách đi `PrivateFileStore` (thư mục không do nginx phục vụ), chỉ server đọc.
+  - Ảnh dùng cho IG được chuẩn hoá thành JPEG khi `put()` (`asJpeg`, IG chỉ nhận JPEG); ảnh AI xin `output_format: jpeg` qua Images API. Job đăng IG/Threads tạo container, chờ `status_code=FINISHED` rồi mới publish.
+  - Lưu trữ là **Cloudinary** (spec media-cloudinary; không lưu file trên máy chủ, không SDK — `adapters/media` gọi REST bằng `fetch`, ký tham số SHA-1 theo tài liệu Cloudinary), cấu hình bằng `CLOUDINARY_URL` (`cloudinary://<api_key>:<api_secret>@<cloud_name>`, tuỳ chọn: thiếu → mọi thao tác trả `MEDIA_NOT_CONFIGURED`; sai dạng → không khởi động) và `CLOUDINARY_FOLDER` (mặc định `ottm`); public_id = `<folder>/<public|private>/<uuidv7>`. Adapter không biết nghiệp vụ, không log, trả lỗi đã phân loại (`AUTH_FAILED`, `RATE_LIMITED`, `INVALID_REQUEST`, `NOT_FOUND`, `TRANSIENT`); xoá idempotent. Chỉ module và entrypoint được import `adapters/media` (dependency-cruiser).
+  - `MediaStore` công khai chỉ dành cho ảnh dùng để đăng bài và logo (jpeg/png/webp): `put()` trả `{publicId, url, width, height, bytes, format}` với URL `https://res.cloudinary.com/...` mà Meta và trình duyệt tải được (CSP `img-src` cho phép `res.cloudinary.com`); `asJpeg` để Cloudinary đổi sang JPEG khi upload. File kho kiến thức và đính kèm của khách đi `PrivateFileStore` (Cloudinary `type: authenticated` — `raw` cho pdf/docx/txt, `image` cho ảnh): không có URL công khai dùng được, chỉ server tải về qua API download có chữ ký. `npm run media:check -w server` thử trọn vòng với tài khoản thật.
   - `content` sở hữu `media_assets`, chỉ chứa ảnh bài đăng. Logo lưu `brand_profiles.logo_path` qua `MediaStore` (không phải `media_assets`); đính kèm của khách ở `message_attachments` (AD-11). Sinh ảnh AI là job `content.image.generate`: content gọi `ai.generateImage()` (gateway chỉ trả bytes + ghi `ai_usage`), rồi `MediaStore.put()`, chèn `media_assets(status=ready)`, phát `media_asset.created`. Ảnh bị OpenAI từ chối → `IMAGE_REJECTED`, caption không bị ảnh hưởng. `ai` không chạm `media_assets`.
   - Tải lên: allowlist MIME bằng magic bytes (jpeg, png, webp cho ảnh; pdf, docx, txt cho kho kiến thức), giới hạn kích thước, bỏ EXIF; không nhận SVG.
   - Cron `content.media_gc` xoá `media_assets` chưa gắn vào bài nào quá 7 ngày [ASSUMPTION]; ảnh của bài đã đăng, logo và đính kèm không thuộc phạm vi cron này.
@@ -278,7 +279,7 @@ Kéo thả trên lịch = đổi `scheduled_at` cho target chưa `publishing`/`p
 
 - **Binds:** app, mọi route
 - **Prevents:** API mở công khai trên internet; webhook/media bị chặn bởi auth; dò mật khẩu.
-- **Rule:** Một tài khoản chủ, mật khẩu argon2id đặt bằng CLI `server set-password`. Đăng nhập tạo session (bảng `sessions`, hạn 30 ngày trượt, xoay id khi đăng nhập), cookie `HttpOnly; Secure; SameSite=Lax`. Giới hạn đăng nhập 5 lần/15 phút/IP; `@fastify/rate-limit` cho route ghi. Mọi `/api/v1/*` cần session. Công khai chỉ có: `/healthz`, `/webhooks/*`, `/media/*`, `/api/v1/auth/login`, `/oauth/*/callback` (kiểm `state` gắn session), `/privacy/*` (AD-22). Kiểm `Origin` cho request ghi. Reverse proxy nginx (theo `deploy/nginx.conf.example`) đặt CSP, HSTS, `X-Content-Type-Options`, `Referrer-Policy`. Hai chế độ web (spec 1.3c, `WEB_MODE`): `vps` (mặc định — web + api cùng origin) và `external` (web tĩnh trên Hostinger, api ở host con khác của **cùng tên miền gốc**, vd `app.<miền>` + `api.<miền>`, để cookie SameSite=Lax vẫn đi kèm). api bật CORS có credentials chỉ cho `/api/v1/*`, chỉ origin trong `ALLOWED_ORIGINS` (so khớp chính xác, không `*`, luôn `Vary: Origin`; preflight 204 không cần phiên); cookie vẫn host-only, không đặt `Domain`. OAuth callback chuyển về URL tuyệt đối theo `WEB_BASE_URL` (mặc định `PUBLIC_BASE_URL`; khi đặt ở production phải https và nằm trong `ALLOWED_ORIGINS`). Web chế độ tách: header bảo mật do `.htaccess` (`deploy/hostinger/htaccess.template`, sinh lúc build) đặt, host api theo `deploy/nginx-api.conf.example`.
+- **Rule:** Một tài khoản chủ, mật khẩu argon2id đặt bằng CLI `server set-password`. Đăng nhập tạo session (bảng `sessions`, hạn 30 ngày trượt, xoay id khi đăng nhập), cookie `HttpOnly; Secure; SameSite=Lax`. Giới hạn đăng nhập 5 lần/15 phút/IP; `@fastify/rate-limit` cho route ghi. Mọi `/api/v1/*` cần session. Công khai chỉ có: `/healthz`, `/webhooks/*`, `/api/v1/auth/login`, `/oauth/*/callback` (kiểm `state` gắn session), `/privacy/*` (AD-22). Kiểm `Origin` cho request ghi. Reverse proxy nginx (theo `deploy/nginx.conf.example`) đặt CSP, HSTS, `X-Content-Type-Options`, `Referrer-Policy`. Hai chế độ web (spec 1.3c; chọn bằng `COMPOSE_PROFILES` của compose): `web` (mặc định — web + api cùng origin) và trống (web tĩnh trên Hostinger, api ở host con khác của **cùng tên miền gốc**, vd `app.<miền>` + `api.<miền>`, để cookie SameSite=Lax vẫn đi kèm). api bật CORS có credentials chỉ cho `/api/v1/*`, chỉ origin trong `ALLOWED_ORIGINS` (so khớp chính xác, không `*`, luôn `Vary: Origin`; preflight 204 không cần phiên); cookie vẫn host-only, không đặt `Domain`. OAuth callback chuyển về URL tuyệt đối theo `WEB_BASE_URL` (mặc định `PUBLIC_BASE_URL`; khi đặt ở production phải https và nằm trong `ALLOWED_ORIGINS`). Web chế độ tách: header bảo mật do `.htaccess` (`deploy/hostinger/htaccess.template`, sinh lúc build) đặt, host api theo `deploy/nginx-api.conf.example`.
 
 ### AD-20 — Nhận diện tin outbound và echo
 
@@ -297,12 +298,12 @@ Kéo thả trên lịch = đổi `scheduled_at` cho target chưa `publishing`/`p
 
 ### AD-22 — Vòng đời dữ liệu và xoá theo yêu cầu
 
-- **Binds:** privacy, mọi module có dữ liệu khách hoặc trang, webhooks, backup, Điều kiện ngoài
+- **Binds:** privacy, mọi module có dữ liệu khách hoặc trang, webhooks, Điều kiện ngoài
 - **Prevents:** không có đường xoá dữ liệu khi Meta hoặc khách yêu cầu; mỗi module xoá một kiểu hoặc không xoá; go-live bị chặn vì thiếu Data Deletion.
 - **Rule:**
   - Endpoint công khai `POST /privacy/meta/deauthorize` và `POST /privacy/meta/data-deletion` xác minh `signed_request` bằng app secret; data-deletion trả `{url, confirmation_code}` trỏ tới `/privacy/status/<code>`. Trang tĩnh `/privacy/policy` (nêu cả việc gửi nội dung tin nhắn sang OpenAI).
   - Module `privacy` sở hữu `deletion_requests(code, scope, target_id, status, requested_at, completed_at)` và là điều phối duy nhất: phát `privacy.purge_requested{requestId, scope: page|contact|all, targetId, conversationIds?}`; mỗi module trong danh sách tham gia cố định (`inbox`, `autoreply`, `webhooks`, `ai`, `content` khi `scope=page|all`) tự xoá phần của mình rồi phát `privacy.purge_part_completed{requestId, module}`; `inbox` xoá sau cùng (payload đã mang `conversationIds` cho module khác); `privacy` đóng yêu cầu khi đủ. `deauthorize` = ngắt mọi trang + yêu cầu `scope=all`. Thao tác tay "Xoá khách và toàn bộ hội thoại" ở Khách hàng dùng cùng đường.
-  - Retention [ASSUMPTION]: payload thô `webhook_events` 30 ngày (sau đó giữ metadata); archive pg-boss 7 ngày; `autoreply_runs` 90 ngày; session hết hạn xoá ngay; tin nhắn, khách giữ tới khi người dùng xoá hoặc trang bị gỡ quá 30 ngày; backup tự hết hạn sau 14 ngày, nên xoá có hiệu lực hoàn toàn sau ≤14 ngày.
+  - Retention [ASSUMPTION]: payload thô `webhook_events` 30 ngày (sau đó giữ metadata); archive pg-boss 7 ngày; `autoreply_runs` 90 ngày; session hết hạn xoá ngay; tin nhắn, khách giữ tới khi người dùng xoá hoặc trang bị gỡ quá 30 ngày; không có backup tự động, nên xoá có hiệu lực ngay trên DB; file `pg_dump` tay chủ shop tự giữ thì phải tự xoá/hết hạn [ASSUMPTION].
 
 ### AD-23 — Vòng đời trang và OAuth chọn trang
 
@@ -329,7 +330,7 @@ Kéo thả trên lịch = đổi `scheduled_at` cho target chưa `publishing`/`p
 | `inbox.echo_match` (thử khớp echo) | standard, `retryDelay` 5 giây | — | 3 | 5 |
 | `connections.*`, `analytics.*`, `privacy.*`, `crypto.reencrypt` | standard | — (chống trùng bằng trạng thái bản ghi) | 3 | 2 |
 | `events.<module>` (consumer sự kiện của realtime, notifications, profiles, campaigns, ai, autoreply, privacy) | standard | — (handler idempotent, AD-3) | 5 | 5 |
-| Cron: `connections.token_check` (ngày), `webhooks.health` (5 phút), `content.requeue` (15 phút), `content.media_gc` (ngày), `campaigns.generate_window` (giờ), `campaigns.complete_check` (giờ), `analytics.post_metrics` (6 giờ), `analytics.page_metrics` (ngày), `privacy.retention` (ngày), `platform.backup` (đêm) | standard | — | 1 | 1 |
+| Cron: `connections.token_check` (ngày), `webhooks.health` (5 phút), `content.requeue` (15 phút), `content.media_gc` (ngày), `campaigns.generate_window` (giờ), `campaigns.complete_check` (giờ), `analytics.post_metrics` (6 giờ), `analytics.page_metrics` (ngày), `privacy.retention` (ngày) | standard | — | 1 | 1 |
 
 Job hết retry phát `job.failed`; `notifications` tạo thông báo cho queue `webhook.route`, `inbox.send`, `publish.target`, `privacy.*`.
 
@@ -369,7 +370,8 @@ Job hết retry phát `job.failed`; `notifications` tạo thông báo cho queue 
 | OpenAI model (seed, đổi được ở Cài đặt) | chữ `gpt-6-luna`; ảnh `gpt-image-2.5-flare` qua Images API |
 | nginx + certbot | do chủ shop cài và quản trên VPS (mẫu `deploy/nginx.conf.example`; chế độ tách: `deploy/nginx-api.conf.example`) |
 | Phục vụ web (chế độ VPS) | service compose `web`: `nginxinc/nginx-unprivileged:1.28.0-alpine` + `web/dist` (`deploy/Dockerfile.web`, `deploy/web-nginx.conf`) |
-| Hosting web tĩnh (tuỳ chọn) | Hostinger (Apache/LiteSpeed, `.htaccess`) khi `WEB_MODE=external`; xuất bản bằng `deploy/hostinger/publish-web-hostinger.sh` |
+| Lưu ảnh/file (AD-14) | Cloudinary — REST API qua `fetch` (không SDK), `CLOUDINARY_URL`; ảnh công khai `res.cloudinary.com`, file riêng tư `type: authenticated` |
+| Hosting web tĩnh (tuỳ chọn) | Hostinger (Apache/LiteSpeed, `.htaccess`) khi `COMPOSE_PROFILES` trống trên VPS; xuất bản bằng `deploy/hostinger/publish-web-hostinger.sh` |
 | Frontend (đã có) | Vite 8, React 19, Tailwind v4, react-router 7, oxlint |
 
 ## Structural Seed
@@ -383,35 +385,31 @@ graph LR
   Threads[Threads API] -->|webhook| Nginx
   Ping[Uptime ping ngoài] -->|/healthz| Nginx
   subgraph VPS[VPS Docker Compose]
-    Nginx[nginx trên host + certbot: TLS, header bảo mật, /media, reverse proxy tới api 127.0.0.1:3000 và web 127.0.0.1:3080]
+    Nginx[nginx trên host + certbot: TLS, header bảo mật, reverse proxy tới api 127.0.0.1:3000 và web 127.0.0.1:3080]
     Web[web: nginx unprivileged phục vụ web/dist, SPA fallback, Cache-Control]
     Migrate[migrate: one-shot]
     API[api: Fastify REST + SSE + webhooks + OAuth]
     Worker[worker: pg-boss jobs + cron]
     PG[(postgres 18: dữ liệu + pg-boss + NOTIFY)]
-    Pub[(volume media công khai)]
-    Priv[(volume file riêng tư)]
   end
   Nginx --> API
   Nginx --> Web
-  Nginx --> Pub
-  API --> Pub
   Migrate --> PG
   API --> PG
-  API --> Priv
   Worker --> PG
-  Worker --> Pub
-  Worker --> Priv
+  API -->|upload, tải file riêng tư có chữ ký| Cloudinary[Cloudinary: ảnh công khai + file authenticated]
+  Worker -->|upload, tải file riêng tư có chữ ký| Cloudinary
+  Browser -->|ảnh res.cloudinary.com| Cloudinary
+  Meta -->|tải ảnh để đăng| Cloudinary
   Worker -->|Graph v26.0| Meta
   Worker -->|graph.threads.net| Threads
   Worker -->|Responses, Images| OpenAI[OpenAI API]
   API -->|chữ tương tác| OpenAI
-  Backup[Kho backup khác nhà cung cấp, mã hoá] <-.->|pg_dump -Fc + media hằng đêm| VPS
 ```
 
-- **Môi trường:** `local` (docker compose postgres; webhook qua tunnel; **Meta Test App + Threads test app riêng**, không bao giờ trỏ callback của app production về tunnel) và `production` (một VPS khu vực Singapore [ASSUMPTION], app Meta Live). Không staging. Biến bắt buộc theo môi trường: `PUBLIC_BASE_URL`, `META_APP_ID/SECRET`, `THREADS_APP_ID/SECRET`, `META_VERIFY_TOKEN`, `APP_ENCRYPTION_KEYS`, `APP_ENCRYPTION_ACTIVE_KEY`, `SESSION_SECRET`, `DATABASE_URL`.
-- **Triển khai:** image `ottm-server`, `ottm-web`, `ottm-backup` gắn cùng tag git SHA (giữ 5 tag để rollback); web chạy như service compose `web` (image `ottm-web:<tag>`: build `web/` rồi nginx unprivileged phục vụ `dist`, không root, root FS chỉ đọc, publish `127.0.0.1:${WEB_HOST_PORT:-3080}`, profile `web` chỉ bật khi `WEB_MODE=vps`). Rollback = đổi `IMAGE_TAG` rồi `docker compose up` (api, worker, web cùng về tag), không có file web nào trên host. Service `migrate` one-shot chạy migration Drizzle (chỉ tiến, tương thích ngược một phiên bản); `api` và `worker` `depends_on: service_completed_successfully`. pg-boss tự tạo schema của nó khi `start()`. Một bản api, một bản worker. nginx của chủ shop: `/healthz`, `/api`, `/webhooks`, `/oauth`, `/privacy` → api (`127.0.0.1:3000`); `/media` → thư mục media trên host; còn lại → container web (`127.0.0.1:3080`: SPA fallback, `/assets/*` immutable, còn lại `no-cache` — container quyết `Cache-Control`, nginx máy chủ giữ header bảo mật và chỉ thêm `no-store` cho lỗi). Chứng chỉ do certbot quản. Chế độ tách (`WEB_MODE=external`, spec 1.3c): `deploy.sh`/`rollback.sh` không build/chạy service web (container web cũ bị dừng + xoá); nginx chỉ phục vụ host api (`deploy/nginx-api.conf.example`: các đường api, `/media`, còn lại JSON 404); web build với `VITE_API_ORIGIN=https://api.<miền>` (sinh `.htaccess`) rồi rsync lên Hostinger (`assets/` trước, `index.html` cuối).
-- **Vận hành:** `GET /healthz` trả 503 khi heartbeat worker (`worker_heartbeats`) cũ hơn 2 phút, đĩa >85% hoặc Postgres lỗi; một dịch vụ uptime ping ngoài gọi mỗi 5 phút. Backup hằng đêm `pg_dump -Fc` + rsync media, mã hoá, lưu ở nhà cung cấp khác VPS, giữ 14 bản; RPO 24 giờ; diễn tập khôi phục trước go-live và mỗi quý [ASSUMPTION].
+- **Môi trường:** `local` (docker compose postgres; webhook qua tunnel; **Meta Test App + Threads test app riêng**, không bao giờ trỏ callback của app production về tunnel) và `production` (một VPS khu vực Singapore [ASSUMPTION], app Meta Live). Không staging. Biến bắt buộc theo môi trường: `PUBLIC_BASE_URL`, `META_APP_ID/SECRET`, `THREADS_APP_ID/SECRET`, `APP_ENCRYPTION_KEYS`, `APP_ENCRYPTION_ACTIVE_KEY`, `DATABASE_URL` (`META_VERIFY_TOKEN` thêm cùng story webhook; phiên đăng nhập là token ngẫu nhiên lưu DB nên không cần `SESSION_SECRET`).
+- **Triển khai:** thủ công bằng `docker compose` (spec bo-script-deploy; không có script deploy/rollback/smoke): image `ottm-server`, `ottm-web` cùng tag `IMAGE_TAG` (mặc định `latest`; runbook: đặt tag mới — vd git SHA — mỗi lần `docker compose up -d --build` để rollback được, nên `pg_dump` tay trước khi lên bản có migration, kiểm cổng bận bằng `ss`, kiểm `/healthz` và mở web sau mỗi lần lên bản); web chạy như service compose `web` (image `ottm-web:<tag>`: build `web/` rồi nginx unprivileged phục vụ `dist`, không root, root FS chỉ đọc, publish `127.0.0.1:${WEB_HOST_PORT:-3080}`, profile `web`, bật bằng `COMPOSE_PROFILES=web` trong `deploy/.env`). Rollback = đổi `IMAGE_TAG` về tag cũ rồi `docker compose up -d` không `--build` (api, worker, web cùng về tag), không có file web nào trên host. Service `migrate` one-shot chạy migration Drizzle (chỉ tiến, tương thích ngược một phiên bản); `api` và `worker` `depends_on: service_completed_successfully`. pg-boss tự tạo schema của nó khi `start()`. Một bản api, một bản worker. nginx của chủ shop: `/healthz`, `/api`, `/webhooks`, `/oauth`, `/privacy` → api (`127.0.0.1:3000`); còn lại → container web (`127.0.0.1:3080`: SPA fallback, `/assets/*` immutable, còn lại `no-cache` — container quyết `Cache-Control`, nginx máy chủ giữ header bảo mật và chỉ thêm `no-store` cho lỗi). Chứng chỉ do certbot quản. Chế độ tách (`COMPOSE_PROFILES` trống, spec 1.3c): compose không build/chạy service web (container web cũ dừng + xoá bằng tay, runbook 8.2); nginx chỉ phục vụ host api (`deploy/nginx-api.conf.example`: các đường api, còn lại JSON 404); web build với `VITE_API_ORIGIN=https://api.<miền>` (sinh `.htaccess`) rồi rsync lên Hostinger (`assets/` trước, `index.html` cuối).
+- **Vận hành:** `GET /healthz` trả 503 khi heartbeat worker (`worker_heartbeats`) cũ hơn 2 phút, đĩa >85% hoặc Postgres lỗi; một dịch vụ uptime ping ngoài gọi mỗi 5 phút. **Không có backup tự động** (chủ shop chọn bỏ hệ thống sao lưu tự động): không job/cron/kho sao lưu; RPO = thời điểm `pg_dump` tay gần nhất (runbook mục 4: `docker compose exec postgres pg_dump -Fc` ra file, chép ra ngoài VPS; khôi phục bằng `pg_restore`). Ảnh/file nằm trên Cloudinary, dựa vào backup của Cloudinary nếu gói có (runbook mục 1.5).
 
 ### Thực thể chính
 
@@ -492,11 +490,11 @@ OnTheTopMoney/
     src/modules/<module>/   # index.ts (public), service, repo, schema.ts (bảng Drizzle)
     src/adapters/meta/      # graph.ts, threads.ts, errors.ts, normalize.ts, rate.ts, fake.ts
     src/adapters/openai/    # responses, images, errors.ts, fake.ts
-    src/adapters/media/     # MediaStore (công khai), PrivateFileStore
+    src/adapters/media/     # MediaStore (công khai), PrivateFileStore — Cloudinary qua fetch; fake.ts = Cloudinary giả cho test
     src/adapters/crypto/    # envelope AES-256-GCM
     src/platform/           # db, jobs (queues.ts), events, realtime, config, log
     drizzle/                # migration
-  deploy/                   # docker-compose.yml, Dockerfile.server, Dockerfile.web + web-nginx.conf (service web), nginx.conf.example, nginx-api.conf.example, backup script, runbook.md
+  deploy/                   # docker-compose.yml, Dockerfile.server, Dockerfile.web + web-nginx.conf (service web), nginx.conf.example, nginx-api.conf.example, runbook.md
     hostinger/              # chế độ tách: htaccess.template, publish-web-hostinger.sh, check-htaccess.sh
 ```
 
