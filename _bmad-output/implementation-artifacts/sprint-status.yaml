@@ -44,14 +44,14 @@ development_status:
   1-6-ai-gateway-và-hạn-mức-chi-phí: review
   epic-1-retrospective: optional
 
-  epic-2: in-progress
+  epic-2: review
   2-1-meta-client-và-meta-test-app-cho-môi-trường-dev: review
   2-2-kết-nối-facebook-fanpage-và-instagram-business: review
   2-3-kết-nối-threads: review
   2-4-theo-dõi-hạn-token-và-kết-nối-lại: review
   2-5-nhóm-và-gán-trang: review
   2-6-bộ-chọn-phạm-vi-lọc-dữ-liệu-thật: review
-  2-7-gỡ-trang-khỏi-app: backlog
+  2-7-gỡ-trang-khỏi-app: review
   epic-2-retrospective: optional
 
   epic-3: backlog

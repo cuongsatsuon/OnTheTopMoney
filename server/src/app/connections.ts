@@ -12,6 +12,7 @@ import { z } from 'zod'
 import {
   confirmConnections,
   getOAuthResult,
+  removePage,
   startFacebookOAuth,
   startThreadsOAuth,
   type ConnectionsDeps,
@@ -19,6 +20,7 @@ import {
 import { AppError } from '../platform/errors/index.ts'
 
 const ResultParams = z.object({ id: z.string() })
+const PageIdParams = z.object({ id: z.uuid() })
 
 function sessionIdOf(req: FastifyRequest): string {
   const id = req.ownerSession?.id
@@ -47,5 +49,15 @@ export function registerConnections(app: FastifyInstance, deps: ConnectionsDeps)
   app.post('/api/v1/connections/confirm', async (req): Promise<ConfirmConnectionsResponse> => {
     const request = ConfirmConnectionsRequest.parse(req.body ?? {})
     return confirmConnections(deps, { sessionId: sessionIdOf(req), request })
+  })
+
+  // Gỡ trang khỏi app (Story 2.7, AD-3, AD-23): soft-delete + xoá token + phát `page.removed`, một transaction.
+  // Trang không tồn tại hoặc đã gỡ → 404 (nhất quán: trang đã gỡ xem như không còn). 401/403 do guard auth lo.
+  app.delete('/api/v1/pages/:id', async (req, reply): Promise<void> => {
+    sessionIdOf(req)
+    const { id } = PageIdParams.parse(req.params)
+    const removed = await removePage(deps, id)
+    if (!removed) throw new AppError('NOT_FOUND', 404, { message: 'Trang không tồn tại hoặc đã gỡ' })
+    reply.code(204)
   })
 }

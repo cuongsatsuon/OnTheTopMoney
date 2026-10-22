@@ -6,6 +6,7 @@ import { ALL_SCOPE, type ConnectionStatus, type PageDto, type Platform, type Sco
 import { and, asc, eq, getTableColumns, inArray, isNull, sql, type SQL } from 'drizzle-orm'
 import type { DbExecutor } from '../../platform/db/index.ts'
 import { AppError } from '../../platform/errors/index.ts'
+import type { EventPublisher } from '../../platform/events/index.ts'
 import { groups, pages } from './schema.ts'
 
 export interface PlatformAccount {
@@ -96,6 +97,25 @@ export async function setConnectionStatus(
     .where(eq(pages.id, pageId))
     .returning()
   return row ? toPageDto(row) : null
+}
+
+/**
+ * Gỡ một trang khỏi app (Story 2.7): soft-delete (`removed_at = now()`) và phát `page.removed` trong CÙNG
+ * transaction (AD-3). Chỉ `connections` được gọi (AD-5) — connections lo xoá token của trang. KHÔNG xoá dữ liệu
+ * lịch sử (hội thoại, bài, số liệu — các epic sau): chỉ đánh dấu trang đã gỡ. No-op khi trang không tồn tại hoặc
+ * đã gỡ (nhất quán với `getPage`/`resolveScope`): trả `false` để bên gọi trả 404. Khoá dòng (`for update`) để hai
+ * lần gỡ song song chỉ một lần thành công (lần sau thấy `removed_at` đã đặt → `false`).
+ */
+export async function setRemoved(tx: DbExecutor, events: EventPublisher, pageId: string): Promise<boolean> {
+  const [locked] = await tx
+    .select({ id: pages.id })
+    .from(pages)
+    .where(and(eq(pages.id, pageId), isNull(pages.removedAt)))
+    .for('update')
+  if (!locked) return false
+  await tx.update(pages).set({ removedAt: sql`now()`, updatedAt: sql`now()` }).where(eq(pages.id, pageId))
+  await events.publishEvent(tx, 'page.removed', { id: pageId, pageId })
+  return true
 }
 
 /**

@@ -35,12 +35,14 @@ export {
   type CallbackQuery,
 } from './oauth.ts'
 export { confirmConnections } from './confirm.ts'
-export { getAccessToken } from './credentials.ts'
+export { getAccessToken, removePage } from './credentials.ts'
 export { FAKE_CODE, FAKE_THREADS_CODE } from './fake-meta.ts'
 export {
   computeConnectionStatus,
   effectiveExpiry,
   markDisconnected,
+  markDisconnectedTx,
+  REASON_TOKEN_SOURCE_REMOVED,
   runTokenCheck,
   EXPIRING_WINDOW_S,
   THREADS_MIN_AGE_S,

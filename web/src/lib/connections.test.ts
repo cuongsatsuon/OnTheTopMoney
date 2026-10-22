@@ -1,5 +1,5 @@
 import type { OAuthCandidate } from '@ottm/shared'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   IG_NOT_BUSINESS_HINT,
   MISSING_TITLES,
@@ -9,6 +9,8 @@ import {
   stripOAuthFragment,
   providerFromParam,
   providerOfPlatform,
+  removePageConfirm,
+  removePageRequest,
   splitPagesByProvider,
   avatarColorOf,
   groupCandidates,
@@ -232,5 +234,37 @@ describe('kết nối lại (Story 2.4)', () => {
     // Instagram đi qua cửa sổ Meta (token theo Fanpage nguồn).
     expect(reconnectInput({ id: 'ig-1', platform: 'instagram' }, 'settings')).toEqual({ provider: 'facebook', from: 'settings', pageId: 'ig-1' })
     expect(reconnectInput({ id: 'th-1', platform: 'threads' }, 'pages')).toEqual({ provider: 'threads', from: 'pages', pageId: 'th-1' })
+  })
+})
+
+describe('gỡ trang (Story 2.7)', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('removePageRequest: DELETE /pages/:id (id được escape), 204 → undefined', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => new Response(null, { status: 204 }))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(removePageRequest('pg 1')).resolves.toBeUndefined()
+    const [url, init] = fetchMock.mock.calls[0]!
+    expect(String(url)).toBe('/api/v1/pages/pg%201')
+    expect(init?.method).toBe('DELETE')
+    // Không gửi body.
+    expect(init?.body).toBeUndefined()
+  })
+
+  it('removePageConfirm: modal xác nhận nêu rõ giữ lịch sử + có thể khôi phục; danh từ theo nền tảng', () => {
+    const fb = removePageConfirm({ name: 'Mỹ phẩm Lan Anh', platform: 'facebook' })
+    expect(fb.noun).toBe('trang')
+    expect(fb.title).toBe('Gỡ trang khỏi app?')
+    expect(fb.confirmLabel).toBe('Gỡ trang')
+    expect(fb.body).toContain('Mỹ phẩm Lan Anh')
+    expect(fb.body).toContain('Lịch sử')
+    expect(fb.body).toContain('khôi phục')
+    // Instagram đi cùng khối Facebook → vẫn là "trang".
+    expect(removePageConfirm({ name: 'lananh.beauty', platform: 'instagram' }).noun).toBe('trang')
+    // Threads là "tài khoản", không phải "trang".
+    const th = removePageConfirm({ name: 'shop.threads', platform: 'threads' })
+    expect(th.noun).toBe('tài khoản')
+    expect(th.title).toBe('Gỡ tài khoản khỏi app?')
+    expect(th.confirmLabel).toBe('Gỡ tài khoản')
   })
 })

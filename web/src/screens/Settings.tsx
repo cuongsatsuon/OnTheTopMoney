@@ -1,4 +1,4 @@
-import { Bell, Check, Copy, Eye, EyeOff, KeyRound, Loader2, Plus, RefreshCw, Send, Sparkles, Webhook } from 'lucide-react'
+import { Bell, Check, Copy, Eye, EyeOff, KeyRound, Loader2, Plus, RefreshCw, Send, Sparkles, Trash2, Webhook } from 'lucide-react'
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Content } from '../components/AppShell'
@@ -27,10 +27,12 @@ import {
   needsReconnect,
   providerFromParam,
   reconnectInput,
+  removePageConfirm,
   splitPagesByProvider,
   stripOAuthFragment,
   uiPageOf,
   usePages,
+  useRemovePage,
   useStartConnect,
 } from '../lib/connections'
 import { errorMessage, errorMessageOf } from '../lib/error-messages'
@@ -162,6 +164,23 @@ export default function Settings() {
     if (startConnect.isPending) return
     const input = reconnectInput(page, 'settings')
     startConnect.mutate(input, { onError: (err) => notify(errorMessageOf(err, input.provider)) })
+  }
+  // Gỡ trang (Story 2.7): hành động phá huỷ → xác nhận trước (modal nút đỏ, mẫu như "Gỡ khoá OpenAI"). Server
+  // soft-delete + xoá token; trang biến khỏi bảng + bộ chọn phạm vi (invalidate `['pages']`/`['groups']`). Lịch sử giữ.
+  const removePage = useRemovePage()
+  const [removeTarget, setRemoveTarget] = useState<PageDto | null>(null)
+  const removeCopy = removeTarget ? removePageConfirm(removeTarget) : null
+  const confirmRemove = async () => {
+    if (!removeTarget || removePage.isPending) return
+    try {
+      await removePage.mutateAsync(removeTarget.id)
+    } catch (err) {
+      notify(errorMessageOf(err))
+      return
+    }
+    const noun = removePageConfirm(removeTarget).noun
+    setRemoveTarget(null)
+    notify(`Đã gỡ ${noun} khỏi app`)
   }
   const resultId = searchParams.get(CONNECT_RESULT_PARAM)
   const urlProvider = providerFromParam(searchParams.get(CONNECT_PROVIDER_PARAM))
@@ -742,6 +761,15 @@ export default function Settings() {
                                       Kết nối lại
                                     </Button>
                                   )}
+                                  <Button
+                                    size="sm"
+                                    variant="danger"
+                                    icon={<Trash2 size={14} />}
+                                    disabled={removePage.isPending}
+                                    onClick={() => setRemoveTarget(dto)}
+                                  >
+                                    {removePageConfirm(dto).confirmLabel}
+                                  </Button>
                                 </li>
                               )
                             })}
@@ -826,6 +854,25 @@ export default function Settings() {
         }
       >
         <p className="text-sm">Khoá bị xoá khỏi máy chủ. Mọi tính năng AI dừng ngay cho tới khi bạn thêm khoá mới.</p>
+      </Modal>
+
+      <Modal
+        open={removeTarget !== null}
+        onClose={() => !removePage.isPending && setRemoveTarget(null)}
+        title={removeCopy?.title ?? 'Gỡ trang khỏi app?'}
+        width={440}
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setRemoveTarget(null)} disabled={removePage.isPending}>
+              Huỷ
+            </Button>
+            <Button variant="danger" onClick={() => void confirmRemove()} disabled={removePage.isPending}>
+              {removePage.isPending ? 'Đang gỡ…' : (removeCopy?.confirmLabel ?? 'Gỡ trang')}
+            </Button>
+          </>
+        }
+      >
+        <p className="text-sm">{removeCopy?.body}</p>
       </Modal>
 
       <Modal

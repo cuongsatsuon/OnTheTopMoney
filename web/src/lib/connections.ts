@@ -25,6 +25,8 @@ import { pages as mockPages, type Page } from '../data/mock'
 import { apiFetch } from './api'
 
 export const PAGES_KEY = ['pages'] as const
+/** Gỡ trang đổi cả thành viên nhóm (trang rời bảng nhóm) → vô hiệu hoá luôn cache nhóm. Inline để tránh vòng import với `groups.ts`. */
+const GROUPS_KEY = ['groups'] as const
 export const oauthResultKey = (id: string) => ['connections', 'oauth-result', id] as const
 
 /** Tham số URL mà callback OAuth của server đặt khi chuyển về app. */
@@ -190,6 +192,40 @@ export function useConfirmConnections() {
       apiFetch('/connections/confirm', { method: 'POST', body, schema: ConfirmConnectionsResponse }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: PAGES_KEY })
+    },
+  })
+}
+
+/** Gọi API gỡ một trang (Story 2.7): `DELETE /pages/:id` → 204 (không body). Tách ra để test được request. */
+export function removePageRequest(pageId: string): Promise<void> {
+  return apiFetch(`/pages/${encodeURIComponent(pageId)}`, { method: 'DELETE' })
+}
+
+/**
+ * Nội dung modal xác nhận "Gỡ trang" (hành động phá huỷ → nút đỏ + xác nhận). Nêu rõ trang thôi nhận tin / đăng
+ * bài nhưng LỊCH SỬ vẫn còn, và có thể kết nối lại. Tách thành hàm thuần để kiểm microcopy không cần render.
+ */
+export function removePageConfirm(page: { name: string; platform: Platform }): { noun: string; title: string; body: string; confirmLabel: string } {
+  const noun = page.platform === 'threads' ? 'tài khoản' : 'trang'
+  return {
+    noun,
+    title: `Gỡ ${noun} khỏi app?`,
+    body: `"${page.name}" sẽ thôi nhận tin và đăng bài, và biến khỏi bộ chọn phạm vi. Lịch sử hội thoại, bài và số liệu vẫn được giữ — kết nối lại sau này sẽ khôi phục đúng ${noun} này.`,
+    confirmLabel: `Gỡ ${noun}`,
+  }
+}
+
+/**
+ * Gỡ một trang: server soft-delete + xoá token + phát `page.removed`. Thành công → vô hiệu hoá cache `['pages']`
+ * và `['groups']` để trang biến khỏi bảng trang, bộ chọn phạm vi và danh sách thành viên nhóm (FE vẽ lại từ server).
+ */
+export function useRemovePage() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: removePageRequest,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: PAGES_KEY })
+      void queryClient.invalidateQueries({ queryKey: GROUPS_KEY })
     },
   })
 }

@@ -12,7 +12,7 @@
 import { eq } from 'drizzle-orm'
 import type { SecretCipher } from '../../adapters/crypto/index.ts'
 import type { MetaClient } from '../../adapters/meta/index.ts'
-import type { Db } from '../../platform/db/index.ts'
+import type { Db, DbExecutor } from '../../platform/db/index.ts'
 import type { EventPublisher } from '../../platform/events/index.ts'
 import { getPage, listPages, setConnectionStatus } from '../pages/index.ts'
 import type { ConnectionsLogger } from './deps.ts'
@@ -30,6 +30,8 @@ export const REASON_TOKEN_EXPIRING = 'TOKEN_EXPIRING'
 export const REASON_TOKEN_INVALID = 'TOKEN_INVALID'
 /** Mốc hết hạn đã qua (token coi như hỏng) → `disconnected`. */
 export const REASON_TOKEN_EXPIRED = 'TOKEN_EXPIRED'
+/** Gỡ Fanpage nguồn token (Story 2.7) → IG dùng chung token mất kết nối. */
+export const REASON_TOKEN_SOURCE_REMOVED = 'TOKEN_SOURCE_REMOVED'
 
 export interface TokenCheckDeps {
   db: Db
@@ -76,26 +78,38 @@ export async function markDisconnected(
   pageId: string,
   reason: string = REASON_TOKEN_INVALID,
 ): Promise<string[]> {
-  return deps.db.transaction(async (tx) => {
-    const igRows = await tx
-      .select({ pageId: pageCredentials.pageId })
-      .from(pageCredentials)
-      .where(eq(pageCredentials.tokenSourcePageId, pageId))
-    const targets = [pageId, ...igRows.map((r) => r.pageId)]
-    const changed: string[] = []
-    const done = new Set<string>()
-    for (const id of targets) {
-      if (done.has(id)) continue
-      done.add(id)
-      const page = await getPage(tx, id)
-      if (!page || page.connectionStatus === 'disconnected') continue
-      await setConnectionStatus(tx, id, 'disconnected', reason)
-      await deps.events.publishEvent(tx, 'page.disconnected', { id, pageId: id, reason })
-      changed.push(id)
-    }
-    deps.log?.info({ pageId, reason, changed: changed.length }, 'connections: đánh dấu mất kết nối')
-    return changed
-  })
+  return deps.db.transaction((tx) => markDisconnectedTx(tx, deps, pageId, reason))
+}
+
+/**
+ * Như `markDisconnected` nhưng chạy TRONG transaction của bên gọi (vd gỡ trang — Story 2.7 — cần cùng transaction
+ * với soft-delete). Trang đã gỡ hoặc đã `disconnected` được bỏ qua: nên khi gọi lúc trang nguồn đã soft-delete,
+ * chỉ các trang IG liên kết (`token_source_page_id = pageId`) bị chuyển `disconnected`, không đụng trang đã gỡ.
+ */
+export async function markDisconnectedTx(
+  tx: DbExecutor,
+  deps: Pick<TokenCheckDeps, 'events' | 'log'>,
+  pageId: string,
+  reason: string = REASON_TOKEN_INVALID,
+): Promise<string[]> {
+  const igRows = await tx
+    .select({ pageId: pageCredentials.pageId })
+    .from(pageCredentials)
+    .where(eq(pageCredentials.tokenSourcePageId, pageId))
+  const targets = [pageId, ...igRows.map((r) => r.pageId)]
+  const changed: string[] = []
+  const done = new Set<string>()
+  for (const id of targets) {
+    if (done.has(id)) continue
+    done.add(id)
+    const page = await getPage(tx, id)
+    if (!page || page.connectionStatus === 'disconnected') continue
+    await setConnectionStatus(tx, id, 'disconnected', reason)
+    await deps.events.publishEvent(tx, 'page.disconnected', { id, pageId: id, reason })
+    changed.push(id)
+  }
+  deps.log?.info({ pageId, reason, changed: changed.length }, 'connections: đánh dấu mất kết nối')
+  return changed
 }
 
 /**

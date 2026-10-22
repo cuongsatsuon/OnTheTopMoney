@@ -7,6 +7,7 @@ export {
   listPages,
   resolveScope,
   setConnectionStatus,
+  setRemoved,
   toPageDto,
   upsertFromPlatform,
   type PlatformAccount,
