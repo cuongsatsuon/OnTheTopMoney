@@ -92,6 +92,13 @@
       "when": 1792684797996,
       "tag": "0012_elite_ma_gnuci",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1792687127973,
+      "tag": "0013_page_config_state",
+      "breakpoints": true
     }
   ]
 }

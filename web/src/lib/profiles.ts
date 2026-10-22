@@ -4,11 +4,15 @@
 import {
   BrandProfileDto,
   BrandProfileResponse,
+  EffectiveBrandProfileResponse,
   LOGO_MAX_BYTES,
   LOGO_MIMES,
   type BrandEmojiLevel,
   type ConfigOwnerType,
+  type ConfigSource,
+  type EffectiveBrandProfileResponse as EffectiveBrandProfileResponseT,
   type SaveBrandProfileRequest,
+  type SetUseOwnRequest,
 } from '@ottm/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiFetch, isApiError } from './api'
@@ -132,6 +136,35 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 /** Chủ thật (id là uuid từ API) mới gọi server; id kho mẫu (g-beauty, p1…) dùng mock như cũ. */
 export const isRealOwner = (id: string): boolean => UUID_RE.test(id)
 
+/* ---------- Kế thừa Nhóm→Trang (Story 3.2 + 3.3) — helper thuần ---------- */
+
+/** Mời tạo hồ sơ riêng khi `resolveEffective` trả CONFIG_MISSING (trang không nhóm & không hồ sơ). */
+export const CONFIG_MISSING_INVITE = 'Trang này chưa có hồ sơ thương hiệu. Tạo hồ sơ riêng cho trang để AI viết đúng giọng.'
+
+/** Nhãn kế thừa dưới ô (Component "Nhãn kế thừa"): nguồn hồ sơ đang dùng của trang. */
+export function inheritanceLabel(source: ConfigSource): string {
+  return source.ownerType === 'group' ? `Đang dùng hồ sơ của ${source.name}` : 'Đang dùng hồ sơ riêng của trang'
+}
+
+/** CONFIG_MISSING = `effective` null (trang không nhóm & không hồ sơ). */
+export function isConfigMissing(res: EffectiveBrandProfileResponseT): boolean {
+  return res.effective === null
+}
+
+/** Trang đang theo nhóm (không dùng hồ sơ riêng) khi có hồ sơ hiệu lực và nguồn là nhóm. */
+export function isInheritingFromGroup(res: EffectiveBrandProfileResponseT): boolean {
+  return res.effective !== null && res.effective.source.ownerType === 'group'
+}
+
+/**
+ * Tắt "Dùng hồ sơ riêng" cần xác nhận trước (xoá hồ sơ riêng, không hoàn tác); bật thì không. (F1 Thất bại.)
+ * Dùng cho công tắc: chỉ khi `next=false` mới mở hộp thoại hỏi lại.
+ */
+export const confirmBeforeToggle = (next: boolean): boolean => next === false
+
+/** Body `PUT …/use-own` — chỉ gọi khi bấm Lưu (bật/tắt công tắc chưa Lưu không đụng server). */
+export const toUseOwnRequest = (useOwn: boolean): SetUseOwnRequest => ({ useOwn })
+
 /** File → base64 (không tiền tố data:) để gửi trong JSON. */
 export async function fileToBase64(file: File): Promise<string> {
   const bytes = new Uint8Array(await file.arrayBuffer())
@@ -180,5 +213,32 @@ export function useClearBrandLogo(owner: BrandOwner) {
   return useMutation({
     mutationFn: () => apiFetch(`${pathOf(owner)}/logo`, { method: 'DELETE', schema: BrandProfileDto }),
     onSuccess: (profile) => qc.setQueryData(brandProfileKey(owner), { profile }),
+  })
+}
+
+/* ---------- Hook kế thừa (Story 3.2) ---------- */
+
+export const effectiveBrandKey = (pageId: string) => ['brand-profile', 'effective', pageId] as const
+const effectivePath = (pageId: string) => `/brand-profiles/effective/page/${pageId}`
+
+/** Hồ sơ hiệu lực của một trang (đã giải kế thừa). `effective=null` → CONFIG_MISSING (mời tạo hồ sơ riêng). */
+export function useEffectiveBrandProfile(pageId: string, options: { enabled?: boolean } = {}) {
+  return useQuery({
+    queryKey: effectiveBrandKey(pageId),
+    queryFn: ({ signal }) => apiFetch(effectivePath(pageId), { schema: EffectiveBrandProfileResponse, signal }),
+    enabled: options.enabled ?? true,
+  })
+}
+
+/** Bật/tắt "Dùng hồ sơ riêng" (áp khi Lưu). Làm mới cả hồ sơ hiệu lực lẫn hồ sơ riêng của trang. */
+export function useSetBrandUseOwn(pageId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (useOwn: boolean) =>
+      apiFetch(`/brand-profiles/use-own/page/${pageId}`, { method: 'PUT', body: toUseOwnRequest(useOwn), schema: EffectiveBrandProfileResponse }),
+    onSuccess: (res) => {
+      qc.setQueryData(effectiveBrandKey(pageId), res)
+      void qc.invalidateQueries({ queryKey: brandProfileKey({ ownerType: 'page', ownerId: pageId }) })
+    },
   })
 }

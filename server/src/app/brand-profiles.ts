@@ -5,9 +5,12 @@
 import {
   LOGO_MAX_BYTES,
   SaveBrandProfileRequest,
+  SetUseOwnRequest,
   UploadBrandLogoRequest,
   type BrandProfileDto,
   type BrandProfileResponse,
+  type EffectiveBrandProfile,
+  type EffectiveBrandProfileResponse,
 } from '@ottm/shared'
 import { ConfigOwnerType } from '@ottm/shared'
 import type { FastifyInstance } from 'fastify'
@@ -17,7 +20,9 @@ import type { MediaErrorKind } from '../adapters/media/index.ts'
 import {
   clearLogo,
   getProfile,
+  resolveEffective,
   setLogo,
+  setUseOwn,
   upsertProfile,
   validateLogoBytes,
   type ProfileOwner,
@@ -26,6 +31,17 @@ import type { Db } from '../platform/db/index.ts'
 import { AppError } from '../platform/errors/index.ts'
 
 const OwnerParams = z.object({ ownerType: ConfigOwnerType, ownerId: z.uuid() })
+const PageIdParams = z.object({ id: z.uuid() })
+
+/** `resolveEffective` ném `CONFIG_MISSING` khi trang không nhóm & không hồ sơ → route trả `{effective:null}`. */
+async function effectiveOrNull(db: Db, pageId: string): Promise<EffectiveBrandProfile | null> {
+  try {
+    return await resolveEffective<BrandProfileDto>(db, pageId, 'brand')
+  } catch (err) {
+    if (err instanceof AppError && err.code === 'CONFIG_MISSING') return null
+    throw err
+  }
+}
 
 /** base64 của 2 MB (+ JSON) ~ 2.8 MB; bodyLimit mặc định của Fastify là 1 MB → nâng riêng cho route logo. */
 const LOGO_BODY_LIMIT = Math.ceil((LOGO_MAX_BYTES * 4) / 3) + 64 * 1024
@@ -91,5 +107,19 @@ export function registerBrandProfiles(app: FastifyInstance, deps: BrandProfilesD
   app.delete('/api/v1/brand-profiles/:ownerType/:ownerId/logo', async (req): Promise<BrandProfileDto> => {
     const owner: ProfileOwner = OwnerParams.parse(req.params)
     return clearLogo(db, owner)
+  })
+
+  // Hồ sơ hiệu lực của trang (đã giải kế thừa Nhóm→Trang, Story 3.2). `null` = CONFIG_MISSING (FE mời tạo riêng).
+  app.get('/api/v1/brand-profiles/effective/page/:id', async (req): Promise<EffectiveBrandProfileResponse> => {
+    const { id } = PageIdParams.parse(req.params)
+    return { effective: await effectiveOrNull(db, id) }
+  })
+
+  // Bật/tắt "Dùng hồ sơ riêng" (áp khi Lưu). Thay đổi trạng thái trong MỘT transaction (AD-3), rồi trả hiệu lực mới.
+  app.put('/api/v1/brand-profiles/use-own/page/:id', async (req): Promise<EffectiveBrandProfileResponse> => {
+    const { id } = PageIdParams.parse(req.params)
+    const { useOwn } = SetUseOwnRequest.parse(req.body ?? {})
+    await db.transaction((tx) => setUseOwn(tx, id, 'brand', useOwn))
+    return { effective: await effectiveOrNull(db, id) }
   })
 }

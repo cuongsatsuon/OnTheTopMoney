@@ -1,52 +1,19 @@
 // Nghiệp vụ hồ sơ thương hiệu (Story 3.1). Ranh giới AD-1: `profiles` gọi `pages` (kiểm owner tồn tại) và
 // `adapters/media` (lưu logo công khai) — xem `index.ts`. Một hồ sơ mỗi `(ownerType, ownerId)` (upsert).
-import type { BrandProfileDto, ConfigOwnerType, LogoMime, ParsedBrandProfile } from '@ottm/shared'
-import { BrandProduct, LOGO_MAX_BYTES } from '@ottm/shared'
-import { and, eq, sql } from 'drizzle-orm'
-import { z } from 'zod'
-import type { DbExecutor } from '../../platform/db/index.ts'
+// Kế thừa Nhóm→Trang (Story 3.2/3.3) giải ở `inheritance.ts`; upsert hồ sơ NHÓM chạy `onGroupProfileSaved`
+// (trong CÙNG transaction, AD-3) để các trang đang chờ nhóm chuyển về "Theo nhóm".
+import type { LogoMime, ParsedBrandProfile } from '@ottm/shared'
+import { LOGO_MAX_BYTES } from '@ottm/shared'
+import type { BrandProfileDto } from '@ottm/shared'
+import { sql } from 'drizzle-orm'
+import type { Db, DbExecutor } from '../../platform/db/index.ts'
 import { AppError } from '../../platform/errors/index.ts'
 import { getGroup, getPage } from '../pages/index.ts'
+import { onGroupProfileSaved } from './inheritance.ts'
+import { brandInsertValues, brandOwnerWhere as ownerWhere, toBrandDto as toDto, type ProfileOwner } from './row.ts'
 import { brandProfiles } from './schema.ts'
 
-export interface ProfileOwner {
-  ownerType: ConfigOwnerType
-  ownerId: string
-}
-
-type Row = typeof brandProfiles.$inferSelect
-
-const StoredProducts = z.array(BrandProduct)
-
-/** Sản phẩm thực sự có dữ liệu (bỏ `{name:'', price:''}`) — đối xứng với client. */
-const nonEmptyProducts = (products: ParsedBrandProfile['products']) => products.filter((p) => p.name !== '' || p.price !== '')
-
-function toDto(row: Row): BrandProfileDto {
-  return {
-    ownerType: row.ownerType as ConfigOwnerType,
-    ownerId: row.ownerId,
-    name: row.name,
-    slogan: row.slogan,
-    industry: row.industry,
-    tones: row.tones,
-    formality: row.formality,
-    pronoun: row.pronoun,
-    emoji: row.emoji as BrandProfileDto['emoji'],
-    // Parse jsonb bằng zod: cột hỏng → lỗi server rõ (không rơi dữ liệu sai xuống FE).
-    products: StoredProducts.parse(row.products),
-    audience: row.audience,
-    colors: row.colors,
-    hashtags: row.hashtags,
-    bannedWords: row.bannedWords,
-    allowedDomains: row.allowedDomains,
-    logoPath: row.logoPath,
-    createdAt: row.createdAt.toISOString(),
-    updatedAt: row.updatedAt.toISOString(),
-  }
-}
-
-const ownerWhere = (owner: ProfileOwner) =>
-  and(eq(brandProfiles.ownerType, owner.ownerType), eq(brandProfiles.ownerId, owner.ownerId))
+export type { ProfileOwner } from './row.ts'
 
 /**
  * Owner (nhóm/trang) phải tồn tại và chưa gỡ, nếu không 404. Dùng `pages.getGroup` / `pages.getPage` (AD-1:
@@ -66,30 +33,10 @@ export async function getProfile(db: DbExecutor, owner: ProfileOwner): Promise<B
   return row ? toDto(row) : null
 }
 
-/**
- * Tạo/cập nhật hồ sơ theo `(owner_type, owner_id)`. Owner phải tồn tại (404). KHÔNG đụng `logo_path` (logo quản lý
- * riêng qua `setLogo`/`clearLogo`) — upsert phần chữ không xoá logo đã có.
- */
-export async function upsertProfile(db: DbExecutor, owner: ProfileOwner, input: ParsedBrandProfile): Promise<BrandProfileDto> {
-  await assertOwnerExists(db, owner)
-  const values = {
-    ownerType: owner.ownerType,
-    ownerId: owner.ownerId,
-    name: input.name,
-    slogan: input.slogan,
-    industry: input.industry,
-    tones: input.tones,
-    formality: input.formality,
-    pronoun: input.pronoun,
-    emoji: input.emoji,
-    products: nonEmptyProducts(input.products),
-    audience: input.audience,
-    colors: input.colors,
-    hashtags: input.hashtags,
-    bannedWords: input.bannedWords,
-    allowedDomains: input.allowedDomains,
-  }
-  const [row] = await db
+async function upsertBrandRow(tx: DbExecutor, owner: ProfileOwner, input: ParsedBrandProfile): Promise<BrandProfileDto> {
+  await assertOwnerExists(tx, owner)
+  const values = brandInsertValues(owner, input)
+  const [row] = await tx
     .insert(brandProfiles)
     .values(values)
     .onConflictDoUpdate({
@@ -98,6 +45,23 @@ export async function upsertProfile(db: DbExecutor, owner: ProfileOwner, input: 
     })
     .returning()
   return toDto(row!)
+}
+
+/**
+ * Tạo/cập nhật hồ sơ theo `(owner_type, owner_id)`. Owner phải tồn tại (404). KHÔNG đụng `logo_path` (logo quản lý
+ * riêng qua `setLogo`/`clearLogo`) — upsert phần chữ không xoá logo đã có.
+ * Hồ sơ NHÓM: sau khi lưu, trong CÙNG transaction chạy `onGroupProfileSaved` (Story 3.3) — các trang đang chờ
+ * nhóm (`awaiting_group_default`) chuyển về "Theo nhóm".
+ */
+export async function upsertProfile(db: Db, owner: ProfileOwner, input: ParsedBrandProfile): Promise<BrandProfileDto> {
+  if (owner.ownerType === 'group') {
+    return db.transaction(async (tx) => {
+      const dto = await upsertBrandRow(tx, owner, input)
+      await onGroupProfileSaved(tx, owner.ownerId, 'brand')
+      return dto
+    })
+  }
+  return upsertBrandRow(db, owner, input)
 }
 
 /**

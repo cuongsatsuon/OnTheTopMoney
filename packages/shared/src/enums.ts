@@ -162,6 +162,12 @@ export const CONFIG_OWNER_TYPES = ['group', 'page'] as const
 export const ConfigOwnerType = z.enum(CONFIG_OWNER_TYPES)
 export type ConfigOwnerType = z.infer<typeof ConfigOwnerType>
 
+// AD-8: loại cấu hình kế thừa Nhóm→Trang. `brand` đăng ký ở Story 3.2/3.3; `autoreply` (cấu hình AI) ở Epic 5.
+// Dùng chung một luật kế thừa (`profiles.resolveEffective`) và một xử lý đổi nhóm (consumer `events.profiles`).
+export const CONFIG_KINDS = ['brand'] as const
+export const ConfigKind = z.enum(CONFIG_KINDS)
+export type ConfigKind = z.infer<typeof ConfigKind>
+
 export const DELETION_SCOPES = ['page', 'contact', 'all'] as const
 export const DeletionScope = z.enum(DELETION_SCOPES)
 export type DeletionScope = z.infer<typeof DeletionScope>

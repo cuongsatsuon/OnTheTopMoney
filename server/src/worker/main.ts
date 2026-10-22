@@ -8,6 +8,7 @@ import { createSecretCipher } from '../adapters/crypto/index.ts'
 import { gcReservations, handleAiEvent } from '../modules/ai/index.ts'
 import { cleanupExpiredOAuth, createMetaClients, runTokenCheck } from '../modules/connections/index.ts'
 import { handleEvent } from '../modules/notifications/index.ts'
+import { handleProfilesEvent } from '../modules/profiles/index.ts'
 import { HEARTBEAT_INTERVAL_MS, writeHeartbeat } from './heartbeat.ts'
 
 const config = getConfig()
@@ -60,6 +61,12 @@ try {
       'events.ai': async (job) => {
         const result = await handleAiEvent({ db: dbHandle.db, events }, job.data)
         logger.debug({ jobId: job.id, result }, 'events.ai')
+      },
+      'events.profiles': async (job) => {
+        // Giống `events.ai`/`events.notifications`: `handleProfilesEvent` tự kiểm (isEventEnvelope + guard),
+        // dữ liệu hỏng → 'ignored' (không ném ZodError đốt lượt retry). Idempotent nên retry an toàn.
+        const result = await handleProfilesEvent({ db: dbHandle.db }, job.data)
+        logger.debug({ jobId: job.id, result }, 'events.profiles')
       },
       'ai.reservations_gc': async () => {
         const removed = await gcReservations(dbHandle.db)

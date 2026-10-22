@@ -47,6 +47,7 @@ export interface QueuePayloads {
   'platform.heartbeat': Record<string, never>
   'events.notifications': EventEnvelope
   'events.ai': EventEnvelope
+  'events.profiles': EventEnvelope
   'ai.reservations_gc': Record<string, never>
   'connections.oauth_gc': Record<string, never>
   'connections.token_check': Record<string, never>
@@ -85,6 +86,18 @@ export const QUEUES = {
     expireInSeconds: 60,
     pollingIntervalSeconds: 0.5,
     subscribes: ['settings.updated'],
+  },
+  // Module `profiles` (Story 3.3, AD-8): nghe đổi thành viên nhóm → giữ cấu hình kế thừa (brand nay; AI ở Epic 5).
+  // Idempotent (dựa trên "trang đã có cấu hình riêng chưa") nên retry an toàn. Hỏi job 0,5 giây để UI cập nhật nhanh.
+  'events.profiles': {
+    policy: 'standard',
+    retryLimit: 3,
+    retryDelay: 2,
+    retryBackoff: true,
+    concurrency: 1,
+    expireInSeconds: 60,
+    pollingIntervalSeconds: 0.5,
+    subscribes: ['page.group_changed', 'group.deleted'],
   },
   // Dọn chỗ giữ chi phí AI bị bỏ rơi (tiến trình chết giữa lời gọi) cũ hơn 15 phút, mỗi 5 phút.
   'ai.reservations_gc': {

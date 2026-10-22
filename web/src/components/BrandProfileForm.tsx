@@ -5,7 +5,9 @@ import { AiLockHint } from './AiLockHint'
 import { brandProfile, groupById, pages, pagesInGroup, type Page } from '../data/mock'
 import { useApp } from '../lib/app-context'
 import { errorMessageOf } from '../lib/error-messages'
+import { useGroups } from '../lib/groups'
 import {
+  CONFIG_MISSING_INVITE,
   EMOJIS,
   INDUSTRIES,
   PRONOUNS,
@@ -19,7 +21,9 @@ import {
   toSaveRequest,
   useBrandProfile,
   useClearBrandLogo,
+  useEffectiveBrandProfile,
   useSaveBrandProfile,
+  useSetBrandUseOwn,
   useUploadBrandLogo,
   type BrandForm,
   type EmojiLabel,
@@ -209,7 +213,33 @@ function BrandProfileFormInner({ target }: { target: Target }) {
   const { notify } = useApp()
   const page = target.kind === 'page' ? pages.find((p) => p.id === target.id) : undefined
   const group = target.kind === 'group' ? groupById(target.id) : groupById(page?.groupId ?? null)
-  const inheritable = target.kind === 'page' && !!group
+
+  // Chủ thật (id uuid) nối API thật; id kho mẫu dùng mock như cũ (giữ UX demo + các epic khác còn mock).
+  const real = isRealOwner(target.id)
+  // Đồng bộ nhóm thật vào kho mẫu để `groupById`/nhãn kế thừa có tên nhóm kể cả khi vào PageDetail trực tiếp.
+  useGroups({ enabled: real })
+  const realPage = real && target.kind === 'page'
+  // Trang thuộc nhóm nào do server sở hữu (đã mirror vào kho mẫu) → dùng `page.groupId` để biết có nhóm hay không.
+  const hasGroup = realPage ? !!page?.groupId : target.kind === 'page' && !!group
+  const inheritable = hasGroup
+
+  const owner = { ownerType: target.kind, ownerId: target.id } as const
+  const fallbackName = target.kind === 'group' ? (group?.name.replace(/^Nhóm\s+/, '') ?? '') : (page?.name ?? '')
+  const profileQuery = useBrandProfile(owner, { enabled: real })
+  // Trang thật: hồ sơ HIỆU LỰC (đã giải kế thừa ở server) — nguồn sự thật cho nhãn kế thừa + CONFIG_MISSING.
+  const effectiveQuery = useEffectiveBrandProfile(target.id, { enabled: realPage })
+  const saveM = useSaveBrandProfile(owner)
+  const uploadM = useUploadBrandLogo(owner)
+  const clearM = useClearBrandLogo(owner)
+  const setUseOwnM = useSetBrandUseOwn(target.id)
+
+  const effective = effectiveQuery.data?.effective ?? null
+  const effectiveLoaded = realPage && effectiveQuery.data !== undefined
+  const serverUsingOwn = !!effective && effective.source.ownerType === 'page'
+  const serverConfigMissing = effectiveLoaded && effective === null
+  // Tên/liên kết nhóm: ưu tiên nguồn nhóm từ server (effective.source), else kho mẫu đã mirror.
+  const groupName = realPage ? (effective?.source.ownerType === 'group' ? effective.source.name : (group?.name ?? null)) : (group?.name ?? null)
+  const groupId = realPage ? (effective?.source.ownerType === 'group' ? effective.source.ownerId : (page?.groupId ?? group?.id ?? null)) : (group?.id ?? null)
 
   const [own, setOwn] = useState(() => !inheritable || page?.brandSource === 'own')
   const [savedValue, setSavedValue] = useState<BrandData>(() => loadProfile(target))
@@ -218,22 +248,16 @@ function BrandProfileFormInner({ target }: { target: Target }) {
   const [active, setActive] = useState<string>(SECTIONS[0].id)
   const groupValue = group ? loadProfile({ kind: 'group', id: group.id }) : null
 
-  // Chủ thật (id uuid) nối API thật; id kho mẫu dùng mock như cũ (giữ UX demo + các epic khác còn mock).
-  const real = isRealOwner(target.id)
-  const owner = { ownerType: target.kind, ownerId: target.id } as const
-  const fallbackName = target.kind === 'group' ? (group?.name.replace(/^Nhóm\s+/, '') ?? '') : (page?.name ?? '')
-  const profileQuery = useBrandProfile(owner, { enabled: real })
-  const saveM = useSaveBrandProfile(owner)
-  const uploadM = useUploadBrandLogo(owner)
-  const clearM = useClearBrandLogo(owner)
   const [nameError, setNameError] = useState<string | null>(null)
   const [logoFile, setLogoFile] = useState<File | null>(null)
   // id chủ đã nạp dữ liệu server (reseed khi owner đổi trên cùng instance, không chỉ khi remount theo key).
   const loadedForRef = useRef<string | null>(null)
+  // Đã đồng bộ công tắc theo hiệu lực server chưa (một lần sau khi effective tải xong).
+  const effectiveSyncedRef = useRef(false)
   // object URL xem trước đang giữ (để revoke khi thay ảnh / unmount, tránh rò bộ nhớ).
   const objectUrlRef = useRef<string | null>(null)
 
-  // Chủ thật: nạp hồ sơ từ server khi vào hoặc khi đổi owner (form chưa đụng); các lần sau giữ chỉnh sửa của người dùng.
+  // Chủ thật: nạp hồ sơ RIÊNG từ server khi vào hoặc khi đổi owner (form chưa đụng); các lần sau giữ chỉnh sửa.
   useEffect(() => {
     if (!real || profileQuery.data === undefined || loadedForRef.current === target.id) return
     loadedForRef.current = target.id
@@ -242,9 +266,20 @@ function BrandProfileFormInner({ target }: { target: Target }) {
     setForm(next)
   }, [real, profileQuery.data, fallbackName, target.id])
 
+  // Trang thật: đồng bộ công tắc "Dùng hồ sơ riêng" theo hiệu lực server (một lần). CONFIG_MISSING → bật để tạo riêng.
+  useEffect(() => {
+    if (!realPage || !effectiveLoaded || effectiveSyncedRef.current) return
+    effectiveSyncedRef.current = true
+    setOwn(serverConfigMissing ? true : serverUsingOwn)
+  }, [realPage, effectiveLoaded, serverConfigMissing, serverUsingOwn])
+
   const editable = !inheritable || own
-  const data = editable ? form : groupValue!
-  const dirty = editable && (JSON.stringify(form) !== JSON.stringify(savedValue) || !!logoFile)
+  // Theo nhóm (trang thật): hiển thị hồ sơ nhóm từ server (effective.config). Pending tắt công tắc chưa có config nhóm → giữ form.
+  const groupConfigData = realPage && effective?.source.ownerType === 'group' ? brandDataOf(effective.config, groupName ?? fallbackName) : null
+  const data = editable ? form : realPage ? (groupConfigData ?? form) : groupValue!
+  // Công tắc đã đổi so với server (trang thuộc nhóm) → có thay đổi chưa lưu dù form không sửa.
+  const toggleChanged = realPage && hasGroup && effectiveLoaded && !serverConfigMissing && own !== serverUsingOwn
+  const dirty = toggleChanged || (editable && (JSON.stringify(form) !== JSON.stringify(savedValue) || !!logoFile))
   const set = <K extends keyof BrandData>(k: K, v: BrandData[K]) => setForm((f) => ({ ...f, [k]: v }))
 
   /** Đặt ảnh xem trước; revoke object URL cũ (nếu có) trước khi giữ cái mới. */
@@ -295,6 +330,16 @@ function BrandProfileFormInner({ target }: { target: Target }) {
   }
 
   const toggleOwn = (v: boolean) => {
+    if (realPage) {
+      // Chỉ đổi state công tắc; áp (sao chép/xoá ở server) khi bấm Lưu. Tắt → hỏi lại.
+      if (v) {
+        // Bật: điểm xuất phát = hồ sơ nhóm hiện hành (nếu đang theo nhóm).
+        if (effective?.source.ownerType === 'group') setForm(brandDataOf(effective.config, fallbackName))
+        setOwn(true)
+      } else setConfirmOff(true)
+      return
+    }
+    // --- Kho mẫu (như cũ) ---
     if (v) {
       const start = clone(groupValue ?? form)
       setForm(start)
@@ -307,6 +352,13 @@ function BrandProfileFormInner({ target }: { target: Target }) {
   }
 
   const backToGroup = () => {
+    if (realPage) {
+      // Chỉ đặt công tắc off (pending); xoá hồ sơ riêng thật khi bấm Lưu.
+      setOwn(false)
+      setConfirmOff(false)
+      return
+    }
+    // --- Kho mẫu (như cũ) ---
     setOwn(false)
     setConfirmOff(false)
     if (page) page.brandSource = 'group'
@@ -314,9 +366,75 @@ function BrandProfileFormInner({ target }: { target: Target }) {
     notify(`Trang này giờ dùng hồ sơ của ${group?.name}`)
   }
 
-  const saving = saveM.isPending || uploadM.isPending || clearM.isPending
+  const saving = saveM.isPending || uploadM.isPending || clearM.isPending || setUseOwnM.isPending
+
+  /** Lưu phần chữ + logo cho trang/nhóm thật; trả về khi xong. Toast lỗi logo không chồng toast thành công. */
+  const saveTextAndLogo = async (): Promise<void> => {
+    let profile = await saveM.mutateAsync(toSaveRequest(form))
+    let logoError: string | null = null
+    if (logoFile) {
+      try {
+        profile = await uploadM.mutateAsync(logoFile)
+      } catch (err) {
+        logoError = errorMessageOf(err)
+      }
+      setLogoFile(null)
+    } else if (form.logo === null && savedValue.logo !== null) {
+      try {
+        profile = await clearM.mutateAsync()
+      } catch (err) {
+        logoError = errorMessageOf(err)
+      }
+    }
+    if (objectUrlRef.current) {
+      URL.revokeObjectURL(objectUrlRef.current)
+      objectUrlRef.current = null
+    }
+    const next = brandDataOf(profile, fallbackName)
+    setSavedValue(next)
+    setForm(next)
+    notify(logoError ? `Đã lưu hồ sơ, chưa tải được logo. ${logoError}` : 'Đã lưu hồ sơ thương hiệu')
+  }
 
   const save = () => {
+    // Trang thật: áp công tắc "Dùng hồ sơ riêng" (nếu đổi) rồi lưu phần chữ — tất cả khi bấm Lưu (AD-8).
+    if (realPage) {
+      const willOwn = own
+      if (willOwn) {
+        const nErr = brandNameError(form.name)
+        if (nErr) {
+          setNameError(nErr)
+          goTo('co-ban')
+          return
+        }
+      }
+      setNameError(null)
+      void (async () => {
+        try {
+          const wasOwn = serverUsingOwn
+          // Công tắc chỉ có nghĩa khi trang thuộc nhóm; trang không nhóm luôn dùng riêng (không gọi use-own).
+          if (hasGroup && willOwn && !wasOwn) {
+            await setUseOwnM.mutateAsync(true) // server sao chép hồ sơ nhóm → trang làm điểm xuất phát
+          } else if (hasGroup && !willOwn && wasOwn) {
+            await setUseOwnM.mutateAsync(false) // xoá hồ sơ riêng, trang quay về hồ sơ nhóm
+            await effectiveQuery.refetch()
+            notify(groupName ? `Trang này giờ dùng hồ sơ của ${groupName}` : 'Trang này giờ dùng hồ sơ nhóm')
+            return
+          }
+          if (willOwn) await saveTextAndLogo()
+          await effectiveQuery.refetch()
+        } catch (err) {
+          const fe = fieldErrorsOf(err)
+          if (fe.name) {
+            setNameError(fe.name)
+            goTo('co-ban')
+          }
+          notify(errorMessageOf(err))
+        }
+      })()
+      return
+    }
+
     const nErr = brandNameError(form.name)
     if (nErr) {
       setNameError(nErr)
@@ -334,34 +452,10 @@ function BrandProfileFormInner({ target }: { target: Target }) {
       } else notify('Đã lưu hồ sơ thương hiệu')
       return
     }
+    // Nhóm thật (chủ trực tiếp, không kế thừa): lưu phần chữ + logo.
     void (async () => {
       try {
-        // Lưu phần chữ trước → dù logo lỗi (vd chưa cấu hình Cloudinary) thì chữ vẫn được lưu.
-        let profile = await saveM.mutateAsync(toSaveRequest(form))
-        let logoError: string | null = null
-        if (logoFile) {
-          try {
-            profile = await uploadM.mutateAsync(logoFile)
-          } catch (err) {
-            logoError = errorMessageOf(err)
-          }
-          setLogoFile(null)
-        } else if (form.logo === null && savedValue.logo !== null) {
-          try {
-            profile = await clearM.mutateAsync()
-          } catch (err) {
-            logoError = errorMessageOf(err)
-          }
-        }
-        if (objectUrlRef.current) {
-          URL.revokeObjectURL(objectUrlRef.current)
-          objectUrlRef.current = null
-        }
-        const next = brandDataOf(profile, fallbackName)
-        setSavedValue(next)
-        setForm(next)
-        // Logo hỏng: MỘT toast rõ rằng chữ đã lưu, logo chưa tải được (không chồng toast thành công lên toast lỗi).
-        notify(logoError ? `Đã lưu hồ sơ, chưa tải được logo. ${logoError}` : 'Đã lưu hồ sơ thương hiệu')
+        await saveTextAndLogo()
       } catch (err) {
         const fe = fieldErrorsOf(err)
         if (fe.name) {
@@ -377,12 +471,16 @@ function BrandProfileFormInner({ target }: { target: Target }) {
     setForm(clone(savedValue))
     setLogoFile(null)
     setNameError(null)
+    if (realPage && effectiveLoaded && !serverConfigMissing) setOwn(serverUsingOwn)
     notify('Đã huỷ thay đổi chưa lưu')
   }
 
   return (
     <div ref={rootRef}>
-      {target.kind === 'page' && <InheritanceBar groupName={group?.name ?? null} own={own} onToggle={toggleOwn} what="hồ sơ thương hiệu" />}
+      {target.kind === 'page' && <InheritanceBar groupName={groupName} own={own} onToggle={toggleOwn} what="hồ sơ thương hiệu" />}
+      {realPage && serverConfigMissing && (
+        <div className="mb-5 rounded-md border border-primary/30 bg-primary-soft/50 px-4 py-3 text-sm text-foreground">{CONFIG_MISSING_INVITE}</div>
+      )}
       {target.kind === 'group' && group && (
         <div className="mb-5 rounded-md border border-border bg-slate-50 px-4 py-3 text-sm text-muted-foreground">
           Hồ sơ này là mặc định cho {pagesInGroup(group.id).length} trang trong <b className="text-foreground">{group.name}</b>. Trang nào bật “Dùng hồ sơ riêng” sẽ không bị ảnh hưởng.
@@ -411,8 +509,8 @@ function BrandProfileFormInner({ target }: { target: Target }) {
         <Card className="min-w-0">
           {!editable && (
             <div className="border-b border-border bg-slate-50 px-5 py-3 text-[13px] text-muted-foreground">
-              Đang hiển thị hồ sơ của {group?.name} (chỉ xem). Bật “Dùng hồ sơ thương hiệu riêng” để sửa riêng cho trang này, hoặc{' '}
-              <Link to={`/trang-nhom/nhom/${group?.id}`} className="font-medium text-primary hover:underline">
+              Đang hiển thị hồ sơ của {groupName} (chỉ xem). Bật “Dùng hồ sơ thương hiệu riêng” để sửa riêng cho trang này, hoặc{' '}
+              <Link to={`/trang-nhom/nhom/${groupId}`} className="font-medium text-primary hover:underline">
                 sửa hồ sơ nhóm
               </Link>
               .
@@ -652,7 +750,7 @@ function BrandProfileFormInner({ target }: { target: Target }) {
 
       {/* Footer cố định */}
       <div className="sticky bottom-0 z-10 -mx-6 mt-6 flex items-center justify-end gap-3 border-t border-border bg-surface/95 px-6 py-3 backdrop-blur">
-        {editable ? (
+        {editable || toggleChanged ? (
           <>
             <span className="mr-auto text-[13px] text-muted-foreground">{dirty ? '● Có thay đổi chưa lưu' : 'Đã lưu mọi thay đổi'}</span>
             <Button onClick={cancel} disabled={!dirty || saving}>
@@ -666,7 +764,7 @@ function BrandProfileFormInner({ target }: { target: Target }) {
           <>
             <span className="mr-auto text-[13px] text-muted-foreground">Trang này đang theo hồ sơ nhóm, không cần lưu.</span>
             <Link
-              to={`/trang-nhom/nhom/${group?.id}`}
+              to={`/trang-nhom/nhom/${groupId}`}
               className="inline-flex h-9 items-center rounded-md border border-border bg-surface px-4 text-sm font-medium hover:bg-slate-50"
             >
               Mở hồ sơ nhóm
@@ -690,7 +788,7 @@ function BrandProfileFormInner({ target }: { target: Target }) {
         }
       >
         <p className="text-sm">
-          Hồ sơ riêng của trang này sẽ bị xoá. Trang sẽ dùng lại hồ sơ của <b>{group?.name}</b>. Không thể hoàn tác.
+          Hồ sơ riêng của trang này sẽ bị xoá. Trang sẽ dùng lại hồ sơ của <b>{groupName}</b>. Không thể hoàn tác.
         </p>
       </Modal>
     </div>

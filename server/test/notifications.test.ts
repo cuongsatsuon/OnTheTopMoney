@@ -346,6 +346,7 @@ describe('worker thật: publish → events.notifications → thông báo; job h
       {
         'platform.heartbeat': async () => {},
         'events.ai': async () => {},
+        'events.profiles': async () => {},
         'ai.reservations_gc': async () => {},
         'connections.oauth_gc': async () => {},
         'connections.token_check': async () => {},

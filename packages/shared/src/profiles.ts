@@ -114,3 +114,43 @@ export type BrandProfileDto = z.infer<typeof BrandProfileDto>
 /** `GET …` — hồ sơ hoặc `null` (owner chưa có hồ sơ → FE form trống). */
 export const BrandProfileResponse = z.object({ profile: BrandProfileDto.nullable() })
 export type BrandProfileResponse = z.infer<typeof BrandProfileResponse>
+
+/* ---------- Kế thừa Nhóm→Trang (Story 3.2 + 3.3, AD-8) ---------- */
+
+/**
+ * Chủ cấu hình mà `resolveEffective` chọn: nhóm (trang đang theo nhóm) hoặc chính trang (dùng hồ sơ riêng).
+ * `name` để FE hiện nhãn kế thừa "Đang dùng hồ sơ của Nhóm …".
+ */
+export const ConfigSource = z.object({
+  ownerType: ConfigOwnerType,
+  ownerId: z.uuid(),
+  name: z.string(),
+})
+export type ConfigSource = z.infer<typeof ConfigSource>
+
+/** Cấu hình hiệu lực của một trang cho một loại cấu hình: `{config, source}`. Generic để Epic 5 (AI) dùng lại. */
+export interface EffectiveConfig<T> {
+  config: T
+  source: ConfigSource
+}
+
+/** Hồ sơ thương hiệu hiệu lực của một trang (đã giải kế thừa). */
+export const EffectiveBrandProfile = z.object({
+  config: BrandProfileDto,
+  source: ConfigSource,
+})
+export type EffectiveBrandProfile = z.infer<typeof EffectiveBrandProfile>
+
+/**
+ * `GET …/effective/page/:id` — hồ sơ hiệu lực của trang, hoặc `null` khi `resolveEffective` trả `CONFIG_MISSING`
+ * (trang không nhóm & không hồ sơ) → FE mời tạo hồ sơ riêng cho trang.
+ */
+export const EffectiveBrandProfileResponse = z.object({ effective: EffectiveBrandProfile.nullable() })
+export type EffectiveBrandProfileResponse = z.infer<typeof EffectiveBrandProfileResponse>
+
+/**
+ * Body `PUT …/use-own/page/:id` — bật/tắt "Dùng hồ sơ riêng" (chỉ áp khi Lưu). `true`: sao chép hồ sơ nhóm làm
+ * điểm xuất phát rồi `use_own=true`. `false`: xoá hồ sơ riêng, trang quay về hồ sơ nhóm (FE xác nhận trước).
+ */
+export const SetUseOwnRequest = z.object({ useOwn: z.boolean() }).strict()
+export type SetUseOwnRequest = z.infer<typeof SetUseOwnRequest>

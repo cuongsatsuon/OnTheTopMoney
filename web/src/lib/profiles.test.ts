@@ -1,5 +1,5 @@
 // Helper thuần của hồ sơ thương hiệu (Story 3.1): map DTO ↔ form, validate dưới ô, kiểm logo, nhận diện chủ thật.
-import type { BrandProfileDto } from '@ottm/shared'
+import type { BrandProfileDto, EffectiveBrandProfileResponse } from '@ottm/shared'
 import { describe, expect, it } from 'vitest'
 import { ApiError } from './api'
 import {
@@ -9,12 +9,17 @@ import {
   blankBrand,
   brandDataOf,
   brandNameError,
+  confirmBeforeToggle,
   emojiFromLevel,
   emojiToLevel,
   fieldErrorsOf,
+  inheritanceLabel,
+  isConfigMissing,
+  isInheritingFromGroup,
   isRealOwner,
   logoFileError,
   toSaveRequest,
+  toUseOwnRequest,
 } from './profiles'
 
 const UUID = '018f3e2a-7c1d-7a2b-9c3d-4e5f60718293'
@@ -110,5 +115,35 @@ describe('isRealOwner', () => {
     expect(isRealOwner(UUID)).toBe(true)
     expect(isRealOwner('g-beauty')).toBe(false)
     expect(isRealOwner('p1')).toBe(false)
+  })
+})
+
+describe('kế thừa Nhóm→Trang (Story 3.2)', () => {
+  const groupEffective: EffectiveBrandProfileResponse = {
+    effective: { config: DTO, source: { ownerType: 'group', ownerId: UUID, name: 'Nhóm Mỹ phẩm' } },
+  }
+  const pageEffective: EffectiveBrandProfileResponse = {
+    effective: { config: DTO, source: { ownerType: 'page', ownerId: UUID, name: 'Shop A' } },
+  }
+  const missing: EffectiveBrandProfileResponse = { effective: null }
+
+  it('nhãn kế thừa: nguồn nhóm → "Đang dùng hồ sơ của Nhóm Mỹ phẩm"; nguồn trang → hồ sơ riêng', () => {
+    expect(inheritanceLabel(groupEffective.effective!.source)).toBe('Đang dùng hồ sơ của Nhóm Mỹ phẩm')
+    expect(inheritanceLabel(pageEffective.effective!.source)).toBe('Đang dùng hồ sơ riêng của trang')
+  })
+
+  it('CONFIG_MISSING = effective null; theo nhóm = nguồn group', () => {
+    expect(isConfigMissing(missing)).toBe(true)
+    expect(isConfigMissing(groupEffective)).toBe(false)
+    expect(isInheritingFromGroup(groupEffective)).toBe(true)
+    expect(isInheritingFromGroup(pageEffective)).toBe(false)
+    expect(isInheritingFromGroup(missing)).toBe(false)
+  })
+
+  it('công tắc: tắt (false) hỏi lại, bật (true) không; request áp khi Lưu', () => {
+    expect(confirmBeforeToggle(false)).toBe(true)
+    expect(confirmBeforeToggle(true)).toBe(false)
+    expect(toUseOwnRequest(true)).toEqual({ useOwn: true })
+    expect(toUseOwnRequest(false)).toEqual({ useOwn: false })
   })
 })
