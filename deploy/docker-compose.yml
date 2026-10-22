@@ -112,6 +112,9 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.web
+      args:
+        # Trống = web gọi /api cùng tên miền. Web và api khác tên miền → origin api (env.production.example mục 6).
+        VITE_API_ORIGIN: ${VITE_API_ORIGIN:-}
     profiles: [web]
     restart: unless-stopped
     user: "101:101"

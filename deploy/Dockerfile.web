@@ -14,6 +14,9 @@ RUN npm ci --workspace web --workspace packages/shared --no-audit --no-fund
 
 COPY packages/shared packages/shared
 COPY web web
+# Origin api khi web và api dùng hai tên miền (vd web https://app.<miền>, api https://api.<miền>) — compose truyền từ
+# VITE_API_ORIGIN trong deploy/.env. Trống = web gọi /api cùng tên miền (nginx chuyển /api tới api).
+ARG VITE_API_ORIGIN=
 RUN npm run build -w web \
  && test -f web/dist/index.html
 
