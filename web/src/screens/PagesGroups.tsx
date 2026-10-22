@@ -2,7 +2,7 @@ import { Check, ChevronDown, Ellipsis, FolderPlus, Loader2, Plus, RefreshCw, Sea
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { Content } from '../components/AppShell'
-import type { OAuthProvider } from '@ottm/shared'
+import { GROUP_COLORS, GROUP_COLOR_HEX, type GroupColor, type GroupMoveImpact, type OAuthProvider } from '@ottm/shared'
 import ConnectResultModal from '../components/ConnectResultModal'
 import {
   Button,
@@ -23,7 +23,7 @@ import {
   cn,
   platformLabel,
 } from '../components/ui'
-import { GROUP_COLORS, groups as mockGroups, type Group, type Page, type Platform } from '../data/mock'
+import { groupById, type Group, type Page, type Platform } from '../data/mock'
 import { useApp } from '../lib/app-context'
 import {
   CONNECT_ERROR_PARAM,
@@ -39,6 +39,19 @@ import {
   usePages,
   useStartConnect,
 } from '../lib/connections'
+import {
+  colorCodeOf,
+  firstFreeColor,
+  shouldConfirmMove,
+  toUiGroup,
+  useAssignGroup,
+  useCreateGroup,
+  useDeleteGroup,
+  useGroupMoveImpact,
+  useGroups,
+  useUnassignGroup,
+  useUpdateGroup,
+} from '../lib/groups'
 import { errorMessage, errorMessageOf } from '../lib/error-messages'
 
 const PLATFORM_NAMES: Record<Platform, string> = { facebook: 'Facebook Fanpage', instagram: 'Instagram Business', threads: 'Threads' }
@@ -122,9 +135,10 @@ function Checkbox({ checked, onChange, label, indeterminate }: { checked: boolea
 
 type Dialog =
   | { kind: 'create'; preselect: string[] }
-  | { kind: 'rename'; group: Group }
+  | { kind: 'edit'; group: Group }
   | { kind: 'delete'; group: Group }
   | { kind: 'addTo'; pageIds: string[] }
+  | { kind: 'move'; groupId: string; groupName: string; pageIds: string[]; impact: GroupMoveImpact }
   | null
 
 export default function PagesGroups() {
@@ -132,9 +146,15 @@ export default function PagesGroups() {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const pagesQuery = usePages()
+  const groupsQuery = useGroups()
   const startConnect = useStartConnect()
-  const [groupList, setGroupList] = useState<Group[]>(() => [...mockGroups])
-  // Kho mẫu đổi ngoài React → tăng số này sau mỗi lần ghi để vẽ lại.
+  const createGroupM = useCreateGroup()
+  const updateGroupM = useUpdateGroup()
+  const deleteGroupM = useDeleteGroup()
+  const assignM = useAssignGroup()
+  const unassignM = useUnassignGroup()
+  const moveImpactM = useGroupMoveImpact()
+  // Kho mẫu (AI trả lời) đổi ngoài React → tăng số này sau mỗi lần ghi để vẽ lại.
   const [, setStoreVersion] = useState(0)
   const [tab, setTab] = useState<'groups' | 'pages'>(() => (searchParams.has(CONNECT_RESULT_PARAM) ? 'pages' : 'groups'))
   const [selected, setSelected] = useState<string[]>([])
@@ -143,7 +163,9 @@ export default function PagesGroups() {
   const [connectOpen, setConnectOpen] = useState(false)
   const connectRef = useOutside(connectOpen, () => setConnectOpen(false))
 
-  const pageList: Page[] = (pagesQuery.data ?? []).map((dto) => uiPageOf(dto))
+  // Nhóm thật từ `GET /api/v1/groups`. `groupId` của trang lấy thẳng từ server (Story 2.5), overlay AI giữ nguyên.
+  const groupList: Group[] = (groupsQuery.data ?? []).map(toUiGroup)
+  const pageList: Page[] = (pagesQuery.data ?? []).map((dto) => ({ ...uiPageOf(dto), groupId: dto.groupId }))
   const resultId = searchParams.get(CONNECT_RESULT_PARAM)
   const resultProvider = providerFromParam(searchParams.get(CONNECT_PROVIDER_PARAM))
   const connectError = searchParams.get(CONNECT_ERROR_PARAM)
@@ -180,11 +202,7 @@ export default function PagesGroups() {
   }
   const opening = startConnect.isPending ? PROVIDER_LABEL[startConnect.variables.provider] : null
 
-  /* Nhóm vẫn là dữ liệu mẫu: ghi ngược vào mock để chip nhóm và màn chi tiết nhóm thấy thay đổi. */
-  const commitGroups = (next: Group[]) => {
-    mockGroups.splice(0, mockGroups.length, ...next)
-    setGroupList(next)
-  }
+  /* AI trả lời vẫn là overlay giao diện (Epic 5): ghi vào kho mẫu rồi vẽ lại. Nhóm đi qua API thật. */
   const updatePages = (ids: string[], patch: (p: Page) => PageOverlay) => {
     patchMockPages(ids, patch)
     setStoreVersion((v) => v + 1)
@@ -197,40 +215,76 @@ export default function PagesGroups() {
   const q = query.trim().toLowerCase()
   const visiblePages = q ? pageList.filter((p) => p.name.toLowerCase().includes(q) || p.handle.includes(q) || groupName(p.groupId).toLowerCase().includes(q)) : pageList
 
-  /* ----- Thao tác ----- */
+  /* ----- Thao tác nhóm (API thật, AD-8) ----- */
 
-  const assignToGroup = (pageIds: string[], gid: string) => {
-    const g = groupList.find((x) => x.id === gid)
-    const moved = pageIds.filter((id) => pageList.find((p) => p.id === id)?.groupId !== gid)
-    updatePages(moved, () => ({ groupId: gid, brandSource: 'group' }))
-    setSelected([])
-    setDialog(null)
-    notify(moved.length ? `Đã thêm ${moved.length} trang vào ${g?.name}. Các trang này dùng hồ sơ của nhóm.` : `Các trang đã ở ${g?.name}`)
+  /** Gán thật (sau khi đã xác nhận nếu cần). Mỗi trang đổi phát `page.group_changed` ở server. */
+  const doAssign = (groupId: string, pageIds: string[], name: string) => {
+    assignM.mutate(
+      { groupId, pageIds },
+      {
+        onSuccess: (res) => {
+          setSelected([])
+          setDialog(null)
+          notify(res.changedPageIds.length ? `Đã thêm ${res.changedPageIds.length} trang vào ${name}` : `Các trang đã ở ${name}`)
+        },
+        onError: (err) => notify(errorMessageOf(err)),
+      },
+    )
   }
 
-  const createGroup = (name: string, color: string, pageIds: string[]) => {
-    const g: Group = { id: `g-${Date.now().toString(36)}`, name, color, autoReply: false, activeCampaigns: 0 }
-    commitGroups([...groupList, g])
-    updatePages(pageIds, () => ({ groupId: g.id, brandSource: 'group' }))
-    setSelected([])
-    setDialog(null)
-    notify(`Đã tạo ${name} với ${pageIds.length} trang`)
+  /**
+   * Gán vào một nhóm đã tồn tại. LUÔN hỏi server danh sách ảnh hưởng trước (server là nguồn sự thật cho AC2):
+   * có trang phải rời nhóm cũ → hiện modal xác nhận; không có → gán thẳng.
+   */
+  const requestAssign = (groupId: string, pageIds: string[]) => {
+    const name = groupName(groupId)
+    moveImpactM.mutate(
+      { groupId, pageIds },
+      {
+        onSuccess: (impact) => {
+          if (shouldConfirmMove(impact)) setDialog({ kind: 'move', groupId, groupName: name, pageIds, impact })
+          else doAssign(groupId, pageIds, name)
+        },
+        onError: (err) => notify(errorMessageOf(err)),
+      },
+    )
   }
 
-  const renameGroup = (g: Group, name: string) => {
-    commitGroups(groupList.map((x) => (x.id === g.id ? { ...x, name } : x)))
-    setDialog(null)
-    notify(`Đã đổi tên thành ${name}`)
+  const createGroup = (name: string, color: GroupColor, pageIds: string[]) => {
+    createGroupM.mutate(
+      { name, color, pageIds },
+      {
+        onSuccess: () => {
+          setSelected([])
+          setDialog(null)
+          notify(pageIds.length ? `Đã tạo ${name} với ${pageIds.length} trang` : `Đã tạo ${name}`)
+        },
+        onError: (err) => notify(errorMessageOf(err)),
+      },
+    )
+  }
+
+  const saveGroup = (g: Group, name: string, color: GroupColor) => {
+    updateGroupM.mutate(
+      { id: g.id, name, color },
+      {
+        onSuccess: () => {
+          setDialog(null)
+          notify(`Đã lưu ${name}`)
+        },
+        onError: (err) => notify(errorMessageOf(err)),
+      },
+    )
   }
 
   const deleteGroup = (g: Group) => {
-    updatePages(
-      inGroup(g.id).map((p) => p.id),
-      () => ({ groupId: null, brandSource: 'own' }),
-    )
-    commitGroups(groupList.filter((x) => x.id !== g.id))
-    setDialog(null)
-    notify(`Đã xoá ${g.name}. Các trang giữ lại bản sao hồ sơ nhóm làm hồ sơ riêng.`)
+    deleteGroupM.mutate(g.id, {
+      onSuccess: (res) => {
+        setDialog(null)
+        notify(`Đã xoá ${g.name}. ${res.memberPageIds.length} trang chuyển về “Chưa có nhóm”.`)
+      },
+      onError: (err) => notify(errorMessageOf(err)),
+    })
   }
 
   const setAi = (ids: string[], on: boolean) => {
@@ -247,8 +301,10 @@ export default function PagesGroups() {
 
   const removeFromGroup = (p: Page) => {
     const name = groupName(p.groupId)
-    updatePages([p.id], () => ({ groupId: null, brandSource: 'own' }))
-    notify(`Đã bỏ ${p.name} khỏi ${name}`)
+    unassignM.mutate(p.id, {
+      onSuccess: () => notify(`Đã bỏ ${p.name} khỏi ${name}`),
+      onError: (err) => notify(errorMessageOf(err)),
+    })
   }
 
   const onConnected = (count: number) => {
@@ -333,7 +389,19 @@ export default function PagesGroups() {
       />
 
       {tab === 'groups' ? (
-        groupList.length === 0 ? (
+        groupsQuery.isPending ? (
+          <Card>
+            <div className="px-4 py-8 text-center text-sm text-muted-foreground" role="status">
+              <Loader2 size={16} className="mr-2 inline animate-spin" /> Đang tải danh sách nhóm…
+            </div>
+          </Card>
+        ) : groupsQuery.isError ? (
+          <Card>
+            <EmptyState title="Chưa tải được danh sách nhóm" action={<Button onClick={() => void groupsQuery.refetch()}>Thử lại</Button>}>
+              {errorMessageOf(groupsQuery.error)}
+            </EmptyState>
+          </Card>
+        ) : groupList.length === 0 ? (
           <Card>
             <EmptyState
               icon={<FolderPlus size={22} />}
@@ -360,7 +428,7 @@ export default function PagesGroups() {
                     <RowMenu
                       label={`Thao tác cho ${g.name}`}
                       items={[
-                        { label: 'Đổi tên', onClick: () => setDialog({ kind: 'rename', group: g }) },
+                        { label: 'Sửa nhóm', onClick: () => setDialog({ kind: 'edit', group: g }) },
                         { label: 'Xoá nhóm', danger: true, onClick: () => setDialog({ kind: 'delete', group: g }) },
                       ]}
                     />
@@ -572,9 +640,11 @@ export default function PagesGroups() {
         />
       )}
       {dialog?.kind === 'create' && (
-        <CreateGroupModal groups={groupList} pages={pageList} preselect={dialog.preselect} onClose={() => setDialog(null)} onCreate={createGroup} />
+        <CreateGroupModal groups={groupList} pages={pageList} preselect={dialog.preselect} busy={createGroupM.isPending} onClose={() => setDialog(null)} onCreate={createGroup} />
       )}
-      {dialog?.kind === 'rename' && <RenameModal group={dialog.group} groups={groupList} onClose={() => setDialog(null)} onSave={(n) => renameGroup(dialog.group, n)} />}
+      {dialog?.kind === 'edit' && (
+        <EditGroupModal group={dialog.group} busy={updateGroupM.isPending} onClose={() => setDialog(null)} onSave={(n, c) => saveGroup(dialog.group, n, c)} />
+      )}
       {dialog?.kind === 'delete' && (
         <Modal
           open
@@ -601,9 +671,20 @@ export default function PagesGroups() {
           pageIds={dialog.pageIds}
           pages={pageList}
           groups={groupList}
+          busy={moveImpactM.isPending || assignM.isPending}
           onClose={() => setDialog(null)}
-          onPick={(gid) => assignToGroup(dialog.pageIds, gid)}
+          onPick={(gid) => requestAssign(gid, dialog.pageIds)}
           onCreateNew={() => setDialog({ kind: 'create', preselect: dialog.pageIds })}
+        />
+      )}
+      {dialog?.kind === 'move' && (
+        <MoveConfirmModal
+          dialog={dialog}
+          pages={pageList}
+          groups={groupList}
+          busy={assignM.isPending}
+          onClose={() => setDialog(null)}
+          onConfirm={() => doAssign(dialog.groupId, dialog.pageIds, dialog.groupName)}
         />
       )}
     </Content>
@@ -621,25 +702,61 @@ function Indicator({ label, children }: { label: string; children: ReactNode }) 
 
 /* ---------- Tạo nhóm ---------- */
 
+function ColorPicker({ color, onPick }: { color: GroupColor; onPick: (c: GroupColor) => void }) {
+  return (
+    <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="Màu nhóm">
+      {GROUP_COLORS.map((c) => {
+        const hex = GROUP_COLOR_HEX[c]
+        return (
+          <button
+            key={c}
+            type="button"
+            role="radio"
+            aria-checked={color === c}
+            aria-label={c}
+            onClick={() => onPick(c)}
+            className={cn('flex size-8 items-center justify-center rounded-full ring-offset-2 transition', color === c && 'ring-2')}
+            style={{ backgroundColor: hex, ['--tw-ring-color' as string]: hex }}
+          >
+            {color === c && <Check size={15} className="text-white" />}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+function ChipPreview({ name, color }: { name: string; color: GroupColor }) {
+  const hex = GROUP_COLOR_HEX[color]
+  return (
+    <span className="ml-1 inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium" style={{ backgroundColor: `${hex}1F`, color: hex }}>
+      <span className="size-1.5 rounded-full" style={{ backgroundColor: hex }} />
+      {name}
+    </span>
+  )
+}
+
 function CreateGroupModal({
   groups,
   pages,
   preselect,
+  busy,
   onClose,
   onCreate,
 }: {
   groups: Group[]
   pages: Page[]
   preselect: string[]
+  busy?: boolean
   onClose: () => void
-  onCreate: (name: string, color: string, pageIds: string[]) => void
+  onCreate: (name: string, color: GroupColor, pageIds: string[]) => void
 }) {
   const [name, setName] = useState('')
-  const [color, setColor] = useState(() => GROUP_COLORS.find((c) => !groups.some((g) => g.color === c)) ?? GROUP_COLORS[0])
+  const [color, setColor] = useState<GroupColor>(() => firstFreeColor(groups))
   const [picked, setPicked] = useState<string[]>(preselect)
   const trimmed = name.trim()
+  // [ASSUMPTION] spec cho phép trùng tên nhóm → chỉ nhắc nhẹ, không chặn.
   const duplicate = groups.some((g) => g.name.toLowerCase() === trimmed.toLowerCase())
-  const movers = pages.filter((p) => picked.includes(p.id) && p.groupId)
 
   return (
     <Modal
@@ -650,41 +767,22 @@ function CreateGroupModal({
       footer={
         <>
           <Button onClick={onClose}>Huỷ</Button>
-          <Button variant="primary" disabled={!trimmed || duplicate} onClick={() => onCreate(trimmed, color, picked)}>
+          <Button variant="primary" disabled={!trimmed || busy} onClick={() => onCreate(trimmed, color, picked)}>
             Tạo nhóm{picked.length ? ` với ${picked.length} trang` : ''}
           </Button>
         </>
       }
     >
       <div className="space-y-5">
-        <Field label="Tên nhóm" hint={duplicate ? <span className="text-danger">Đã có nhóm trùng tên.</span> : 'VD: Nhóm Mỹ phẩm, Nhóm Gia dụng'}>
+        <Field label="Tên nhóm" hint={duplicate ? <span className="text-amber-800">Đã có nhóm cùng tên — vẫn tạo được.</span> : 'VD: Nhóm Mỹ phẩm, Nhóm Gia dụng'}>
           <Input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Nhóm …" />
         </Field>
         <div>
           <span className="mb-1.5 block text-[13px] font-medium">Màu nhóm</span>
-          <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="Màu nhóm">
-            {GROUP_COLORS.map((c) => (
-              <button
-                key={c}
-                type="button"
-                role="radio"
-                aria-checked={color === c}
-                aria-label={c}
-                onClick={() => setColor(c)}
-                className={cn('flex size-8 items-center justify-center rounded-full ring-offset-2 transition', color === c && 'ring-2')}
-                style={{ backgroundColor: c, ['--tw-ring-color' as string]: c }}
-              >
-                {color === c && <Check size={15} className="text-white" />}
-              </button>
-            ))}
-          </div>
+          <ColorPicker color={color} onPick={setColor} />
           {trimmed && (
             <div className="mt-2 text-xs text-muted-foreground">
-              Xem trước:{' '}
-              <span className="ml-1 inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium" style={{ backgroundColor: `${color}1F`, color }}>
-                <span className="size-1.5 rounded-full" style={{ backgroundColor: color }} />
-                {trimmed}
-              </span>
+              Xem trước: <ChipPreview name={trimmed} color={color} />
             </div>
           )}
         </div>
@@ -694,7 +792,9 @@ function CreateGroupModal({
             <span className="text-xs text-muted-foreground">Mỗi trang chỉ thuộc một nhóm</span>
           </div>
           <PageChecklist pages={pages} picked={picked} setPicked={setPicked} targetGroupId={null} />
-          {movers.length > 0 && <p className="mt-2 text-xs text-amber-800">{movers.length} trang sẽ rời nhóm cũ và dùng hồ sơ của nhóm mới.</p>}
+          {pages.filter((p) => picked.includes(p.id) && p.groupId).length > 0 && (
+            <p className="mt-2 text-xs text-amber-800">{pages.filter((p) => picked.includes(p.id) && p.groupId).length} trang sẽ rời nhóm cũ để vào nhóm mới.</p>
+          )}
         </div>
       </div>
     </Modal>
@@ -706,7 +806,7 @@ export function PageChecklist({ pages, picked, setPicked, targetGroupId }: { pag
     <ul className="max-h-64 divide-y divide-border overflow-y-auto rounded-md border border-border">
       {pages.map((p) => {
         const on = picked.includes(p.id)
-        const other = p.groupId && p.groupId !== targetGroupId ? mockGroups.find((g) => g.id === p.groupId) : null
+        const other = p.groupId && p.groupId !== targetGroupId ? groupById(p.groupId) : null
         return (
           <li key={p.id}>
             <label className="flex cursor-pointer items-center gap-3 px-3 py-2 hover:bg-slate-50">
@@ -735,31 +835,110 @@ export function PageChecklist({ pages, picked, setPicked, targetGroupId }: { pag
   )
 }
 
-/* ---------- Đổi tên ---------- */
+/* ---------- Sửa tên/màu ---------- */
 
-function RenameModal({ group, groups, onClose, onSave }: { group: Group; groups: Group[]; onClose: () => void; onSave: (name: string) => void }) {
+function EditGroupModal({ group, busy, onClose, onSave }: { group: Group; busy?: boolean; onClose: () => void; onSave: (name: string, color: GroupColor) => void }) {
   const [name, setName] = useState(group.name)
+  const [color, setColor] = useState<GroupColor>(() => colorCodeOf(group.color))
   const t = name.trim()
-  const dup = groups.some((g) => g.id !== group.id && g.name.toLowerCase() === t.toLowerCase())
-  const ok = !!t && !dup && t !== group.name
+  const changed = t !== group.name || color !== colorCodeOf(group.color)
+  const ok = !!t && changed && !busy
   return (
     <Modal
       open
       onClose={onClose}
-      title="Đổi tên nhóm"
-      width={420}
+      title="Sửa nhóm"
+      width={460}
       footer={
         <>
           <Button onClick={onClose}>Huỷ</Button>
-          <Button variant="primary" disabled={!ok} onClick={() => onSave(t)}>
-            Lưu tên
+          <Button variant="primary" disabled={!ok} onClick={() => onSave(t, color)}>
+            Lưu
           </Button>
         </>
       }
     >
-      <Field label="Tên nhóm" hint={dup ? <span className="text-danger">Đã có nhóm trùng tên.</span> : undefined}>
-        <Input autoFocus value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && ok && onSave(t)} />
-      </Field>
+      <div className="space-y-5">
+        <Field label="Tên nhóm">
+          <Input autoFocus value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && ok && onSave(t, color)} />
+        </Field>
+        <div>
+          <span className="mb-1.5 block text-[13px] font-medium">Màu nhóm</span>
+          <ColorPicker color={color} onPick={setColor} />
+          {t && (
+            <div className="mt-2 text-xs text-muted-foreground">
+              Xem trước: <ChipPreview name={t} color={color} />
+            </div>
+          )}
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+/* ---------- Xác nhận chuyển nhóm (AC2) ---------- */
+
+function MoveConfirmModal({
+  dialog,
+  pages,
+  groups,
+  busy,
+  onClose,
+  onConfirm,
+}: {
+  dialog: { groupId: string; groupName: string; pageIds: string[]; impact: GroupMoveImpact }
+  pages: Page[]
+  groups: Group[]
+  busy?: boolean
+  onClose: () => void
+  onConfirm: () => void
+}) {
+  const nameOf = (gid: string | null) => groups.find((g) => g.id === gid)?.name ?? 'nhóm cũ'
+  const movers = dialog.impact.moves
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title="Chuyển trang sang nhóm khác?"
+      width={480}
+      footer={
+        <>
+          <Button onClick={onClose}>Huỷ</Button>
+          <Button variant="primary" disabled={busy} onClick={onConfirm}>
+            Chuyển sang {dialog.groupName}
+          </Button>
+        </>
+      }
+    >
+      <p className="text-sm">
+        {movers.length === 1 ? 'Trang này sẽ chuyển khỏi' : `${movers.length} trang sẽ chuyển khỏi`}{' '}
+        {[...new Set(movers.map((m) => nameOf(m.fromGroupId)))].map((n, i, arr) => (
+          <span key={n}>
+            <span className="font-medium">{n}</span>
+            {i < arr.length - 1 ? ', ' : ''}
+          </span>
+        ))}{' '}
+        và dùng cấu hình của <span className="font-medium">{dialog.groupName}</span>.
+      </p>
+      <ul className="mt-3 space-y-1.5">
+        {movers.map((m) => {
+          const p = pages.find((x) => x.id === m.pageId)
+          return (
+            <li key={m.pageId} className="flex items-center gap-2 text-sm">
+              {p && <PageAvatar page={p} size={22} />}
+              <span>{p?.name ?? m.pageId}</span>
+              <span className="ml-auto inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+                đang ở <GroupChip groupId={m.fromGroupId} size="sm" />
+              </span>
+            </li>
+          )
+        })}
+      </ul>
+      {dialog.impact.campaigns.length > 0 && (
+        <p className="mt-3 text-xs text-amber-800">
+          {dialog.impact.campaigns.length} chiến dịch đang chạy dùng các trang này. Chiến dịch vẫn tiếp tục trên từng trang.
+        </p>
+      )}
     </Modal>
   )
 }
@@ -770,6 +949,7 @@ function AddToGroupModal({
   pageIds,
   pages,
   groups,
+  busy,
   onClose,
   onPick,
   onCreateNew,
@@ -777,6 +957,7 @@ function AddToGroupModal({
   pageIds: string[]
   pages: Page[]
   groups: Group[]
+  busy?: boolean
   onClose: () => void
   onPick: (gid: string) => void
   onCreateNew: () => void
@@ -793,7 +974,7 @@ function AddToGroupModal({
       footer={
         <>
           <Button onClick={onClose}>Huỷ</Button>
-          <Button variant="primary" disabled={!gid} onClick={() => gid && onPick(gid)}>
+          <Button variant="primary" disabled={!gid || busy} onClick={() => gid && onPick(gid)}>
             Thêm vào nhóm
           </Button>
         </>

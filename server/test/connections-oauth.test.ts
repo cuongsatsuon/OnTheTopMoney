@@ -63,9 +63,15 @@ const FAKE_CONFIG: ConnectionsConfig = {
 async function wipe() {
   await handle.sql`delete from page_credentials`
   await handle.sql`delete from pages`
+  await handle.sql`delete from groups`
   await handle.sql`delete from oauth_states`
   await handle.sql`delete from oauth_results`
   await handle.sql`delete from meta_accounts`
+}
+
+/** Nhóm có khoá ngoại từ `pages.group_id` (Story 2.5) → phải tồn tại trước khi gán cho trang trong test. */
+async function seedGroup(id: string) {
+  await handle.sql`insert into groups (id, name, color) values (${id}, 'Nhóm test', 'group-1') on conflict (id) do nothing`
 }
 
 beforeAll(async () => {
@@ -500,6 +506,7 @@ describe('POST /api/v1/connections/confirm', () => {
     const first = ConfirmConnectionsResponse.parse((await confirm(await connect(), [FAKE_PAGES.beauty.id, FAKE_IG.business.id])).json())
     const [fb, ig] = first.pages
     const oldEnvelope = (await credRows()).find((c) => c.page_id === fb!.id)!.access_token
+    await seedGroup('0199a000-0000-7000-8000-000000000001')
     await handle.sql`update pages set removed_at = now(), connection_status = 'disconnected', group_id = ${'0199a000-0000-7000-8000-000000000001'} where id = ${fb!.id}`
     await sleep(100)
     realtime.messages.length = 0
@@ -561,6 +568,7 @@ describe('kết nối lại một trang (Story 2.4)', () => {
   it('hoàn tất → cập nhật token đúng dòng (giữ id, nhóm), về active, phát page.reconnected', async () => {
     const fb = await connectBeauty()
     const groupId = '0199a000-0000-7000-8000-000000000042'
+    await seedGroup(groupId)
     // Trang đang expiring (có lý do) và đã gán nhóm (dữ liệu cấu hình phải giữ qua reconnect).
     await handle.sql`update pages set connection_status = 'expiring', connection_status_reason = 'TOKEN_EXPIRING', group_id = ${groupId} where id = ${fb.id}`
     const oldEnvelope = (await credRows()).find((c) => c.page_id === fb.id)!.access_token
@@ -614,8 +622,9 @@ describe('GET /api/v1/pages', () => {
     // Cùng transaction → cùng connected_at; thứ tự theo id (Fanpage trước IG liên kết).
     expect(items.map((p) => p.platform)).toEqual(['facebook', 'facebook', 'instagram'])
     for (const p of items) {
-      expect(Object.keys(p).sort()).toEqual(['avatarUrl', 'connectedAt', 'connectionStatus', 'handle', 'id', 'name', 'platform'])
+      expect(Object.keys(p).sort()).toEqual(['avatarUrl', 'connectedAt', 'connectionStatus', 'groupId', 'handle', 'id', 'name', 'platform'])
       expect(p.connectionStatus).toBe('active')
+      expect(p.groupId).toBeNull()
     }
     expect(res.body).not.toMatch(PLAIN_TOKEN)
   })

@@ -103,8 +103,16 @@ export function mirrorRealPages(dtos: readonly PageDto[], store: Page[] = mockPa
     const i = store.findIndex((p) => p.id === dto.id)
     if (i === -1) store.push(fresh)
     else {
+      // `groupId` do server sở hữu (Story 2.5) → lấy theo `fresh`. AI trả lời / màu avatar còn ở giao diện mẫu
+      // (Epic 3, 5) → giữ overlay cũ. Trang rời nhóm (groupId=null) thì không thể "theo nhóm" → brandSource về
+      // 'own' (giữ hành vi tới Epic 3).
       const old = store[i]!
-      store[i] = { ...fresh, groupId: old.groupId, autoReply: old.autoReply, brandSource: old.brandSource, avatarColor: old.avatarColor }
+      store[i] = {
+        ...fresh,
+        autoReply: old.autoReply,
+        brandSource: fresh.groupId === null ? 'own' : old.brandSource,
+        avatarColor: old.avatarColor,
+      }
     }
     known.add(dto.id)
   }
@@ -291,8 +299,8 @@ export function avatarColorOf(id: string): string {
 }
 
 /**
- * Trang thật → dạng hàng của bảng Trang & Nhóm (kiểu `Page` của giao diện mẫu). Nhóm, AI trả lời, hồ sơ
- * chưa có ở server (Story 2.5 và epic sau) → mặc định "chưa có nhóm", tắt, riêng.
+ * Trang thật → dạng hàng của bảng Trang & Nhóm (kiểu `Page` của giao diện mẫu). `groupId` lấy từ server
+ * (Story 2.5). AI trả lời và hồ sơ chưa có ở server (Epic 3, 5) → mặc định tắt, riêng.
  */
 export function toUiPage(dto: PageDto): Page {
   return {
@@ -300,7 +308,7 @@ export function toUiPage(dto: PageDto): Page {
     name: dto.name,
     handle: dto.handle ?? '',
     platform: dto.platform,
-    groupId: null,
+    groupId: dto.groupId,
     followers: 0,
     status: dto.connectionStatus,
     autoReply: false,

@@ -34,6 +34,7 @@ export function toPageDto(row: Row): PageDto {
     name: row.name,
     handle: row.handle,
     avatarUrl: row.avatarUrl,
+    groupId: row.groupId,
     connectionStatus: row.connectionStatus as ConnectionStatus,
     connectedAt: row.connectedAt.toISOString(),
   }

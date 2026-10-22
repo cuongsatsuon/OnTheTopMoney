@@ -1,4 +1,4 @@
-import { ArrowLeft, BotMessageSquare, FileText, Heart, Pencil, Plus, Users, X } from 'lucide-react'
+import { ArrowLeft, BotMessageSquare, FileText, Heart, Loader2, Pencil, Plus, Users, X } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
@@ -7,7 +7,9 @@ import { BrandProfileForm } from '../components/BrandProfileForm'
 import { Button, Card, CardHeader, Chip, EmptyState, KpiCard, Modal, PageAvatar, PageLabel, PlatformIcon, StatusChip, Tabs, cn, platformLabel } from '../components/ui'
 import { compact, engagement30d, formatNumber, groups, pages, posts, type Group, type Page } from '../data/mock'
 import { useApp } from '../lib/app-context'
-import { usePages } from '../lib/connections'
+import { uiPageOf, usePages } from '../lib/connections'
+import { colorCodeOf, useAssignGroup, useGroups, useUnassignGroup, useUpdateGroup } from '../lib/groups'
+import { errorMessageOf } from '../lib/error-messages'
 import { AutoReplyForm } from './AutoReply'
 import { PageChecklist } from './PagesGroups'
 
@@ -26,9 +28,20 @@ function interactions30d(page: Page) {
 
 export default function GroupDetail() {
   const { id = '' } = useParams()
-  // Vẽ lại khi trang thật được chép vào kho mẫu (Story 2.2).
+  // Nhóm thật từ API được chép vào kho mẫu; cũng vẽ lại khi trang thật đổi (Story 2.2, 2.5).
+  const groupsQuery = useGroups()
   usePages()
   const group = groups.find((g) => g.id === id)
+  if (!group && groupsQuery.isPending)
+    return (
+      <Content>
+        <Card>
+          <div className="px-4 py-8 text-center text-sm text-muted-foreground" role="status">
+            <Loader2 size={16} className="mr-2 inline animate-spin" /> Đang tải nhóm…
+          </div>
+        </Card>
+      </Content>
+    )
   if (!group)
     return (
       <Content>
@@ -51,17 +64,24 @@ export default function GroupDetail() {
 
 function GroupDetailView({ group }: { group: Group }) {
   const { notify } = useApp()
+  const pagesQuery = usePages()
+  const updateGroupM = useUpdateGroup()
+  const assignM = useAssignGroup()
+  const unassignM = useUnassignGroup()
   const [name, setName] = useState(group.name)
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(group.name)
   const [tab, setTab] = useState<TabId>('brand')
-  const [members, setMembers] = useState<Page[]>(() => pages.filter((p) => p.groupId === group.id))
   const [adding, setAdding] = useState(false)
   const [picked, setPicked] = useState<string[]>([])
 
-  /* Cập nhật nhóm/trang trong dữ liệu mẫu để các màn khác thấy thay đổi. */
-  const sync = () => setMembers(pages.filter((p) => p.groupId === group.id))
+  // Thành viên lấy thẳng từ API (`groupId` của trang do server sở hữu); vẽ lại sau mỗi mutation (invalidate).
+  const allPages: Page[] = (pagesQuery.data ?? []).map((dto) => ({ ...uiPageOf(dto), groupId: dto.groupId }))
+  const members = allPages.filter((p) => p.groupId === group.id)
+  const candidates = allPages.filter((p) => p.groupId !== group.id)
+  const platforms = [...new Set(members.map((p) => p.platform))]
 
+  /* Đổi tên nhóm qua API ([ASSUMPTION] cho phép trùng tên → không chặn). */
   const commitName = () => {
     const t = draft.trim()
     setEditing(false)
@@ -69,39 +89,41 @@ function GroupDetailView({ group }: { group: Group }) {
       setDraft(name)
       return
     }
-    if (groups.some((g) => g.id !== group.id && g.name.toLowerCase() === t.toLowerCase())) {
-      notify('Đã có nhóm trùng tên')
-      setDraft(name)
-      return
-    }
-    const g = groups.find((x) => x.id === group.id)
-    if (g) g.name = t
-    setName(t)
-    notify(`Đã đổi tên thành ${t}`)
+    updateGroupM.mutate(
+      { id: group.id, name: t, color: colorCodeOf(group.color) },
+      {
+        onSuccess: () => {
+          setName(t)
+          notify(`Đã đổi tên thành ${t}`)
+        },
+        onError: (err) => {
+          setDraft(name)
+          notify(errorMessageOf(err))
+        },
+      },
+    )
   }
 
   const removeMember = (p: Page) => {
-    p.groupId = null
-    p.brandSource = 'own'
-    sync()
-    notify(`Đã bỏ ${p.name} khỏi nhóm. Trang giữ bản sao hồ sơ nhóm làm hồ sơ riêng.`)
+    unassignM.mutate(p.id, {
+      onSuccess: () => notify(`Đã bỏ ${p.name} khỏi nhóm.`),
+      onError: (err) => notify(errorMessageOf(err)),
+    })
   }
 
   const addMembers = () => {
-    pages.forEach((p) => {
-      if (picked.includes(p.id)) {
-        p.groupId = group.id
-        p.brandSource = 'group'
-      }
-    })
-    sync()
-    setAdding(false)
-    notify(`Đã thêm ${picked.length} trang vào ${name}`)
-    setPicked([])
+    assignM.mutate(
+      { groupId: group.id, pageIds: picked },
+      {
+        onSuccess: (res) => {
+          setAdding(false)
+          notify(`Đã thêm ${res.changedPageIds.length} trang vào ${name}`)
+          setPicked([])
+        },
+        onError: (err) => notify(errorMessageOf(err)),
+      },
+    )
   }
-
-  const candidates = pages.filter((p) => p.groupId !== group.id)
-  const platforms = [...new Set(members.map((p) => p.platform))]
 
   return (
     <Content>
@@ -164,12 +186,26 @@ function GroupDetailView({ group }: { group: Group }) {
             <Link to={`/trang-nhom/trang/${p.id}`} className="font-medium hover:text-primary">
               {p.name}
             </Link>
-            <button type="button" onClick={() => removeMember(p)} className="rounded-full p-0.5 text-muted-foreground hover:bg-red-50 hover:text-danger" aria-label={`Bỏ ${p.name} khỏi nhóm`}>
+            <button
+              type="button"
+              onClick={() => removeMember(p)}
+              disabled={unassignM.isPending}
+              className="rounded-full p-0.5 text-muted-foreground hover:bg-red-50 hover:text-danger disabled:opacity-50"
+              aria-label={`Bỏ ${p.name} khỏi nhóm`}
+            >
               <X size={14} />
             </button>
           </span>
         ))}
-        {members.length === 0 && <span className="text-[13px] text-muted-foreground">Nhóm chưa có trang nào.</span>}
+        {pagesQuery.isPending ? (
+          <span className="text-[13px] text-muted-foreground" role="status">
+            <Loader2 size={14} className="mr-1.5 inline animate-spin" /> Đang tải trang thành viên…
+          </span>
+        ) : pagesQuery.isError ? (
+          <span className="text-[13px] text-danger">Chưa tải được danh sách trang — {errorMessageOf(pagesQuery.error)}</span>
+        ) : (
+          members.length === 0 && <span className="text-[13px] text-muted-foreground">Nhóm chưa có trang nào.</span>
+        )}
         <Button size="sm" variant="ghost" icon={<Plus size={15} />} onClick={() => setAdding(true)}>
           Thêm trang
         </Button>
@@ -210,7 +246,7 @@ function GroupDetailView({ group }: { group: Group }) {
             >
               Huỷ
             </Button>
-            <Button variant="primary" disabled={!picked.length} onClick={addMembers}>
+            <Button variant="primary" disabled={!picked.length || assignM.isPending} onClick={addMembers}>
               Thêm {picked.length || ''} trang
             </Button>
           </>

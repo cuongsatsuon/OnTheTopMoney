@@ -101,6 +101,7 @@ describe('toUiPage', () => {
       name: 'Lan Anh',
       handle: null,
       avatarUrl: null,
+      groupId: null,
       connectionStatus: 'expiring',
       connectedAt: '2026-10-22T03:00:00.000Z',
     })
@@ -110,27 +111,29 @@ describe('toUiPage', () => {
 })
 
 describe('mirrorRealPages / patchMockPages (kho mẫu cho màn chưa chuyển API)', () => {
-  const dto = (id: string, name = id) => ({
+  const dto = (id: string, name = id, groupId: string | null = null) => ({
     id,
     platform: 'facebook' as const,
     name,
     handle: null,
     avatarUrl: null,
+    groupId,
     connectionStatus: 'active' as const,
     connectedAt: '2026-10-22T03:00:00.000Z',
   })
   const sample: Page = { id: 'p1', name: 'Mẫu', handle: 'mau', platform: 'facebook', groupId: 'g-x', followers: 10, status: 'active', autoReply: true, brandSource: 'group', avatarColor: '#fff' }
 
-  it('thêm trang thật, giữ trang mẫu; giữ nhóm/AI khi cập nhật; bỏ trang thật không còn', () => {
+  it('thêm trang thật, giữ trang mẫu; nhóm theo server, giữ AI khi cập nhật; bỏ trang thật không còn', () => {
     const store: Page[] = [sample]
     const known = new Set<string>()
     mirrorRealPages([dto('r1'), dto('r2')], store, known)
     expect(store.map((p) => p.id)).toEqual(['p1', 'r1', 'r2'])
 
-    patchMockPages(['r1'], () => ({ groupId: 'g-x', autoReply: true }), store)
-    mirrorRealPages([dto('r1', 'Tên mới')], store, known)
+    // AI trả lời là overlay giao diện (giữ lại); nhóm do server sở hữu (theo DTO mới).
+    patchMockPages(['r1'], () => ({ autoReply: true }), store)
+    mirrorRealPages([dto('r1', 'Tên mới', 'g-y')], store, known)
     expect(store.map((p) => p.id)).toEqual(['p1', 'r1'])
-    expect(store[1]).toMatchObject({ name: 'Tên mới', groupId: 'g-x', autoReply: true })
+    expect(store[1]).toMatchObject({ name: 'Tên mới', groupId: 'g-y', autoReply: true })
     expect(uiPageOf(dto('r1'), store)).toBe(store[1])
     expect(uiPageOf(dto('r9'), store).id).toBe('r9')
   })

@@ -52,7 +52,8 @@ export const EVENTS = {
   'page.expiring': event(true, { expiresAt: z.iso.datetime() }),
   'page.removed': event(true, {}),
   'page.group_changed': event(true, { fromGroupId: Id.nullable(), toGroupId: Id.nullable() }),
-  'group.deleted': event(true, {}),
+  // Story 2.5: `id` = groupId đã xoá; `memberPageIds` = các trang vừa bị gỡ khỏi nhóm (Epic 3 giữ cấu hình).
+  'group.deleted': event(true, { groupId: Id, memberPageIds: z.array(Id) }),
   'media_asset.created': event(true, {}),
   'knowledge_item.processed': event(true, {}),
   'ai_budget.threshold_reached': event(true, { level: z.union([z.literal(80), z.literal(100)]) }),

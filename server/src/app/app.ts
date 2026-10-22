@@ -14,6 +14,7 @@ import { authPlugin, type LoginLimiter } from './auth/index.ts'
 import { registerAiBudget } from './ai-budget.ts'
 import { registerConnections } from './connections.ts'
 import { registerCors } from './cors.ts'
+import { registerGroups } from './groups.ts'
 import { registerHealthz, type HealthOptions } from './healthz.ts'
 import { registerNotifications } from './notifications.ts'
 import { registerOAuth } from './oauth.ts'
@@ -112,6 +113,7 @@ export function buildApp({ sql, db, logger, http = {}, loginLimiter, health, eve
   if (events) registerNotifications(app, { db, events })
   if (events) registerOpenAiSettings(app, { db, events, cipher: ai?.cipher ?? null, ...(ai?.openai ? { openai: ai.openai } : {}) })
   registerPages(app, { db })
+  if (events) registerGroups(app, { db, events })
   if (events && connections) {
     const deps: ConnectionsDeps = { ...connections, db, events, log: logger.child({ component: 'connections' }) }
     registerConnections(app, deps)

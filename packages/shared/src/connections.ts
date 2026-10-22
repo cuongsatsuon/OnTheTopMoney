@@ -144,13 +144,15 @@ export const ConfirmConnectionsRequest = z
   .strict()
 export type ConfirmConnectionsRequest = z.infer<typeof ConfirmConnectionsRequest>
 
-/** Trang đã kết nối (chưa gỡ). `autoReply`/`brandSource`/nhóm do read-model của story sau ghép. */
+/** Trang đã kết nối (chưa gỡ). `autoReply`/`brandSource` do read-model của story sau ghép; `groupId` là cột thật (Story 2.5). */
 export const PageDto = z.object({
   id: z.uuid(),
   platform: Platform,
   name: z.string(),
   handle: z.string().nullable(),
   avatarUrl: z.string().nullable(),
+  /** Nhóm của trang (`null` = chưa có nhóm). Mỗi trang tối đa một nhóm (Story 2.5, AD-8). */
+  groupId: z.uuid().nullable(),
   connectionStatus: ConnectionStatus,
   connectedAt: IsoDateTime,
 })

@@ -12,5 +12,19 @@ export {
   type UpsertedPage,
 } from './service.ts'
 
+// Nhóm trang (Story 2.5, AD-8). Thành viên nhóm chỉ đổi qua assign/unassign/deleteGroup (phát sự kiện trong transaction).
+export {
+  affectedByMove,
+  assignGroup,
+  createGroup,
+  deleteGroup,
+  getGroup,
+  listGroups,
+  toGroupDto,
+  unassignGroup,
+  updateGroup,
+  type GroupChange,
+} from './groups.ts'
+
 /** Chỉ để `connections` khai khoá ngoại tới `pages.id` (Drizzle cần đối tượng bảng); không truy vấn trực tiếp. */
 export { pages as pagesTable } from './schema.ts'
