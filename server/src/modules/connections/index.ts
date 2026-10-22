@@ -37,3 +37,13 @@ export {
 export { confirmConnections } from './confirm.ts'
 export { getAccessToken } from './credentials.ts'
 export { FAKE_CODE, FAKE_THREADS_CODE } from './fake-meta.ts'
+export {
+  computeConnectionStatus,
+  effectiveExpiry,
+  markDisconnected,
+  runTokenCheck,
+  EXPIRING_WINDOW_S,
+  THREADS_MIN_AGE_S,
+  THREADS_REFRESH_WINDOW_S,
+  type TokenCheckDeps,
+} from './token-check.ts'

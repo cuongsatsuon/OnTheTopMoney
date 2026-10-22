@@ -526,6 +526,84 @@ describe('POST /api/v1/connections/confirm', () => {
   })
 })
 
+describe('kết nối lại một trang (Story 2.4)', () => {
+  async function connectBeauty() {
+    const { pages } = ConfirmConnectionsResponse.parse((await confirm(await connect(), [FAKE_PAGES.beauty.id])).json())
+    return pages[0]!
+  }
+  const startReconnect = (pageId: string, from: 'pages' | 'welcome' | 'settings' = 'pages') =>
+    api('POST', '/api/v1/connections/facebook/start', { from, pageId })
+
+  it('start với pageId → intent=reconnect:<id> trong oauth_states, auth_type=reauthorize ở URL hộp thoại Meta', async () => {
+    // Tạo trang bằng luồng giả, rồi đổi sang app thật chỉ để kiểm URL hộp thoại Meta.
+    const fb = await connectBeauty()
+    await app.close()
+    app = build({ ...FAKE_CONFIG, META_FAKE: false, META_APP_ID: '123456', META_APP_SECRET: REAL_SECRET })
+    const res = await startReconnect(fb.id)
+    expect(res.statusCode).toBe(200)
+    const { url } = StartConnectResponse.parse(res.json())
+    const u = new URL(url)
+    expect(u.origin + u.pathname).toBe('https://www.facebook.com/v26.0/dialog/oauth')
+    expect(u.searchParams.get('auth_type')).toBe('reauthorize')
+    const state = u.searchParams.get('state')!
+    const [row] = await handle.sql<{ intent: string }[]>`select intent from oauth_states where state = ${state}`
+    expect(row!.intent).toBe(`reconnect:${fb.id}`)
+  })
+
+  it('pageId không tồn tại → 404, không tạo state, không gọi Meta', async () => {
+    const res = await startReconnect('00000000-0000-7000-8000-000000000000')
+    expect(res.statusCode).toBe(404)
+    expect(errorCode(res)).toBe('NOT_FOUND')
+    expect(await handle.sql`select 1 from oauth_states`).toHaveLength(0)
+    expect(graph.calls).toHaveLength(0)
+  })
+
+  it('hoàn tất → cập nhật token đúng dòng (giữ id, nhóm), về active, phát page.reconnected', async () => {
+    const fb = await connectBeauty()
+    const groupId = '0199a000-0000-7000-8000-000000000042'
+    // Trang đang expiring (có lý do) và đã gán nhóm (dữ liệu cấu hình phải giữ qua reconnect).
+    await handle.sql`update pages set connection_status = 'expiring', connection_status_reason = 'TOKEN_EXPIRING', group_id = ${groupId} where id = ${fb.id}`
+    const oldEnvelope = (await credRows()).find((c) => c.page_id === fb.id)!.access_token
+    await sleep(100)
+    realtime.messages.length = 0
+
+    // Bắt đầu reconnect rồi chạy nốt callback + confirm như luồng thường (Meta giả).
+    const startRes = StartConnectResponse.parse((await startReconnect(fb.id)).json())
+    const st = new URL(startRes.url, 'http://x').searchParams.get('state')!
+    const cb = await callback({ state: st, code: FAKE_CODE.full })
+    const resultId = new URL(cb.location, 'http://x').searchParams.get('ket-noi')!
+    const again = ConfirmConnectionsResponse.parse((await confirm(resultId, [FAKE_PAGES.beauty.id])).json())
+
+    expect(again.pages[0]!.id).toBe(fb.id)
+    expect(again.pages[0]!.connectionStatus).toBe('active')
+    const [kept] = await handle.sql<{ group_id: string; connection_status_reason: string | null }[]>`
+      select group_id, connection_status_reason from pages where id = ${fb.id}`
+    expect(kept!.group_id).toBe(groupId)
+    // Về active → lý do trạng thái bị xoá.
+    expect(kept!.connection_status_reason).toBeNull()
+    const newEnvelope = (await credRows()).find((c) => c.page_id === fb.id)!.access_token
+    expect(newEnvelope).not.toBe(oldEnvelope)
+
+    await waitFor(() => realtime.messages.some((m) => String(m.type).startsWith('page.')))
+    await sleep(150)
+    expect(realtime.messages.filter((m) => String(m.type).startsWith('page.')).map((m) => [m.type, m.id])).toEqual([['page.reconnected', fb.id]])
+  })
+
+  it('thiếu quyền bắt buộc → KHÔNG về active (giữ trạng thái cũ), ứng viên nêu quyền thiếu', async () => {
+    const fb = await connectBeauty()
+    await handle.sql`update pages set connection_status = 'disconnected' where id = ${fb.id}`
+    const startRes = StartConnectResponse.parse((await startReconnect(fb.id)).json())
+    const st = new URL(startRes.url, 'http://x').searchParams.get('state')!
+    const cb = await callback({ state: st, code: FAKE_CODE.noMessaging })
+    const resultId = new URL(cb.location, 'http://x').searchParams.get('ket-noi')!
+    // Ứng viên Fanpage bị khoá (thiếu pages_messaging) → confirm từ chối, trạng thái giữ disconnected.
+    const res = await confirm(resultId, [FAKE_PAGES.beauty.id])
+    expect(res.statusCode).toBe(400)
+    expect(errorCode(res)).toBe('VALIDATION_FAILED')
+    expect((await pageRows()).find((r) => r.id === fb.id)!.connection_status).toBe('disconnected')
+  })
+})
+
 describe('GET /api/v1/pages', () => {
   it('trang chưa gỡ với đúng các trường; không có token', async () => {
     expect(ListPagesResponse.parse((await api('GET', '/api/v1/pages')).json())).toEqual({ items: [] })

@@ -49,6 +49,7 @@ export interface QueuePayloads {
   'events.ai': EventEnvelope
   'ai.reservations_gc': Record<string, never>
   'connections.oauth_gc': Record<string, never>
+  'connections.token_check': Record<string, never>
 }
 
 export const QUEUES = {
@@ -101,6 +102,16 @@ export const QUEUES = {
     concurrency: 1,
     expireInSeconds: 60,
     cron: { expression: '0 * * * *', tz: CRON_TZ },
+  },
+  // Module `connections` (Story 2.4): mỗi ngày lúc 3h sáng (giờ VN) làm mới token Threads sắp hết hạn, tính lại
+  // trạng thái mọi trang (`expiring`) và phát `page.expiring` một lần/chu kỳ. Handler bắt lỗi không retry được,
+  // ghi trạng thái rồi kết thúc bình thường → retry 1 là đủ (cron chạy lại ngày sau).
+  'connections.token_check': {
+    policy: 'standard',
+    retryLimit: 1,
+    concurrency: 1,
+    expireInSeconds: 300,
+    cron: { expression: '0 3 * * *', tz: CRON_TZ },
   },
 } as const satisfies { [N in keyof QueuePayloads]: QueueDef }
 

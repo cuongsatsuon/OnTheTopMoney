@@ -15,7 +15,9 @@ import {
   lockReasonText,
   mirrorRealPages,
   missingPermissions,
+  needsReconnect,
   patchMockPages,
+  reconnectInput,
   toUiPage,
   toggleCandidate,
   uiPageOf,
@@ -212,5 +214,20 @@ describe('Threads — bước chọn, nền tảng kết quả, fragment, câu l
     expect(fbMsg).not.toContain('THREADS_APP_ID')
     // Mã không có câu riêng → câu chung.
     expect(errorMessage('RATE_LIMITED', 'threads')).toBe(ERROR_MESSAGES.RATE_LIMITED)
+  })
+})
+
+describe('kết nối lại (Story 2.4)', () => {
+  it('nút "Kết nối lại" chỉ hiện khi trang không còn hoạt động (chip vàng/đỏ)', () => {
+    expect(needsReconnect('active')).toBe(false)
+    expect(needsReconnect('expiring')).toBe(true)
+    expect(needsReconnect('disconnected')).toBe(true)
+  })
+
+  it('reconnectInput: đúng nền tảng, giữ pageId, màn gốc của nút', () => {
+    expect(reconnectInput({ id: 'pg-1', platform: 'facebook' }, 'pages')).toEqual({ provider: 'facebook', from: 'pages', pageId: 'pg-1' })
+    // Instagram đi qua cửa sổ Meta (token theo Fanpage nguồn).
+    expect(reconnectInput({ id: 'ig-1', platform: 'instagram' }, 'settings')).toEqual({ provider: 'facebook', from: 'settings', pageId: 'ig-1' })
+    expect(reconnectInput({ id: 'th-1', platform: 'threads' }, 'pages')).toEqual({ provider: 'threads', from: 'pages', pageId: 'th-1' })
   })
 })

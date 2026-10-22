@@ -24,7 +24,9 @@ import {
   CONNECT_PROVIDER_PARAM,
   CONNECT_RESULT_PARAM,
   PROVIDER_LABEL,
+  needsReconnect,
   providerFromParam,
+  reconnectInput,
   splitPagesByProvider,
   stripOAuthFragment,
   uiPageOf,
@@ -154,6 +156,12 @@ export default function Settings() {
   const connect = (provider: OAuthProvider) => {
     if (startConnect.isPending) return
     startConnect.mutate({ provider, from: 'settings' }, { onError: (err) => notify(errorMessageOf(err, provider)) })
+  }
+  // Kết nối lại một trang (Story 2.4): giữ `pageId` để server cập nhật đúng dòng (giữ nhóm, cấu hình, lịch sử).
+  const reconnect = (page: PageDto) => {
+    if (startConnect.isPending) return
+    const input = reconnectInput(page, 'settings')
+    startConnect.mutate(input, { onError: (err) => notify(errorMessageOf(err, input.provider)) })
   }
   const resultId = searchParams.get(CONNECT_RESULT_PARAM)
   const urlProvider = providerFromParam(searchParams.get(CONNECT_PROVIDER_PARAM))
@@ -729,8 +737,8 @@ export default function Settings() {
                                   </div>
                                   <span className="tabular text-[13px] whitespace-nowrap text-muted-foreground">Kết nối từ {connectedDate(dto.connectedAt)}</span>
                                   <StatusChip status={st} />
-                                  {st !== 'active' && (
-                                    <Button size="sm" icon={<RefreshCw size={14} />} disabled={startConnect.isPending} onClick={() => connect(block.provider)}>
+                                  {needsReconnect(st) && (
+                                    <Button size="sm" icon={<RefreshCw size={14} />} disabled={startConnect.isPending} onClick={() => reconnect(dto)}>
                                       Kết nối lại
                                     </Button>
                                   )}

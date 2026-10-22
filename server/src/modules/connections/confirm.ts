@@ -90,11 +90,12 @@ export async function confirmConnections(
         .values({ pageId: page.id, ...values })
         .onConflictDoUpdate({ target: pageCredentials.pageId, set: { ...values, updatedAt: sql`now()` } })
 
-      // Trang mới → `page.connected`; trang quay lại sau khi gỡ / mất kết nối → `page.reconnected`;
-      // trang đang kết nối được xác nhận lại (chỉ làm mới token) → không phát sự kiện.
+      // Trang mới → `page.connected`; trang quay lại sau khi gỡ / mất kết nối / sắp hết hạn → `page.reconnected`
+      // (Story 2.4: kết nối lại một trang `expiring` cũng là khôi phục); trang đang hoạt động được xác nhận lại
+      // (chỉ làm mới token) → không phát sự kiện.
       const event = upserted.created
         ? 'page.connected'
-        : upserted.wasRemoved || upserted.previousStatus === 'disconnected'
+        : upserted.wasRemoved || (upserted.previousStatus !== null && upserted.previousStatus !== 'active')
           ? 'page.reconnected'
           : null
       if (event) await deps.events.publishEvent(tx, event, { id: page.id, pageId: page.id })

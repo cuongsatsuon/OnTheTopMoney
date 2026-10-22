@@ -33,6 +33,7 @@ import {
   patchMockPages,
   providerFromParam,
   providerOfPlatform,
+  reconnectInput,
   stripOAuthFragment,
   uiPageOf,
   usePages,
@@ -237,8 +238,12 @@ export default function PagesGroups() {
     notify(`${on ? 'Đã bật' : 'Đã tắt'} AI trả lời cho ${ids.length} trang`)
   }
 
-  /* Kết nối lại = chạy lại luồng OAuth của đúng nền tảng (khôi phục đúng trang cũ). Theo dõi hạn token: Story 2.4. */
-  const reconnect = (p: Page) => beginConnect(providerOfPlatform(p.platform))
+  /* Kết nối lại một trang (Story 2.4): OAuth với `intent=reconnect:<pageId>` → server cập nhật đúng dòng trang cũ. */
+  const reconnect = (p: Page) => {
+    if (startConnect.isPending) return
+    const input = reconnectInput(p, 'pages')
+    startConnect.mutate(input, { onError: (err) => notify(errorMessageOf(err, input.provider)) })
+  }
 
   const removeFromGroup = (p: Page) => {
     const name = groupName(p.groupId)

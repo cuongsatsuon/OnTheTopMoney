@@ -348,6 +348,7 @@ describe('worker thật: publish → events.notifications → thông báo; job h
         'events.ai': async () => {},
         'ai.reservations_gc': async () => {},
         'connections.oauth_gc': async () => {},
+        'connections.token_check': async () => {},
         'events.notifications': async (job) => {
           await handleEvent(workerDeps, parseEventEnvelope(job.data))
         },

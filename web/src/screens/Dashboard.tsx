@@ -39,6 +39,7 @@ import {
   type Post,
 } from '../data/mock'
 import { useApp } from '../lib/app-context'
+import { needsReconnect } from '../lib/connections'
 
 type Range = '7d' | '30d' | 'month'
 
@@ -259,10 +260,11 @@ export default function Dashboard() {
                   <td className="px-4 py-2.5">
                     <span className="flex items-center gap-2">
                       <StatusChip status={p.status} />
-                      {p.status !== 'active' && (
-                        <button className="text-[13px] font-medium text-primary hover:underline" onClick={() => notify(`Đang mở Meta để kết nối lại ${p.name}`)}>
+                      {needsReconnect(p.status) && (
+                        // Tổng quan chỉ dẫn sang Trang & Nhóm — nơi kết nối lại đúng trang thật (PageDto).
+                        <Link to="/trang-nhom" className="text-[13px] font-medium text-primary hover:underline">
                           Kết nối lại
-                        </button>
+                        </Link>
                       )}
                     </span>
                   </td>

@@ -15,6 +15,7 @@ import {
   StartConnectResponse,
   THREADS_LOGIN_SCOPES,
   type ConnectFrom,
+  type ConnectionStatus,
   type OAuthCandidate,
   type PageDto,
   type Platform,
@@ -132,15 +133,34 @@ export const browser = {
 export interface StartConnectInput {
   provider: OAuthProvider
   from: ConnectFrom
+  /** Có → kết nối lại (Story 2.4): server gắn `intent=reconnect:<pageId>` + `auth_type=reauthorize`, cập nhật đúng dòng trang đó. */
+  pageId?: string
 }
 
 /** Bắt đầu OAuth: thành công → rời app sang cửa sổ Meta / Threads (hoặc trang đồng ý giả khi dev). */
 export function useStartConnect() {
   return useMutation({
-    mutationFn: ({ provider, from }: StartConnectInput) =>
-      apiFetch(`/connections/${provider}/start`, { method: 'POST', body: { from }, schema: StartConnectResponse }),
+    mutationFn: ({ provider, from, pageId }: StartConnectInput) =>
+      apiFetch(`/connections/${provider}/start`, {
+        method: 'POST',
+        body: { from, ...(pageId ? { pageId } : {}) },
+        schema: StartConnectResponse,
+      }),
     onSuccess: ({ url }) => browser.assign(url),
   })
+}
+
+/** Trang cần nút "Kết nối lại" khi không còn hoạt động (chip vàng/đỏ). */
+export function needsReconnect(status: ConnectionStatus): boolean {
+  return status !== 'active'
+}
+
+/**
+ * Tham số bắt đầu kết nối lại một trang (Story 2.4): đúng nền tảng của trang, giữ `pageId` để server khôi phục
+ * đúng dòng. `from` = màn đang hiển thị nút (callback đưa chủ shop về đó).
+ */
+export function reconnectInput(page: { id: string; platform: Platform }, from: ConnectFrom): StartConnectInput {
+  return { provider: providerOfPlatform(page.platform), from, pageId: page.id }
 }
 
 export function useOAuthResult(resultId: string | null) {

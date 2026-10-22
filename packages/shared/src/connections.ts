@@ -82,8 +82,12 @@ export const CONNECT_FROM = ['pages', 'welcome', 'settings'] as const
 export const ConnectFrom = z.enum(CONNECT_FROM)
 export type ConnectFrom = z.infer<typeof ConnectFrom>
 
-/** Body của `POST /api/v1/connections/{facebook|threads}/start`. */
-export const StartConnectRequest = z.object({ from: ConnectFrom.default('pages') }).strict()
+/**
+ * Body của `POST /api/v1/connections/{facebook|threads}/start`. `pageId` (Story 2.4) = kết nối lại: luồng OAuth
+ * mang `intent=reconnect:<pageId>` và `auth_type=reauthorize`, callback cập nhật đúng dòng trang đó. Thiếu `pageId`
+ * = kết nối mới (`intent=connect`).
+ */
+export const StartConnectRequest = z.object({ from: ConnectFrom.default('pages'), pageId: z.uuid().optional() }).strict()
 export type StartConnectRequest = z.input<typeof StartConnectRequest>
 export const StartFacebookConnectRequest = StartConnectRequest
 export type StartFacebookConnectRequest = StartConnectRequest

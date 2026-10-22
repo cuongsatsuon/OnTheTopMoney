@@ -545,6 +545,33 @@ describe('POST /api/v1/connections/confirm (Threads)', () => {
   })
 })
 
+describe('kết nối lại Threads (Story 2.4)', () => {
+  const connectThreads = async () =>
+    ConfirmConnectionsResponse.parse((await confirm(await connect(), [FAKE_THREADS_USER.id])).json()).pages[0]!
+
+  it('start Threads với pageId → intent=reconnect:<id> và auth_type=reauthorize trên URL Threads', async () => {
+    const th = await connectThreads()
+    await app.close()
+    app = build(REAL_CONFIG)
+    const res = await api('POST', '/api/v1/connections/threads/start', { from: 'pages', pageId: th.id })
+    expect(res.statusCode).toBe(200)
+    const u = new URL(StartConnectResponse.parse(res.json()).url)
+    expect(u.origin + u.pathname).toBe('https://threads.com/oauth/authorize')
+    expect(u.searchParams.get('auth_type')).toBe('reauthorize')
+    const state = u.searchParams.get('state')!
+    const [row] = await handle.sql<{ intent: string }[]>`select intent from oauth_states where state = ${state}`
+    expect(row!.intent).toBe(`reconnect:${th.id}`)
+  })
+
+  it('pageId Threads gửi nhầm vào /facebook/start → 400 VALIDATION_FAILED, không tạo state', async () => {
+    const th = await connectThreads()
+    const res = await api('POST', '/api/v1/connections/facebook/start', { from: 'pages', pageId: th.id })
+    expect(res.statusCode).toBe(400)
+    expect(errorCode(res)).toBe('VALIDATION_FAILED')
+    expect(await handle.sql`select 1 from oauth_states where provider = 'facebook'`).toHaveLength(0)
+  })
+})
+
 async function sql_removed(id: string) {
   await handle.sql`update pages set removed_at = now(), connection_status = 'disconnected' where id = ${id}`
 }

@@ -31,3 +31,9 @@
 - source_spec: `spec-media-cloudinary.md`
   summary: Job CI tuỳ chọn chạy `runMediaCheck` với tài khoản Cloudinary thử (secret `CLOUDINARY_URL_TEST`).
   evidence: Fake ký bằng chính `signParams` của adapter; tải file `authenticated` qua API download chưa được kiểm với Cloudinary thật.
+- source_spec: `spec-2-4-han-token-va-ket-noi-lai.md`
+  summary: Thông báo bền (notification) khi trang `page.disconnected` — hiện chỉ phát realtime, chủ shop không có cảnh báo lưu lại cho ca khẩn nhất.
+  evidence: `events.notifications` subscribe `page.expiring` nhưng không `page.disconnected`; thêm cần enum NotificationType + prefs + FE. Làm khi mở rộng trung tâm thông báo.
+- source_spec: `spec-2-4-han-token-va-ket-noi-lai.md`
+  summary: Reconnect chặt: xác nhận account Meta vừa re-auth đúng là account của pageId đã bấm (lưu platform_account_id kỳ vọng vào intent, so ở confirm).
+  evidence: Hiện confirm khớp theo (platform, platformAccountId); nếu auth account khác thì cập nhật/ tạo dòng khác, pageId intent không được ép. App một chủ nên rủi ro thấp.

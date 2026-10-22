@@ -4,8 +4,9 @@ import { createLogger } from '../platform/log/index.ts'
 import { assertBossDbSupported, createDb, newId } from '../platform/db/index.ts'
 import { createEventPublisher, parseEventEnvelope } from '../platform/events/index.ts'
 import { QUEUES, createBoss, ensureQueues, isCriticalQueue, startWorkers } from '../platform/jobs/index.ts'
+import { createSecretCipher } from '../adapters/crypto/index.ts'
 import { gcReservations, handleAiEvent } from '../modules/ai/index.ts'
-import { cleanupExpiredOAuth } from '../modules/connections/index.ts'
+import { cleanupExpiredOAuth, createMetaClients, runTokenCheck } from '../modules/connections/index.ts'
 import { handleEvent } from '../modules/notifications/index.ts'
 import { HEARTBEAT_INTERVAL_MS, writeHeartbeat } from './heartbeat.ts'
 
@@ -16,6 +17,13 @@ const dbHandle = createDb(config.DATABASE_URL, { applicationName: 'ottm-worker',
 const boss = createBoss(config.DATABASE_URL, 'ottm-worker-boss')
 boss.on('error', (err) => logger.error({ err }, 'pg-boss lỗi'))
 const events = createEventPublisher(boss)
+// Làm mới / mã hoá token Meta trong cron `connections.token_check` (AD-5, AD-12). Dev không đặt khoá → null.
+const cipher =
+  config.APP_ENCRYPTION_KEYS && config.APP_ENCRYPTION_ACTIVE_KEY
+    ? createSecretCipher({ keys: config.APP_ENCRYPTION_KEYS, activeKeyId: config.APP_ENCRYPTION_ACTIVE_KEY })
+    : null
+// Client Threads (fake khi `META_FAKE=1`; undefined khi chưa cấu hình app Threads) để làm mới token Threads.
+const { threads } = createMetaClients({ config, db: dbHandle.db, log: logger.child({ component: 'meta' }) })
 
 let heartbeatTimer: NodeJS.Timeout | undefined
 let closing = false
@@ -60,6 +68,16 @@ try {
       'connections.oauth_gc': async () => {
         const removed = await cleanupExpiredOAuth(dbHandle.db)
         if (removed > 0) logger.info({ removed }, 'connections: đã dọn state/kết quả OAuth hết hạn')
+      },
+      'connections.token_check': async () => {
+        const { refreshed, expiring } = await runTokenCheck({
+          db: dbHandle.db,
+          events,
+          cipher,
+          threads,
+          log: logger.child({ component: 'token_check' }),
+        })
+        logger.info({ refreshed, expiring }, 'connections: kiểm hạn token xong')
       },
     },
     logger,

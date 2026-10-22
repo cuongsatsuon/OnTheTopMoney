@@ -25,6 +25,7 @@ import { and, eq, gt, lte } from 'drizzle-orm'
 import type { MetaClient, MetaFailure } from '../../adapters/meta/index.ts'
 import type { DbExecutor } from '../../platform/db/index.ts'
 import { AppError } from '../../platform/errors/index.ts'
+import { getPage } from '../pages/index.ts'
 import {
   buildCandidates,
   buildThreadsCandidate,
@@ -118,8 +119,12 @@ export async function deleteOAuthForSession(db: DbExecutor, sessionId: string): 
   await db.delete(oauthResults).where(eq(oauthResults.sessionId, sessionId))
 }
 
-/** `state` ngẫu nhiên (dùng một lần, TTL 15 phút) gắn với phiên, nền tảng và màn gốc. */
-async function createState(deps: ConnectionsDeps, provider: OAuthProvider, input: { sessionId: string; from: ConnectFrom }): Promise<string> {
+/** `state` ngẫu nhiên (dùng một lần, TTL 15 phút) gắn với phiên, nền tảng, màn gốc và ý định (`connect`/`reconnect:<id>`). */
+async function createState(
+  deps: ConnectionsDeps,
+  provider: OAuthProvider,
+  input: { sessionId: string; from: ConnectFrom; intent: string },
+): Promise<string> {
   if (!deps.cipher) throw new AppError('ENCRYPTION_NOT_CONFIGURED', 500, { message: 'APP_ENCRYPTION_KEYS chưa đặt' })
   const now = nowOf(deps)
   const state = randomBytes(32).toString('base64url')
@@ -128,20 +133,37 @@ async function createState(deps: ConnectionsDeps, provider: OAuthProvider, input
     state,
     provider,
     sessionId: input.sessionId,
-    intent: 'connect',
+    intent: input.intent,
     returnTo: input.from,
     expiresAt: new Date(now.getTime() + OAUTH_TTL_MS),
   })
   return state
 }
 
+/**
+ * Ý định của luồng (Story 2.4). Có `pageId` → kết nối lại: trang phải tồn tại (chưa gỡ), và nền tảng của trang phải
+ * khớp endpoint (Threads qua `/threads/start`, Facebook/Instagram qua `/facebook/start`) — lệch thì từ chối, không
+ * bắt đầu OAuth (không tạo `state`). Trả `reconnect:<pageId>`; thiếu `pageId` → `connect`.
+ */
+async function resolveIntent(deps: ConnectionsDeps, provider: OAuthProvider, pageId: string | undefined): Promise<string> {
+  if (!pageId) return 'connect'
+  const page = await getPage(deps.db, pageId)
+  if (!page) throw new AppError('NOT_FOUND', 404, { message: 'Trang không tồn tại hoặc đã gỡ' })
+  const pageProvider: OAuthProvider = page.platform === 'threads' ? 'threads' : 'facebook'
+  if (pageProvider !== provider) {
+    throw new AppError('VALIDATION_FAILED', 400, { message: 'Nền tảng của trang không khớp luồng kết nối lại' })
+  }
+  return `reconnect:${pageId}`
+}
+
 export async function startFacebookOAuth(
   deps: ConnectionsDeps,
-  input: { sessionId: string; from: ConnectFrom },
+  input: { sessionId: string; from: ConnectFrom; pageId?: string | undefined },
 ): Promise<{ url: string }> {
   const app = appCredentials(deps.config)
   if (!app) throw new AppError('META_NOT_CONFIGURED', 500, { message: 'META_APP_ID / META_APP_SECRET chưa đặt' })
-  const state = await createState(deps, 'facebook', input)
+  const intent = await resolveIntent(deps, 'facebook', input.pageId)
+  const state = await createState(deps, 'facebook', { ...input, intent })
 
   // Trang đồng ý giả nằm ở host api (web có thể ở host khác) → URL tuyệt đối.
   if (deps.config.META_FAKE) return { url: `${deps.config.PUBLIC_BASE_URL}${FACEBOOK_FAKE_CONSENT_PATH}?${new URLSearchParams({ state })}` }
@@ -151,6 +173,8 @@ export async function startFacebookOAuth(
   url.searchParams.set('redirect_uri', facebookRedirectUri(deps.config))
   url.searchParams.set('state', state)
   url.searchParams.set('response_type', 'code')
+  // Kết nối lại: buộc Meta hiện lại màn đồng ý để chủ shop cấp lại/đủ quyền (AD-23).
+  if (input.pageId) url.searchParams.set('auth_type', 'reauthorize')
   if (deps.config.META_LOGIN_CONFIG_ID) url.searchParams.set('config_id', deps.config.META_LOGIN_CONFIG_ID)
   else url.searchParams.set('scope', META_LOGIN_SCOPES.join(','))
   return { url: url.toString() }
@@ -159,11 +183,12 @@ export async function startFacebookOAuth(
 /** Bắt đầu OAuth Threads (app Threads riêng). Thiếu cặp `THREADS_APP_ID/SECRET` và không bật giả → `META_NOT_CONFIGURED`. */
 export async function startThreadsOAuth(
   deps: ConnectionsDeps,
-  input: { sessionId: string; from: ConnectFrom },
+  input: { sessionId: string; from: ConnectFrom; pageId?: string | undefined },
 ): Promise<{ url: string }> {
   const app = threadsApp(deps)
   if (!app) throw new AppError('META_NOT_CONFIGURED', 500, { message: 'THREADS_APP_ID / THREADS_APP_SECRET chưa đặt' })
-  const state = await createState(deps, 'threads', input)
+  const intent = await resolveIntent(deps, 'threads', input.pageId)
+  const state = await createState(deps, 'threads', { ...input, intent })
 
   if (deps.config.META_FAKE) return { url: `${deps.config.PUBLIC_BASE_URL}${THREADS_FAKE_CONSENT_PATH}?${new URLSearchParams({ state })}` }
 
@@ -173,6 +198,7 @@ export async function startThreadsOAuth(
   url.searchParams.set('scope', THREADS_LOGIN_SCOPES.join(','))
   url.searchParams.set('response_type', 'code')
   url.searchParams.set('state', state)
+  if (input.pageId) url.searchParams.set('auth_type', 'reauthorize')
   return { url: url.toString() }
 }
 

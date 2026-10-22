@@ -206,4 +206,12 @@ export function programThreads(threads: FakeMetaClient, now: () => Date = () => 
   threads.on('GET', '/me', (call: FakeMetaCall) =>
     threadsVariantOf(call.options.token, 'LONG') ? { ok: true, data: { ...FAKE_THREADS_USER } } : rejected(),
   )
+
+  // Story 2.4: làm mới token dài hạn (`th_refresh_token`). Token không phải token dài hạn hợp lệ → 190 TOKEN_INVALID.
+  threads.on('GET', '/refresh_access_token', (call: FakeMetaCall) => {
+    if (call.options.params?.grant_type !== 'th_refresh_token') return rejected(100)
+    const variant = threadsVariantOf(call.options.token, 'LONG')
+    if (!variant) return rejected()
+    return { ok: true, data: { access_token: `FAKE_TH_LONG_${variant}_${rand()}`, token_type: 'bearer', expires_in: FAKE_THREADS_LONG_TTL_S } }
+  })
 }

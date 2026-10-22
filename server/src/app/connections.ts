@@ -28,13 +28,13 @@ function sessionIdOf(req: FastifyRequest): string {
 
 export function registerConnections(app: FastifyInstance, deps: ConnectionsDeps): void {
   app.post('/api/v1/connections/facebook/start', async (req): Promise<StartConnectResponse> => {
-    const { from } = StartConnectRequest.parse(req.body ?? {})
-    return startFacebookOAuth(deps, { sessionId: sessionIdOf(req), from })
+    const { from, pageId } = StartConnectRequest.parse(req.body ?? {})
+    return startFacebookOAuth(deps, { sessionId: sessionIdOf(req), from, pageId })
   })
 
   app.post('/api/v1/connections/threads/start', async (req): Promise<StartConnectResponse> => {
-    const { from } = StartConnectRequest.parse(req.body ?? {})
-    return startThreadsOAuth(deps, { sessionId: sessionIdOf(req), from })
+    const { from, pageId } = StartConnectRequest.parse(req.body ?? {})
+    return startThreadsOAuth(deps, { sessionId: sessionIdOf(req), from, pageId })
   })
 
   app.get('/api/v1/connections/oauth-results/:id', async (req): Promise<OAuthResultResponse> => {
