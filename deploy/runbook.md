@@ -1,6 +1,6 @@
 # Runbook vận hành OnTheTopMoney (một VPS, Docker Compose)
 
-Tài liệu này đủ để dựng app trên một VPS mới, triển khai, quay lại bản cũ, sao lưu và khôi phục mà không cần đọc mã.
+Tài liệu này đủ để dựng app trên một VPS mới, triển khai, quay lại bản cũ và sao lưu tay mà không cần đọc mã.
 Mọi lệnh `docker compose …` chạy trong thư mục `deploy/` của repo trên VPS (ví dụ `~/OnTheTopMoney/deploy`).
 
 ## Kiến trúc trong một hình
@@ -11,8 +11,10 @@ Internet ──80/443──> nginx (máy chủ, bạn tự quản, TLS certbot, 
                        └──> 127.0.0.1:3000 ──> api (docker compose) ──> postgres
                                                   └──> (Meta, OpenAI, Cloudinary)   worker ──> postgres
 Ảnh/file ──> Cloudinary (ảnh công khai: https://res.cloudinary.com/…; file riêng tư: chỉ server tải qua API có chữ ký)
-backup (chạy theo cron) ──> pg_dump ──restic, mã hoá──> kho S3 khác nhà cung cấp
 ```
+
+**Không có backup tự động.** Không có gì tự sao lưu DB: VPS hỏng/mất là mất dữ liệu từ lần `pg_dump` tay gần nhất
+(mục 4). Tự quyết lịch sao lưu tay và nơi cất file dump (ngoài VPS).
 
 Đây là chế độ mặc định `COMPOSE_PROFILES=web` (web + api cùng VPS, cùng tên miền). Chế độ thứ hai — web tĩnh trên
 Hostinger, VPS chỉ chạy BE (`COMPOSE_PROFILES=` để trống) — xem mục 8; các mục 1–7 vẫn áp dụng, trừ chỗ mục 8 ghi khác.
@@ -28,9 +30,8 @@ cấu hình `deploy/nginx.conf.example`; docker compose không cài, không sử
 | `api` | REST, SSE, webhook, OAuth | `127.0.0.1:API_HOST_PORT` (chỉ máy chủ) |
 | `worker` | job nền, cron | không |
 | `postgres` | Postgres 18, dữ liệu ở volume `pgdata` | không |
-| `backup`, `restore` | chỉ chạy khi gọi (`docker compose run`) | không |
 
-Dữ liệu: volume Docker `pgdata` (DB), `restic_cache`. Ảnh (bài đăng, logo) và file (kho kiến thức, đính kèm) nằm trên
+Dữ liệu: volume Docker `pgdata` (DB). Ảnh (bài đăng, logo) và file (kho kiến thức, đính kèm) nằm trên
 **Cloudinary** (mục 1.5), không lưu trên máy chủ. Build web nằm trong image `ottm-web:<tag>` (không có thư mục web trên
 máy chủ). Chứng chỉ TLS ở `/etc/letsencrypt` (certbot).
 
@@ -39,7 +40,7 @@ của compose; `deploy/.env` đặt sẵn `COMPOSE_PROFILES=web`, nên mọi l�
 như mọi service khác:
 
 - `docker compose up -d --build` build và chạy cả api, worker, migrate, postgres **và web**.
-- `IMAGE_TAG` (trong `deploy/.env`, mặc định `latest`) là tag của cả ba image `ottm-server`, `ottm-web`, `ottm-backup`.
+- `IMAGE_TAG` (trong `deploy/.env`, mặc định `latest`) là tag của cả hai image `ottm-server`, `ottm-web`.
   **Build lại cùng tag ghi đè image cũ** → không quay lại được bản trước. Muốn rollback được: mỗi lần lên bản mới đặt
   tag mới (mục 2), rollback = đổi `IMAGE_TAG` về tag cũ rồi `docker compose up -d` (không `--build`, mục 3).
 - `ps`, `logs`, `restart`, `down` cũng tính cả web. Thiếu dòng `COMPOSE_PROFILES=web` (file `.env` cũ) thì các lệnh
@@ -54,7 +55,6 @@ như mọi service khác:
 
 - VPS Ubuntu 24.04 (hoặc Debian 12+), tối thiểu 2 vCPU, 4 GB RAM, 40 GB SSD. RAM 2 GB thì thêm 2 GB swap (build web cần bộ nhớ).
 - Một tên miền, ví dụ `app.example.com`.
-- Một bucket riêng tư ở **nhà cung cấp khác VPS** cho backup (ví dụ Backblaze B2) và một application key chỉ có quyền trên bucket đó.
 - Một trình quản lý mật khẩu để cất các bí mật ở mục 1.4.
 
 ### 1.2 DNS
@@ -115,9 +115,6 @@ nano .env
 | `API_HOST_PORT` | mặc định `3000`; đổi nếu cổng này đã có dịch vụ khác trên máy (nhớ đổi cả `upstream ottm_api` trong nginx) |
 | `WEB_HOST_PORT` | mặc định `3080` (container web, chỉ `127.0.0.1`); đổi nếu bận (nhớ đổi cả `upstream ottm_web` trong nginx); phải khác `API_HOST_PORT` |
 | `POSTGRES_PASSWORD` | `openssl rand -hex 24` |
-| `RESTIC_REPOSITORY` | ví dụ `s3:s3.us-west-004.backblazeb2.com/ten-bucket/ottm` |
-| `RESTIC_PASSWORD` | `openssl rand -base64 32` |
-| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | keyID và applicationKey của B2 |
 | `META_APP_ID`, `META_APP_SECRET`, `META_APP_ENV` | để trống tới khi kết nối Facebook/Instagram; khi đặt thì cả ID lẫn secret, `META_APP_ENV=live` (app không khởi động với Meta Test App) |
 | `THREADS_APP_ID`, `THREADS_APP_SECRET`, `THREADS_APP_ENV` | đặt cả cặp hoặc để trống cả hai; khi đặt thì `THREADS_APP_ENV=live` |
 | `APP_ENCRYPTION_KEYS` | **bắt buộc** — `echo "k1:$(openssl rand -base64 32)"` (dạng `<keyId>:<base64 32 byte>`, nhiều khoá phẩy ngăn cách) |
@@ -132,10 +129,9 @@ Xem bằng `docker compose logs api`.
 chỉ bỏ khoá cũ khỏi danh sách khi chắc không còn bản ghi nào dùng nó (nếu bỏ sớm: nhập lại khoá OpenAI ở
 Cài đặt).
 
-**Cất riêng, ngoài VPS** (trình quản lý mật khẩu), vì backup không chứa chúng:
+**Cất riêng, ngoài VPS** (trình quản lý mật khẩu) — mất VPS là mất chúng:
 
 - `APP_ENCRYPTION_KEYS` và `APP_ENCRYPTION_ACTIVE_KEY` — mất thì khoá OpenAI và token Meta trong DB không giải mã được.
-- `RESTIC_PASSWORD`, `RESTIC_REPOSITORY`, khoá B2 — mất `RESTIC_PASSWORD` là không mở được bản backup nào.
 - `POSTGRES_PASSWORD`, các app secret của Meta/Threads, `CLOUDINARY_URL`.
 
 Cách đơn giản: lưu cả nội dung `deploy/.env` thành một mục trong trình quản lý mật khẩu, cập nhật mỗi khi sửa.
@@ -143,7 +139,7 @@ Cách đơn giản: lưu cả nội dung `deploy/.env` thành một mục trong 
 ### 1.5 Cloudinary (ảnh và file)
 
 Ảnh bài đăng, logo (công khai) và file kho kiến thức, đính kèm của khách (riêng tư) lưu trên Cloudinary — không có
-thư mục media nào trên máy chủ, nginx không phục vụ `/media`, backup (mục 1.9) chỉ gồm DB.
+thư mục media nào trên máy chủ, nginx không phục vụ `/media`. Hệ thống không có backup tự động (sao lưu tay DB: mục 4).
 
 1. Tạo tài khoản ở <https://cloudinary.com> (gói Free đủ để bắt đầu; giới hạn mỗi file 10 MB). Nên dùng **một tài
    khoản riêng cho production**, dev dùng tài khoản khác (hoặc ít nhất `CLOUDINARY_FOLDER` khác).
@@ -170,7 +166,7 @@ thư mục media nào trên máy chủ, nginx không phục vụ `/media`, backu
    trên trình duyệt). Dòng `LỖI` kèm gợi ý: `AUTH_FAILED` = sai `CLOUDINARY_URL`; `TẢI ĐƯỢC bằng URL thường` = file riêng
    tư bị lộ — kiểm Console › Settings › Security (không bật cho phép giao file "authenticated" không chữ ký).
    Khi dev: `npm run media:check -w server` (đọc `server/.env`).
-4. **Sao lưu media:** backup restic của app **không** gồm ảnh/file (chỉ DB). Bật backup của Cloudinary: Console ›
+4. **Sao lưu media:** hệ thống không sao lưu ảnh/file (file dump tay ở mục 4 chỉ có DB). Bật backup của Cloudinary: Console ›
    Settings › Upload (hoặc *Backup*) › bật **Automatic backup** (tuỳ gói; gói Free có thể không có — khi đó ảnh/file chỉ
    có một bản trên Cloudinary). Xoá tài khoản/thư mục trên Cloudinary là mất ảnh/file vĩnh viễn.
 5. Cloudinary là bên xử lý dữ liệu của bạn: file kho kiến thức và đính kèm của khách nằm ở đó (dạng `authenticated`,
@@ -250,7 +246,7 @@ docker compose up -d --build
 docker compose ps                     # migrate: Exited (0); api, web: healthy; worker, postgres: running
 ```
 
-`docker compose up` build ba image (`ottm-server`, `ottm-web`, `ottm-backup`) theo `IMAGE_TAG`, chạy `migrate` một lần
+`docker compose up` build hai image (`ottm-server`, `ottm-web`) theo `IMAGE_TAG`, chạy `migrate` một lần
 rồi `api`, `worker`, `web`. Lần đầu mất vài phút (build). `migrate` lỗi → api/worker không chạy: xem
 `docker compose logs migrate`.
 
@@ -278,54 +274,7 @@ docker compose run --rm api node scripts/set-password.ts
 Nhập mật khẩu hai lần (ít nhất 12 ký tự). Đặt lại bất kỳ lúc nào bằng cùng lệnh; mọi phiên cũ bị đăng xuất.
 Mở `https://app.example.com` → màn đăng nhập → nhập mật khẩu.
 
-### 1.9 Khởi tạo kho backup và cron
-
-```bash
-cd ~/OnTheTopMoney/deploy
-docker compose run --rm --entrypoint restic backup init     # một lần duy nhất cho kho mới
-docker compose run --rm backup                              # chạy thử một bản
-docker compose run --rm --entrypoint restic backup snapshots
-```
-
-Cron hằng đêm (cron của máy chủ, giờ theo múi giờ VPS — Ubuntu mặc định UTC; 19:30 UTC = 02:30 giờ Việt Nam):
-
-```bash
-crontab -e      # với người dùng deploy
-```
-
-**Bắt buộc: báo động khi backup không chạy (dead-man ping).** Backup lỗi không tự báo ai; nếu thiếu bước này,
-backup có thể hỏng nhiều tuần mà không ai biết. Tạo một check ở healthchecks.io (hoặc Better Stack heartbeat, Cronitor…):
-chu kỳ 1 ngày, grace 2 giờ, gửi báo động qua email/Telegram. Lấy URL ping (vd `https://hc-ping.com/<uuid>`), rồi:
-
-```cron
-30 19 * * * cd $HOME/OnTheTopMoney/deploy && docker compose run --rm -T backup >> $HOME/ottm-backup.log 2>&1 && curl -fsS -m 10 --retry 3 https://hc-ping.com/<uuid> > /dev/null
-```
-
-Chỉ khi backup thành công mới ping; không nhận ping sau ~26 giờ → dịch vụ báo bạn. Thử ngay: chạy dòng lệnh trên
-bằng tay một lần và kiểm check chuyển sang "up".
-
-Xoay vòng log backup (không thì `~/ottm-backup.log` lớn mãi) — tạo `/etc/logrotate.d/ottm-backup`:
-
-```bash
-sudo tee /etc/logrotate.d/ottm-backup > /dev/null <<'CONF'
-/home/deploy/ottm-backup.log {
-    su deploy deploy
-    weekly
-    rotate 8
-    compress
-    delaycompress
-    missingok
-    notifempty
-    copytruncate
-}
-CONF
-sudo logrotate --debug /etc/logrotate.d/ottm-backup     # kiểm cú pháp
-```
-
-Mỗi lần backup: `pg_dump -Fc` toàn bộ DB (ảnh/file nằm trên Cloudinary — không nằm trong backup này, mục 1.5 bước 4), restic mã hoá trên VPS rồi đẩy lên kho, giữ 14 bản hằng ngày
-(`restic forget --keep-daily 14 --prune`), rồi `restic check`. Lỗi bất kỳ → exit ≠ 0 và không xoá bản cũ.
-
-### 1.10 Uptime ping ngoài
+### 1.9 Uptime ping ngoài
 
 Tạo một monitor HTTP ở dịch vụ bên ngoài (UptimeRobot, Better Stack, …):
 
@@ -336,7 +285,7 @@ Tạo một monitor HTTP ở dịch vụ bên ngoài (UptimeRobot, Better Stack,
   - `"disk":"full"` — đĩa dùng >85%: xem mục 5.
   - `"disk":"unknown"` không gây 503 (không đo được đĩa), nhưng nên xem log api.
 
-### 1.11 Máy đã chạy bản cũ (reverse proxy trong compose, media trong volume Docker)
+### 1.10 Máy đã chạy bản cũ (reverse proxy trong compose, media trong volume Docker)
 
 Chỉ cần nếu VPS từng chạy bản stack có container reverse proxy riêng giữ cổng 80/443 và media trong volume `ottm_media`.
 Làm một lần, trước mục 1.6:
@@ -350,19 +299,19 @@ Rồi làm mục 1.5 (Cloudinary), 1.6 và 1.7. Ảnh cũ trong volume `ottm_med
 động lên Cloudinary (chưa có tính năng nào dùng media trước mốc này). Khi app chạy ổn: `docker volume rm ottm_media` và
 xoá image cũ của proxy (`docker image ls`, `docker image rm <tên>:<tag>`).
 
-### 1.12 Máy đã chạy bản web chép ra thư mục máy chủ (`/var/www/ottm/current`)
+### 1.11 Máy đã chạy bản web chép ra thư mục máy chủ (`/var/www/ottm/current`)
 
 Chỉ cần nếu VPS từng chạy bản mà script deploy cũ chép build web ra `/var/www/ottm/<tag>` và nginx phục vụ
 `root /var/www/ottm/current`. Nay web là service Docker `web`; làm một lần.
 
 **Đọc trước bước 2:** sau lần lên bản đầu theo cách mới, **không** rollback được về bất kỳ tag nào trước đó (image
 `ottm-web` cũ chỉ mang build web, không chạy được như service). Nếu phải lùi: checkout commit cũ, đổi lại site nginx
-cũ (`root /var/www/ottm/current`, giữ thư mục `/var/www/ottm` tới khi chắc chắn); hoặc khôi phục backup (mục 4.2).
+cũ (`root /var/www/ottm/current`, giữ thư mục `/var/www/ottm` tới khi chắc chắn); hoặc khôi phục file `pg_dump` tay (mục 4).
 Ghi lại tag đang chạy (`grep '^IMAGE_TAG=' deploy/.env`) trước khi bắt đầu.
 
 1. `git pull`. Thêm `WEB_HOST_PORT=3080` và `COMPOSE_PROFILES=web` vào `deploy/.env` (kiểm cổng bận như mục 1.7).
    Dòng đường dẫn thư mục web cũ (`/var/www/ottm`) và dòng chọn chế độ web cũ (giá trị `vps`) trong `deploy/.env` không còn dùng — xoá được.
-2. Sao lưu rồi lên bản mới với tag mới (mục 2). Container web chạy ở `127.0.0.1:3080`, nhưng site nginx cũ **vẫn phục
+2. Sao lưu tay (mục 4) rồi lên bản mới với tag mới (mục 2). Container web chạy ở `127.0.0.1:3080`, nhưng site nginx cũ **vẫn phục
    vụ web cũ** từ `/var/www/ottm/current` (web cũ chạy với api mới). **Làm bước 3 ngay.**
 3. Sửa site nginx theo `deploy/nginx.conf.example` mới (hoặc chép lại từ mẫu như mục 1.6 và thay giá trị):
    - thêm khối `upstream ottm_web { server 127.0.0.1:3080; keepalive 8; }`;
@@ -376,7 +325,7 @@ Ghi lại tag đang chạy (`grep '^IMAGE_TAG=' deploy/.env`) trước khi bắt
 5. Chỉ rollback tới các tag lên **sau** bước 2 (xem cảnh báo đầu mục). Image cũ tự xoá bằng tay khi không cần
    (`docker image rm ottm-web:<tag-cũ>`).
 
-### 1.13 Máy đã chạy bản lưu media trên máy chủ (`/var/lib/ottm/media`, `/media` qua nginx)
+### 1.12 Máy đã chạy bản lưu media trên máy chủ (`/var/lib/ottm/media`, `/media` qua nginx)
 
 Chỉ cần nếu `deploy/.env` còn dòng đường dẫn thư mục media (`…=/var/lib/ottm/media`) hoặc site nginx còn khối
 `location` phục vụ `/media/`. Nay ảnh/file lưu trên Cloudinary; làm một lần:
@@ -392,8 +341,6 @@ Chỉ cần nếu `deploy/.env` còn dòng đường dẫn thư mục media (`�
    `docker compose exec api npm run media:check` (trong `deploy/`).
 4. Thư mục media cũ (`/var/lib/ottm/media`) **không** tự bị xoá. Chưa có tính năng nào ghi vào đó trước mốc này;
    xem nó rỗng (`sudo ls -A /var/lib/ottm/media`) rồi tự xoá khi chắc chắn: `sudo rm -rf /var/lib/ottm/media`.
-5. Backup: từ đây snapshot restic chỉ có DB. Snapshot cũ (có cả thư mục media) vẫn khôi phục được — `restore` chỉ lấy
-   phần DB, bỏ qua media (mục 4.2).
 ---
 
 ## 2. Triển khai bản mới
@@ -403,7 +350,7 @@ Làm theo thứ tự (trong `~/OnTheTopMoney/deploy`):
 ```bash
 cd ~/OnTheTopMoney && git pull && cd deploy
 grep '^IMAGE_TAG=' .env                     # 1. ghi lại tag đang chạy — để rollback (mục 3)
-docker compose run --rm backup              # 2. sao lưu trước — migration chỉ tiến (bắt buộc khi bản mới có migration)
+# 2. NÊN sao lưu tay trước — migration chỉ tiến (rất nên khi bản mới có migration): lệnh pg_dump ở mục 4.1
 new=$(git rev-parse --short HEAD)           # 3. tag MỚI (git SHA ngắn, hoặc v1, v2, …) — KHÔNG dùng lại tag cũ
 sed -i "s/^IMAGE_TAG=.*/IMAGE_TAG=$new/" .env
 docker compose up -d --build                # 4. build + chạy: migrate → api, worker, web cùng sang tag mới
@@ -415,20 +362,20 @@ mở `https://app.example.com` trên trình duyệt và đăng nhập).
 
 - **Tag mới mỗi lần, ghi vào `.env`.** Build lại với `IMAGE_TAG` đang có ghi đè image của tag đó — mất đường quay về.
   Gõ `IMAGE_TAG=v3 docker compose up -d --build` (không sửa `.env`) cũng được, nhưng mọi lệnh compose sau đó không kèm
-  biến (restart, `up -d`, backup) lại dùng tag cũ trong `.env` → quay ngược bản. Luôn sửa dòng `IMAGE_TAG=` trong `.env`. Bản mới có
-  migration (thư mục `server/drizzle/` đổi: `git diff --stat <commit-cũ> HEAD -- server/drizzle`) thì **luôn** sao lưu
-  ở bước 2 trước; backup lỗi → dừng, sửa backup trước (mục 4).
+  biến (restart, `up -d`) lại dùng tag cũ trong `.env` → quay ngược bản. Luôn sửa dòng `IMAGE_TAG=` trong `.env`. Bản mới có
+  migration (thư mục `server/drizzle/` đổi: `git diff --stat <commit-cũ> HEAD -- server/drizzle`) thì nên `pg_dump`
+  tay ở bước 2 (mục 4.1) và chép file ra ngoài VPS trước — không có bản sao tự động nào để quay về.
 - Build lỗi → `docker compose up` dừng trước khi thay container: stack đang chạy giữ nguyên bản cũ; đặt lại
   `IMAGE_TAG` cũ trong `.env` cho khớp.
 - Migration chạy trước api/worker (`depends_on`); chỉ tiến, tương thích ngược một phiên bản. `migrate` lỗi →
   `docker compose up` báo lỗi và không đưa api/worker lên bản mới: xem `docker compose logs migrate`, rồi rollback
-  (mục 3) hoặc khôi phục backup (mục 4.2).
+  (mục 3) hoặc khôi phục file dump tay (mục 4.2).
 - Container web được thay trong khoảng một giây — trong lúc đó nginx trả `502 web unavailable` cho trang web (trình
   duyệt tải lại là xong); không cần reload nginx.
-- `/healthz` 503: xem body (mục 1.10). `"disk":"full"` → xử lý ngay (mục 5).
+- `/healthz` 503: xem body (mục 1.9). `"disk":"full"` → xử lý ngay (mục 5).
 - Đổi `API_HOST_PORT`/`WEB_HOST_PORT` → kiểm cổng bận trước (mục 1.7).
 - Dọn image cũ thỉnh thoảng (giữ vài tag gần nhất để rollback): `docker image ls 'ottm-*'`, rồi
-  `docker image rm ottm-server:<tag> ottm-web:<tag> ottm-backup:<tag>` — đừng xoá tag đang chạy.
+  `docker image rm ottm-server:<tag> ottm-web:<tag>` — đừng xoá tag đang chạy.
 
 ## 3. Rollback
 
@@ -443,65 +390,52 @@ docker compose ps
 
 Không build lại; api, worker và web cùng về `<tag-cũ>`. Kiểm như mục 1.7. Thiếu `ottm-server:<tag>` hoặc
 `ottm-web:<tag>` (đã xoá, hoặc tag đã bị build đè) → compose sẽ build lại từ mã đang checkout, **không** phải bản cũ:
-khi đó `git checkout <commit-cũ>` rồi `docker compose up -d --build` với tag đó. Image `ottm-web` của bản trước mục 1.12
+khi đó `git checkout <commit-cũ>` rồi `docker compose up -d --build` với tag đó. Image `ottm-web` của bản trước mục 1.11
 (chỉ mang build web, không có nhãn `org.ottm.web=nginx` — xem `docker image inspect ottm-web:<tag> --format '{{json .Config.Labels}}'`)
 không chạy được — không rollback qua mốc đó.
 Migration chỉ tiến: image cũ chạy được trên schema mới hơn **một** phiên bản. Nếu cần lùi qua nhiều bản có đổi schema,
-khôi phục backup (mục 4.2) thay vì rollback.
+khôi phục file dump tay chụp trước bản đó (mục 4.2) thay vì rollback.
 
-## 4. Sao lưu và khôi phục
+## 4. Sao lưu tay (tuỳ chọn)
 
-### 4.1 Xem bản backup
+**Hệ thống không có backup tự động.** Không có job, cron hay kho sao lưu nào: DB chỉ nằm trong volume `pgdata` trên
+VPS. Muốn có bản sao thì tự chạy `pg_dump` dưới đây (vd trước mỗi lần lên bản có migration, và định kỳ theo ý bạn),
+rồi **chép file ra ngoài VPS** — file chỉ nằm trên VPS thì mất cùng VPS. Ảnh/file nằm trên Cloudinary, không có trong
+file dump (mục 1.5 bước 4).
+
+### 4.1 Sao lưu DB ra file
 
 ```bash
 cd ~/OnTheTopMoney/deploy
-docker compose run --rm --entrypoint restic backup snapshots
-tail -n 50 ~/ottm-backup.log
+install -d -m 700 ~/ottm-dumps
+docker compose exec -T postgres pg_dump -U ottm -d ottm -Fc > ~/ottm-dumps/ottm-$(date +%F-%H%M).dump
+ls -lh ~/ottm-dumps                                     # file phải > 0 byte
+# chép về máy khác (chạy ở máy đó):  scp deploy@<ip-vps>:ottm-dumps/ottm-<ngày>.dump .
 ```
 
-### 4.2 Khôi phục trên VPS đang chạy (ghi đè DB)
+File dump chứa toàn bộ dữ liệu khách (tin nhắn, SĐT…) — cất ở chỗ riêng tư như mật khẩu. Khoá OpenAI và token Meta
+trong đó đã mã hoá bằng `APP_ENCRYPTION_KEYS`: khôi phục ở máy khác cần đúng khoá đó (mục 1.4).
+
+### 4.2 Khôi phục DB từ file (ghi đè DB đang chạy)
 
 ```bash
 cd ~/OnTheTopMoney/deploy
 docker compose stop api worker
-docker compose run --rm restore latest --yes        # hoặc thay latest bằng ID snapshot
-docker compose up -d
+docker compose exec -T postgres psql -U ottm -d ottm -v ON_ERROR_STOP=1 \
+  -c 'drop schema if exists public cascade; drop schema if exists drizzle cascade; drop schema if exists pgboss cascade; create schema public;'
+docker compose exec -T postgres pg_restore -U ottm -d ottm --no-owner --no-privileges --single-transaction --exit-on-error \
+  < ~/ottm-dumps/ottm-<ngày>.dump
+docker compose up -d                                    # chạy lại migrate: đưa schema của file dump lên bản đang chạy
 curl -s https://app.example.com/healthz
 ```
 
-`restore` kiểm trước khi đụng vào bất cứ thứ gì: không còn phiên của api/worker trên DB (quên `stop` → dừng và báo),
-đủ đĩa trống để giải nén snapshot, snapshot có file dump. Sau đó xoá và tạo lại các schema của app
-(`public`, `drizzle`, `pgboss`) rồi nạp dump trong **một transaction** (lỗi → DB giữ nguyên).
-Chỉ DB được khôi phục: ảnh/file nằm trên Cloudinary, không nằm trong backup (mục 1.5 bước 4). Snapshot cũ từ trước khi
-chuyển sang Cloudinary có cả thư mục media — `restore` chỉ lấy phần DB, bỏ qua media. Cờ `--db-only` cũ vẫn được nhận
-(không còn tác dụng). DB khôi phục về thời điểm cũ có thể trỏ tới ảnh/file đã bị xoá trên Cloudinary sau thời điểm đó.
-Sau khôi phục, `docker compose up -d` chạy lại `migrate`, đưa schema từ thời điểm snapshot lên bản đang chạy.
-`docker compose up -d` (có `COMPOSE_PROFILES=web`) cũng đưa container web lên lại nếu nó đã dừng; web không dùng DB nên khôi phục không ảnh hưởng nó.
+Lệnh `drop schema` xoá **toàn bộ** dữ liệu hiện có trước khi nạp file — chắc chắn đúng file trước khi chạy. Nạp lỗi
+giữa chừng → DB trống (không phải dữ liệu cũ): chạy lại `pg_restore` với file khác. DB về thời điểm cũ có thể trỏ tới
+ảnh/file đã bị xoá trên Cloudinary sau thời điểm đó.
 
-### 4.3 Khôi phục sang VPS mới (máy cũ mất)
-
-1. Làm mục 1.1–1.6 trên VPS mới, dùng **lại** `deploy/.env` đã cất (cùng `APP_ENCRYPTION_KEYS`, `RESTIC_*`,
-   `CLOUDINARY_URL` — ảnh/file vẫn ở Cloudinary, không cần chuyển).
-   Đổi DNS sang IP mới (trước khi lấy chứng chỉ ở 1.6).
-2. Mục 1.7 (tạo DB rỗng và chạy stack; dùng đúng `IMAGE_TAG` trong `.env` đã cất hoặc tag mới).
-3. Mục 4.2 (stop api worker → restore → up).
-4. Không chạy `restic init` (kho đã có). Bật lại cron (1.9) và uptime ping (1.10).
-
-### 4.4 Diễn tập khôi phục (trước go-live và mỗi quý)
-
-Khôi phục vào database phụ, không đụng dữ liệu đang chạy:
-
-```bash
-cd ~/OnTheTopMoney/deploy
-docker compose exec postgres createdb -U ottm ottm_drill
-docker compose run --rm \
-  -e RESTORE_DATABASE_URL="postgres://ottm:$(grep '^POSTGRES_PASSWORD=' .env | cut -d= -f2-)@postgres:5432/ottm_drill" \
-  restore latest --yes
-docker compose exec postgres psql -U ottm -d ottm_drill -c '\dt'
-docker compose exec postgres dropdb -U ottm ottm_drill
-```
-
-Ghi lại ngày diễn tập và thời gian khôi phục.
+**Sang VPS mới (máy cũ mất):** làm mục 1.1–1.7 trên VPS mới với **đúng** `deploy/.env` đã cất (cùng
+`APP_ENCRYPTION_KEYS`, `CLOUDINARY_URL` — ảnh/file vẫn ở Cloudinary), đổi DNS sang IP mới (trước khi lấy chứng chỉ ở
+1.6), chép file dump lên rồi làm 4.2. Bật lại uptime ping (1.9).
 
 ## 5. Vận hành hằng ngày
 
@@ -791,14 +725,13 @@ Xong thì bỏ các dòng trên khỏi `server/.env` để quay lại dev thư�
 | Việc | Lệnh (trong `deploy/` trừ khi ghi khác) |
 |---|---|
 | Kiểm cổng bận | `sudo ss -ltnp '( sport = :3000 or sport = :3080 )'` (lần đầu / khi đổi cổng) |
-| Lên bản mới | `git pull`, `docker compose run --rm backup`, đặt `IMAGE_TAG=<tag-mới>` trong `.env`, `docker compose up -d --build` (mục 2) |
+| Lên bản mới | `git pull`, `pg_dump` tay (mục 4.1), đặt `IMAGE_TAG=<tag-mới>` trong `.env`, `docker compose up -d --build` (mục 2) |
 | Rollback | đặt `IMAGE_TAG=<tag-cũ>` trong `.env`, `docker compose up -d` (không `--build`, mục 3) |
 | Kiểm / nạp lại nginx | `sudo nginx -t && sudo systemctl reload nginx` (chỉ khi sửa cấu hình nginx) |
 | Đặt mật khẩu | `docker compose run --rm api node scripts/set-password.ts` |
 | Kiểm Cloudinary | `docker compose exec api npm run media:check` (mục 1.5) |
-| Backup ngay (chỉ DB) | `docker compose run --rm backup` |
-| Xem snapshot | `docker compose run --rm --entrypoint restic backup snapshots` |
-| Khôi phục | `docker compose stop api worker && docker compose run --rm restore latest --yes && docker compose up -d` (web không bị đụng, không cần) |
+| Sao lưu tay DB | `docker compose exec -T postgres pg_dump -U ottm -d ottm -Fc > ~/ottm-dumps/ottm-$(date +%F-%H%M).dump` (mục 4.1) |
+| Khôi phục DB | mục 4.2 (stop api worker → drop schema → `pg_restore` → `up -d`) |
 | Kiểm nhanh | `curl -s https://app.example.com/healthz`, rồi mở web trên trình duyệt |
 | Log | `docker compose logs -f --tail=100 api worker` (web: `docker compose --profile web logs web`) |
 | Khởi động lại web (`COMPOSE_PROFILES=web`) | `docker compose --profile web up -d web` |
@@ -810,7 +743,7 @@ Xong thì bỏ các dòng trên khỏi `server/.env` để quay lại dev thư�
 ## 8. Chế độ tách: web trên Hostinger
 
 Chế độ thứ hai (`COMPOSE_PROFILES=` để trống): web tĩnh (`web/dist`) nằm trên hosting Hostinger (Apache/LiteSpeed, `.htaccess`),
-VPS chỉ chạy BE (api, worker, migrate, Postgres, backup) sau nginx cho một **host api** riêng.
+VPS chỉ chạy BE (api, worker, migrate, Postgres) sau nginx cho một **host api** riêng.
 
 ```
 Trình duyệt ──https──> app.example.com  (Hostinger: web/dist + .htaccess)
@@ -885,7 +818,7 @@ Trình duyệt ──https──> app.example.com  (Hostinger: web/dist + .htacc
 6. App Meta/Threads production: Redirect URI là `https://api.example.com/oauth/facebook/callback` và
    `https://api.example.com/oauth/threads/callback`, webhook `https://api.example.com/webhooks/meta` (mục 6.1, 6.3 —
    trên app **production**).
-7. Uptime ping (mục 1.10): `https://api.example.com/healthz` và thêm một monitor cho `https://app.example.com/`.
+7. Uptime ping (mục 1.9): `https://api.example.com/healthz` và thêm một monitor cho `https://app.example.com/`.
 
 ### 8.3 Hostinger (web)
 

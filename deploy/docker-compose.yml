@@ -5,7 +5,7 @@
 #     trong .env — nên ghi tag vào .env (runbook mục 2).
 #   docker compose up -d                          chạy lại / rollback (IMAGE_TAG trong deploy/.env, không --build)
 #   docker compose run --rm api node scripts/set-password.ts
-#   docker compose run --rm backup                sao lưu (cron hằng đêm, xem runbook.md)
+#   (không có backup tự động — sao lưu tay bằng pg_dump: runbook.md mục "Sao lưu tay")
 #
 # Không có reverse proxy trong stack: nginx trên máy chủ (chủ shop tự quản, TLS bằng certbot) mở 80/443,
 # chuyển phần api tới 127.0.0.1:${API_HOST_PORT} và phần web (`/`) tới 127.0.0.1:${WEB_HOST_PORT}
@@ -14,8 +14,8 @@
 # Service `web` thuộc profile `web`: deploy/.env đặt COMPOSE_PROFILES=web (web chạy trên VPS) nên
 # `docker compose up -d --build` chạy luôn web; COMPOSE_PROFILES trống = web ở Hostinger (runbook mục 8), VPS chỉ chạy BE.
 # IMAGE_TAG không đặt → `latest` (build lại cùng tag ghi đè image cũ — muốn rollback thì đặt tag mới mỗi lần).
-# Mỗi service chỉ nhận đúng biến nó cần (không env_file chung): api/worker không thấy khoá kho backup,
-# backup không thấy APP_ENCRYPTION_KEYS. Thêm biến app mới → thêm vào x-app-env và env.production.example.
+# Mỗi service chỉ nhận đúng biến nó cần (không env_file chung): postgres không thấy APP_ENCRYPTION_KEYS,
+# web không thấy biến nào của app. Thêm biến app mới → thêm vào x-app-env và env.production.example.
 
 name: ottm
 
@@ -152,48 +152,8 @@ services:
     logging: *logging
     networks: [backend]
 
-  # Sao lưu DB theo yêu cầu / cron: docker compose run --rm backup (media nằm trên Cloudinary, không sao lưu ở đây)
-  backup:
-    image: ottm-backup:${IMAGE_TAG:-latest}
-    build: &backup-build
-      context: .
-      dockerfile: backup/Dockerfile
-    profiles: [backup]
-    restart: "no"
-    environment: &backup-env
-      DATABASE_URL: postgres://ottm:${POSTGRES_PASSWORD:?đặt POSTGRES_PASSWORD trong deploy/.env}@postgres:5432/ottm
-      RESTIC_REPOSITORY: ${RESTIC_REPOSITORY:-}
-      RESTIC_PASSWORD: ${RESTIC_PASSWORD:-}
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
-      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-}
-    volumes:
-      - restic_cache:/root/.cache/restic
-    depends_on:
-      postgres:
-        condition: service_healthy
-    logging: *logging
-    networks: [backend]
-
-  # Khôi phục (ghi đè DB): docker compose run --rm restore latest --yes — xem runbook.md
-  restore:
-    image: ottm-backup:${IMAGE_TAG:-latest}
-    # Có build để khôi phục được cả khi image của tag này đã bị dọn (docker compose tự build lại).
-    build: *backup-build
-    profiles: [restore]
-    restart: "no"
-    entrypoint: ["restore.sh"]
-    environment: *backup-env
-    volumes:
-      - restic_cache:/root/.cache/restic
-    depends_on:
-      postgres:
-        condition: service_healthy
-    logging: *logging
-    networks: [backend]
-
 networks:
-  # Không `internal: true` vì api/worker/backup cần ra internet (Meta, OpenAI, Cloudinary, kho backup) — cô lập bằng
+  # Không `internal: true` vì api/worker cần ra internet (Meta, OpenAI, Cloudinary) — cô lập bằng
   # việc không publish cổng (trừ api, web trên 127.0.0.1).
   backend: {}
   # Riêng cho web: không cần tới postgres/api (chỉ phục vụ file, nginx máy chủ gọi qua cổng loopback).
@@ -201,4 +161,3 @@ networks:
 
 volumes:
   pgdata: {}
-  restic_cache: {}

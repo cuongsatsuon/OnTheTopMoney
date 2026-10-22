@@ -1,4 +1,0 @@
-# Context là deploy/ (có .env chứa bí mật): chỉ gửi hai script.
-*
-!backup/backup.sh
-!backup/restore.sh
