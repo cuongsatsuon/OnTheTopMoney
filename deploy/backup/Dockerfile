@@ -1,9 +1,9 @@
 # Image `ottm-backup`: pg_dump/pg_restore/psql cùng phiên bản Postgres 18 + restic (mã hoá, đẩy lên kho
-# S3-compatible) + rsync (khôi phục media). Build context = deploy/ (xem Dockerfile.dockerignore).
+# S3-compatible). Chỉ sao lưu DB — media nằm trên Cloudinary. Build context = deploy/ (xem Dockerfile.dockerignore).
 FROM postgres:18
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends restic rsync ca-certificates \
+ && apt-get install -y --no-install-recommends restic ca-certificates \
  && rm -rf /var/lib/apt/lists/* \
  && restic version
 

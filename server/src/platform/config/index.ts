@@ -63,6 +63,55 @@ const EncryptionKeys = z.string().transform((raw, ctx) => {
   return keys as ReadonlyMap<string, Buffer>
 })
 
+/** Thông tin đăng nhập Cloudinary tách từ `CLOUDINARY_URL` (AD-14). */
+export interface CloudinaryCredentials {
+  readonly cloudName: string
+  readonly apiKey: string
+  readonly apiSecret: string
+}
+
+/**
+ * `cloudinary://<api_key>:<api_secret>@<cloud_name>` — đúng dòng "API environment variable" của Cloudinary Console.
+ * Có thể kèm `?<tuỳ chọn>` (vd `?secure_distribution=…` với tên miền riêng): được nhận nhưng bỏ qua — adapter luôn gọi
+ * api.cloudinary.com và dùng `secure_url` Cloudinary trả về.
+ */
+const CLOUDINARY_URL_RE = /^cloudinary:\/\/([A-Za-z0-9]+):([A-Za-z0-9_-]+)@([A-Za-z0-9_-]+)(?:\?\S*)?$/
+
+/**
+ * `CLOUDINARY_URL` → `{cloudName, apiKey, apiSecret}`. Lỗi chỉ nêu dạng mong đợi, không bao giờ chép giá trị.
+ * `toJSON` che `apiSecret`: lỡ log/serialize config cũng không lộ secret.
+ */
+const CloudinaryUrl = z.string().transform((raw, ctx): CloudinaryCredentials => {
+  const m = CLOUDINARY_URL_RE.exec(raw.trim())
+  if (!m) {
+    ctx.addIssue({ code: 'custom', message: 'phải có dạng cloudinary://<api_key>:<api_secret>@<cloud_name> (Cloudinary Console › API Keys)' })
+    return z.NEVER
+  }
+  const [, apiKey, apiSecret, cloudName] = m as unknown as [string, string, string, string]
+  return Object.freeze({
+    cloudName,
+    apiKey,
+    apiSecret,
+    toJSON: () => ({ cloudName, apiKey, apiSecret: '[REDACTED]' }),
+  })
+})
+
+/** Thư mục gốc trên Cloudinary: các đoạn chữ, số, `_`, `-` ngăn bởi `/` (vd `ottm`, `ottm-dev/cuong`). */
+const CloudinaryFolder = z
+  .string()
+  .regex(/^[A-Za-z0-9_-]+(\/[A-Za-z0-9_-]+)*$/, 'chỉ gồm chữ, số, _ hoặc -, các cấp ngăn bởi /, không / đầu/cuối')
+
+/** Phần cấu hình media (dùng riêng cho `npm run media:check`, không đòi DATABASE_URL). */
+const MediaEnvShape = {
+  /**
+   * Kho ảnh/file Cloudinary (AD-14): `cloudinary://<api_key>:<api_secret>@<cloud_name>`. Tuỳ chọn — thiếu thì
+   * adapters/media trả `MEDIA_NOT_CONFIGURED`; sai dạng thì không khởi động.
+   */
+  CLOUDINARY_URL: CloudinaryUrl.optional(),
+  /** Thư mục gốc trên Cloudinary; public_id = `<folder>/<public|private>/<uuidv7>`. */
+  CLOUDINARY_FOLDER: CloudinaryFolder.default('ottm'),
+}
+
 /** Origin mặc định khi dev (Vite 5173/5174). Production bắt buộc đặt `ALLOWED_ORIGINS`. */
 export const DEV_ALLOWED_ORIGINS: readonly string[] = ['http://localhost:5173', 'http://localhost:5174']
 
@@ -122,12 +171,13 @@ export const EnvSchema = z
     THREADS_APP_ENV: z.enum(['test', 'live']).optional(),
     /** Chuỗi tự đặt cho bước xác minh webhook của Meta (`hub.verify_token`). */
     META_VERIFY_TOKEN: z.string().min(16, 'ít nhất 16 ký tự').optional(),
-    /** Thư mục trên đĩa mà `/healthz` đo dung lượng (production: volume media). */
+    /** Thư mục trên đĩa mà `/healthz` đo dung lượng (mặc định `/` — gốc container; media nằm trên Cloudinary). */
     HEALTH_DISK_PATH: z.string().startsWith('/', 'phải là đường dẫn tuyệt đối').default('/'),
     /** Khoá chủ mã hoá bí mật (AD-12). Bắt buộc khi production; dev do `npm run dev` tự sinh. */
     APP_ENCRYPTION_KEYS: EncryptionKeys.optional(),
     /** keyId trong `APP_ENCRYPTION_KEYS` dùng để mã hoá bản ghi mới. */
     APP_ENCRYPTION_ACTIVE_KEY: z.string().regex(ENCRYPTION_KEY_ID, 'chỉ gồm chữ, số, _ hoặc -').optional(),
+    ...MediaEnvShape,
   })
   .superRefine((env, ctx) => {
     // Threads app: id và secret đi cùng nhau (mọi môi trường).
@@ -234,11 +284,10 @@ export class ConfigError extends Error {
   }
 }
 
-/** Kiểm env thuần, không side effect — dùng trong test. */
-export function parseEnv(env: Record<string, string | undefined>): Config {
+function parseWith<T extends z.ZodType>(schema: T, env: Record<string, string | undefined>): z.infer<T> {
   // Chuỗi rỗng coi như thiếu.
   const cleaned = Object.fromEntries(Object.entries(env).filter(([, v]) => v !== undefined && v !== ''))
-  const result = EnvSchema.safeParse(cleaned)
+  const result = schema.safeParse(cleaned)
   if (!result.success) {
     throw new ConfigError(
       result.error.issues.map((issue) => ({
@@ -248,6 +297,19 @@ export function parseEnv(env: Record<string, string | undefined>): Config {
     )
   }
   return result.data
+}
+
+/** Kiểm env thuần, không side effect — dùng trong test. */
+export function parseEnv(env: Record<string, string | undefined>): Config {
+  return parseWith(EnvSchema, env)
+}
+
+const MediaEnvSchema = z.object(MediaEnvShape)
+export type MediaEnv = z.infer<typeof MediaEnvSchema>
+
+/** Chỉ phần media của env (cùng luật với `parseEnv`) — cho script `media:check`, không cần DATABASE_URL. */
+export function parseMediaEnv(env: Record<string, string | undefined>): MediaEnv {
+  return parseWith(MediaEnvSchema, env)
 }
 
 let cached: Config | undefined

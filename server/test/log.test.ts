@@ -54,6 +54,8 @@ describe('platform/log — redact theo AD-12', () => {
     expect(redactUrl('/oauth/access_token?grant_type=fb_exchange_token&fb_exchange_token=fx-secret')).toBe(
       '/oauth/access_token?grant_type=fb_exchange_token&fb_exchange_token=REDACTED',
     )
+    // Chữ ký / secret của Cloudinary (adapters/media) trong query.
+    expect(redactUrl('/x?signature=s&api_secret=a&public_id=p')).toBe('/x?signature=REDACTED&api_secret=REDACTED&public_id=p')
     expect(redactUrl('/healthz')).toBe('/healthz')
   })
 

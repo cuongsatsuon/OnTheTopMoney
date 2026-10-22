@@ -4,16 +4,14 @@
 # dưới đây cho khớp deploy/.env, rồi `sudo nginx -t && sudo systemctl reload nginx`.
 #
 #   app.example.com          → tên miền (host của PUBLIC_BASE_URL). Có ở: server_name, đường chứng chỉ, redirect.
-#   /var/lib/ottm/media      → MEDIA_DIR_HOST (thư mục media; api ghi bằng uid 1000, nginx chỉ đọc)
 #   127.0.0.1:3000           → 127.0.0.1:API_HOST_PORT (api chỉ nghe trên loopback)
 #   127.0.0.1:3080           → 127.0.0.1:WEB_HOST_PORT (container web — docker compose service `web` — chỉ nghe loopback)
 #   /var/www/letsencrypt     → thư mục webroot cho certbot (chỉ khi dùng `certbot certonly --webroot`)
 #
-# Sau mỗi lần deploy/rollback KHÔNG cần reload nginx: web là container cùng cổng (deploy.sh thay container theo tag).
+# Sau mỗi lần lên bản mới/rollback KHÔNG cần reload nginx: web là container cùng cổng (compose thay container theo tag).
 #
-# Hành vi phải giữ (CI job deploy-smoke + deploy/smoke-test.sh kiểm qua đúng file này):
+# Hành vi phải giữ (CI `nginx -t` file này; runbook mục 2 kiểm tay bằng curl sau mỗi lần lên bản):
 #   /healthz, /api, /api/*, /webhooks, /webhooks/*, /oauth, /oauth/*, /privacy, /privacy/*  → api
-#   /media/*   → file trong MEDIA_DIR_HOST; thiếu → 404 (không rơi về index.html); CSP riêng sandbox + nosniff
 #   còn lại    → container web (deploy/web-nginx.conf): /assets/* có → immutable 1 năm, thiếu → 404 (không phải
 #                HTML); file tĩnh nếu có, không thì index.html (SPA), Cache-Control no-cache. Container quyết
 #                Cache-Control cho đường web — nginx này không thêm cái thứ hai (mỗi response đúng một Cache-Control)
@@ -32,18 +30,14 @@
 # server. Vì vậy mọi header chỉ đặt ở cấp server; phần khác nhau theo đường dẫn được tính bằng các map dưới đây.
 # KHÔNG thêm add_header vào location.
 
-# CSP. /media (file do api ghi, cùng origin với app): sandbox, không script. Chỉ áp cho response thành công của
-# /media; lỗi (vd 404) dùng CSP chung như mọi trang lỗi khác.
-# Bỏ 'https://picsum.photos https://fastly.picsum.photos' khỏi img-src khi web hết dữ liệu mẫu (web/src/data/mock.ts).
-# *.fbcdn.net / *.cdninstagram.com: ảnh đại diện Fanpage / Instagram do Meta trả (Story 2.2).
-map "$status:$uri" $ottm_csp {
-    default "default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https://picsum.photos https://fastly.picsum.photos https://*.fbcdn.net https://*.cdninstagram.com; connect-src 'self'; media-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'";
-    "~^(200|206|304):/media/" "default-src 'none'; img-src 'self'; sandbox";
-}
+# CSP (một giá trị cho mọi response, đặt ở add_header bên dưới):
+#   res.cloudinary.com: ảnh bài đăng / logo lưu trên Cloudinary (AD-14) — không còn /media trên máy chủ.
+#   Bỏ 'https://picsum.photos https://fastly.picsum.photos' khỏi img-src khi web hết dữ liệu mẫu (web/src/data/mock.ts).
+#   *.fbcdn.net / *.cdninstagram.com: ảnh đại diện Fanpage / Instagram do Meta trả (Story 2.2).
 
 # Cache-Control. Lỗi (4xx/5xx, kể cả lỗi do nginx sinh trên đường api/web) → no-store. Thành công: chuỗi rỗng =
 # nginx không thêm header — đường web do container web tự đặt (immutable cho /assets, no-cache cho trang), đường api
-# tự quyết, /media để mặc định ETag/Last-Modified.
+# tự quyết.
 map $status $ottm_cache_control_want {
     default  "";
     ~^[45]   "no-store";
@@ -111,7 +105,7 @@ server {
     ssl_session_tickets off;
 
     # Header bảo mật (AD-19) — `always`: có cả trên 404/502 và trang lỗi.
-    add_header Content-Security-Policy $ottm_csp always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https://res.cloudinary.com https://picsum.photos https://fastly.picsum.photos https://*.fbcdn.net https://*.cdninstagram.com; connect-src 'self'; media-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'" always;
     add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
     add_header X-Content-Type-Options "nosniff" always;
     add_header Referrer-Policy $ottm_referrer_policy always;
@@ -191,14 +185,6 @@ server {
         access_log off;
         default_type application/json;
         return 413 '{"error":{"code":"VALIDATION_FAILED","message":"request body too large"}}';
-    }
-
-    # ---- /media: ảnh công khai từ thư mục media. Không try_files → file thiếu là 404, không rơi về index.html.
-    # disable_symlinks: thư mục này do api ghi — không đi theo symlink (một symlink lạ không làm lộ file khác của máy).
-    location ^~ /media/ {
-        alias /var/lib/ottm/media/;
-        disable_symlinks on from=/var/lib/ottm/media;
-        autoindex off;
     }
 
     # ---- web: mọi đường còn lại → container web (SPA fallback, /assets, Cache-Control do container quyết).

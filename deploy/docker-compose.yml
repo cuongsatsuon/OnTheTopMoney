@@ -1,15 +1,19 @@
 # OnTheTopMoney production trên một VPS (Structural Seed › Container và triển khai).
 # Chạy trong thư mục deploy/: biến lấy từ deploy/.env (sao chép từ env.production.example).
-#   ./deploy.sh                                   build + up (tag git SHA)
+#   (sửa IMAGE_TAG=v3 trong deploy/.env) docker compose up -d --build   build + up bản mới — tag mới mỗi lần để rollback
+#     được. `IMAGE_TAG=v3 docker compose up …` cũng chạy, nhưng lệnh compose sau đó (không kèm biến) lại dùng tag
+#     trong .env — nên ghi tag vào .env (runbook mục 2).
+#   docker compose up -d                          chạy lại / rollback (IMAGE_TAG trong deploy/.env, không --build)
 #   docker compose run --rm api node scripts/set-password.ts
 #   docker compose run --rm backup                sao lưu (cron hằng đêm, xem runbook.md)
 #
 # Không có reverse proxy trong stack: nginx trên máy chủ (chủ shop tự quản, TLS bằng certbot) mở 80/443,
-# phục vụ /media từ MEDIA_DIR_HOST, chuyển phần api tới 127.0.0.1:${API_HOST_PORT} và phần web (`/`) tới
-# 127.0.0.1:${WEB_HOST_PORT} (mẫu: deploy/nginx.conf.example). api và web chỉ publish trên 127.0.0.1;
+# chuyển phần api tới 127.0.0.1:${API_HOST_PORT} và phần web (`/`) tới 127.0.0.1:${WEB_HOST_PORT}
+# (mẫu: deploy/nginx.conf.example). Ảnh/file nằm trên Cloudinary (CLOUDINARY_URL), không lưu trên máy chủ. api và web chỉ publish trên 127.0.0.1;
 # worker, postgres không publish cổng nào. Không service nào giữ 80/443.
-# Service `web` thuộc profile `web`: deploy.sh/rollback.sh chỉ bật khi WEB_MODE=vps. Lệnh compose gõ tay: deploy/.env
-# đặt COMPOSE_PROFILES=web (vps) nên `docker compose up -d --build` chạy luôn web; external để trống.
+# Service `web` thuộc profile `web`: deploy/.env đặt COMPOSE_PROFILES=web (web chạy trên VPS) nên
+# `docker compose up -d --build` chạy luôn web; COMPOSE_PROFILES trống = web ở Hostinger (runbook mục 8), VPS chỉ chạy BE.
+# IMAGE_TAG không đặt → `latest` (build lại cùng tag ghi đè image cũ — muốn rollback thì đặt tag mới mỗi lần).
 # Mỗi service chỉ nhận đúng biến nó cần (không env_file chung): api/worker không thấy khoá kho backup,
 # backup không thấy APP_ENCRYPTION_KEYS. Thêm biến app mới → thêm vào x-app-env và env.production.example.
 
@@ -27,7 +31,7 @@ x-app-env: &app-env
   LOG_LEVEL: ${LOG_LEVEL:-info}
   DATABASE_URL: postgres://ottm:${POSTGRES_PASSWORD:?đặt POSTGRES_PASSWORD trong deploy/.env}@postgres:5432/ottm
   PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?đặt PUBLIC_BASE_URL trong deploy/.env}
-  # Origin được gửi request ghi + nhận CORS có credentials. Mặc định (WEB_MODE=vps) = origin HTTPS công khai;
+  # Origin được gửi request ghi + nhận CORS có credentials. Mặc định (web cùng VPS) = origin HTTPS công khai;
   # chế độ tách (web trên Hostinger) đặt ALLOWED_ORIGINS = origin web trong deploy/.env.
   ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-${PUBLIC_BASE_URL:?đặt PUBLIC_BASE_URL trong deploy/.env}}
   # Origin web cho chuyển hướng OAuth; trống = PUBLIC_BASE_URL (cùng VPS). Chế độ tách: origin web trên Hostinger.
@@ -35,43 +39,25 @@ x-app-env: &app-env
   # api đứng sau đúng một hop reverse proxy (nginx của chủ shop, đặt X-Forwarded-For = $remote_addr).
   TRUST_PROXY: "true"
   COOKIE_SECURE: "true"
-  # Thư mục media là bind mount từ MEDIA_DIR_HOST: healthz đo đĩa của máy chủ chứa media.
-  HEALTH_DISK_PATH: /data/media
   META_APP_ID: ${META_APP_ID:-}
   META_APP_ENV: ${META_APP_ENV:-}
   # Khoá chủ mã hoá bí mật (Story 1.5) — bắt buộc: thiếu thì api/worker/migrate không khởi động.
   APP_ENCRYPTION_KEYS: ${APP_ENCRYPTION_KEYS:?đặt APP_ENCRYPTION_KEYS trong deploy/.env}
   APP_ENCRYPTION_ACTIVE_KEY: ${APP_ENCRYPTION_ACTIVE_KEY:?đặt APP_ENCRYPTION_ACTIVE_KEY trong deploy/.env}
-  # Các biến dưới đây được đọc từ các story sau (Epic 2); để trống thì bị bỏ qua.
+  # Kết nối Meta/Threads (Story 2.2, 2.3); để trống thì màn kết nối báo chưa cấu hình.
   META_APP_SECRET: ${META_APP_SECRET:-}
-  # Tuỳ chọn (Story 2.2): Configuration ID của Facebook Login for Business; trống → app gửi `scope`.
+  # Tuỳ chọn: Configuration ID của Facebook Login for Business; trống → app gửi `scope`.
   META_LOGIN_CONFIG_ID: ${META_LOGIN_CONFIG_ID:-}
-  META_VERIFY_TOKEN: ${META_VERIFY_TOKEN:-}
   THREADS_APP_ID: ${THREADS_APP_ID:-}
   THREADS_APP_SECRET: ${THREADS_APP_SECRET:-}
   THREADS_APP_ENV: ${THREADS_APP_ENV:-}
-  SESSION_SECRET: ${SESSION_SECRET:-}
-
-# Media công khai = thư mục trên máy chủ (bind mount) để nginx phục vụ /media trực tiếp.
-# Chủ sở hữu uid 1000 (user `node` của ottm-server), nginx chỉ đọc. Thư mục phải có sẵn (deploy.sh kiểm,
-# runbook mục 1.5): không để Docker tự tạo thư mục thuộc root mà api không ghi được.
-x-media-rw: &media-rw
-  type: bind
-  source: ${MEDIA_DIR_HOST:-/var/lib/ottm/media}
-  target: /data/media
-  bind:
-    create_host_path: false
-
-x-media-ro: &media-ro
-  type: bind
-  source: ${MEDIA_DIR_HOST:-/var/lib/ottm/media}
-  target: /data/media
-  read_only: true
-  bind:
-    create_host_path: false
+  # Ảnh bài đăng, logo (công khai) và file riêng tư (kho kiến thức, đính kèm) lưu trên Cloudinary.
+  # cloudinary://<api_key>:<api_secret>@<cloud_name>; trống → tính năng media báo chưa cấu hình.
+  CLOUDINARY_URL: ${CLOUDINARY_URL:-}
+  CLOUDINARY_FOLDER: ${CLOUDINARY_FOLDER:-}
 
 x-server: &server
-  image: ottm-server:${IMAGE_TAG:?đặt IMAGE_TAG (deploy.sh tự ghi vào deploy/.env)}
+  image: ottm-server:${IMAGE_TAG:-latest}
   build:
     context: ..
     dockerfile: deploy/Dockerfile.server
@@ -95,8 +81,6 @@ services:
     # Chỉ nginx trên máy chủ gọi được api: publish trên loopback, không bao giờ 0.0.0.0.
     ports:
       - "127.0.0.1:${API_HOST_PORT:-3000}:3000"
-    volumes:
-      - *media-rw
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -117,16 +101,14 @@ services:
     command: ["node", "src/worker/main.ts"]
     restart: unless-stopped
     stop_grace_period: 20s
-    volumes:
-      - *media-rw
     depends_on:
       migrate:
         condition: service_completed_successfully
 
-  # Web tĩnh (WEB_MODE=vps): nginx unprivileged phục vụ web/dist, SPA fallback, Cache-Control. Header bảo mật, TLS do
-  # nginx máy chủ đặt. Cùng IMAGE_TAG với api: rollback đổi cả hai. WEB_MODE=external: không build, không chạy.
+  # Web tĩnh (profile `web`, COMPOSE_PROFILES=web): nginx unprivileged phục vụ web/dist, SPA fallback, Cache-Control. Header bảo mật, TLS do
+  # nginx máy chủ đặt. Cùng IMAGE_TAG với api: rollback đổi cả hai. COMPOSE_PROFILES trống (web ở Hostinger): không build, không chạy.
   web:
-    image: ottm-web:${IMAGE_TAG:?đặt IMAGE_TAG (deploy.sh tự ghi vào deploy/.env)}
+    image: ottm-web:${IMAGE_TAG:-latest}
     build:
       context: ..
       dockerfile: deploy/Dockerfile.web
@@ -170,9 +152,9 @@ services:
     logging: *logging
     networks: [backend]
 
-  # Sao lưu theo yêu cầu / cron: docker compose run --rm backup
+  # Sao lưu DB theo yêu cầu / cron: docker compose run --rm backup (media nằm trên Cloudinary, không sao lưu ở đây)
   backup:
-    image: ottm-backup:${IMAGE_TAG:?đặt IMAGE_TAG (deploy.sh tự ghi vào deploy/.env)}
+    image: ottm-backup:${IMAGE_TAG:-latest}
     build: &backup-build
       context: .
       dockerfile: backup/Dockerfile
@@ -180,14 +162,12 @@ services:
     restart: "no"
     environment: &backup-env
       DATABASE_URL: postgres://ottm:${POSTGRES_PASSWORD:?đặt POSTGRES_PASSWORD trong deploy/.env}@postgres:5432/ottm
-      MEDIA_DIR: /data/media
       RESTIC_REPOSITORY: ${RESTIC_REPOSITORY:-}
       RESTIC_PASSWORD: ${RESTIC_PASSWORD:-}
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
       AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-}
     volumes:
-      - *media-ro
       - restic_cache:/root/.cache/restic
     depends_on:
       postgres:
@@ -195,9 +175,9 @@ services:
     logging: *logging
     networks: [backend]
 
-  # Khôi phục (ghi đè DB + media): docker compose run --rm restore latest --yes [--db-only] — xem runbook.md
+  # Khôi phục (ghi đè DB): docker compose run --rm restore latest --yes — xem runbook.md
   restore:
-    image: ottm-backup:${IMAGE_TAG:?đặt IMAGE_TAG (deploy.sh tự ghi vào deploy/.env)}
+    image: ottm-backup:${IMAGE_TAG:-latest}
     # Có build để khôi phục được cả khi image của tag này đã bị dọn (docker compose tự build lại).
     build: *backup-build
     profiles: [restore]
@@ -205,7 +185,6 @@ services:
     entrypoint: ["restore.sh"]
     environment: *backup-env
     volumes:
-      - *media-rw
       - restic_cache:/root/.cache/restic
     depends_on:
       postgres:
@@ -214,7 +193,7 @@ services:
     networks: [backend]
 
 networks:
-  # Không `internal: true` vì api/worker/backup cần ra internet (Meta, OpenAI, kho backup) — cô lập bằng
+  # Không `internal: true` vì api/worker/backup cần ra internet (Meta, OpenAI, Cloudinary, kho backup) — cô lập bằng
   # việc không publish cổng (trừ api, web trên 127.0.0.1).
   backend: {}
   # Riêng cho web: không cần tới postgres/api (chỉ phục vụ file, nginx máy chủ gọi qua cổng loopback).

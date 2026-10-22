@@ -17,6 +17,10 @@ const SECRET_KEYS = [
   'apiKey',
   'api_key',
   'openaiKey',
+  'CLOUDINARY_URL',
+  'api_secret',
+  'apiSecret',
+  'signature',
   'token',
   'password',
   'cookie',
@@ -51,6 +55,8 @@ export const SECRET_QUERY_PARAMS = new Set([
   'code',
   'token',
   'signed_request',
+  'signature',
+  'api_secret',
 ])
 
 export function redactUrl(url: string | undefined): string | undefined {

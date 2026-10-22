@@ -34,6 +34,7 @@ describe('platform/config', () => {
       META_FAKE: false,
       PUBLIC_BASE_URL: 'http://localhost:5173',
       WEB_BASE_URL: 'http://localhost:5173',
+      CLOUDINARY_FOLDER: 'ottm',
     })
   })
 
@@ -273,7 +274,7 @@ describe('platform/config', () => {
       expect(variablesOf({ ...dev, META_APP_ENV: 'prod' })).toEqual(['META_APP_ENV'])
       expect(variablesOf({ ...dev, META_APP_ID: 'abc' })).toEqual(['META_APP_ID'])
       expect(variablesOf({ ...dev, HEALTH_DISK_PATH: 'data' })).toEqual(['HEALTH_DISK_PATH'])
-      expect(parseEnv({ ...dev, HEALTH_DISK_PATH: '/data/media' }).HEALTH_DISK_PATH).toBe('/data/media')
+      expect(parseEnv({ ...dev, HEALTH_DISK_PATH: '/srv/disk' }).HEALTH_DISK_PATH).toBe('/srv/disk')
     })
 
     function spawnEntry(entry: string, overrides: Record<string, string | undefined>) {
@@ -294,6 +295,14 @@ describe('platform/config', () => {
       expect(res.status).not.toBe(0)
       expect(res.status).not.toBeNull()
       expect(res.stderr).toContain('APP_ENCRYPTION_KEYS')
+    })
+
+    it.each(['src/app/main.ts', 'src/worker/main.ts'])('%s CLOUDINARY_URL sai định dạng → không khởi động, nêu tên biến, không chép giá trị', (entry) => {
+      const res = spawnEntry(entry, { CLOUDINARY_URL: 'abc-bi-mat-XYZ' })
+      expect(res.status).not.toBe(0)
+      expect(res.status).not.toBeNull()
+      expect(res.stderr).toContain('CLOUDINARY_URL')
+      expect(res.stderr + res.stdout).not.toContain('abc-bi-mat-XYZ')
     })
 
     it.each(['src/app/main.ts', 'src/worker/main.ts'])('%s APP_ENCRYPTION_KEYS sai định dạng → không khởi động, log tên biến, không log khoá', (entry) => {

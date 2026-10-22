@@ -43,6 +43,7 @@ describe('dependency-cruiser — ranh giới AD-1', () => {
       'ad7-openai-only-ai: src/app/uses-openai.ts → src/adapters/openai/index.ts',
       'ad6-meta-adapter-only: src/app/uses-meta.ts → src/adapters/meta/index.ts',
       'ad6-meta-adapter-only: src/modules/campaigns/meta.ts → src/adapters/meta/index.ts',
+      'ad14-media-adapter-callers: src/platform/uses-media.ts → src/adapters/media/index.ts',
     ].sort())
   })
 

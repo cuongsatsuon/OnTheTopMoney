@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Kiểm backup.sh + restore.sh với Postgres thật và kho restic là thư mục cục bộ (không cần cloud).
 #   Máy dev:  npm run db:dev  (Postgres nhúng :5433), rồi  bash deploy/backup/test-backup.sh
-#             — cần restic, pg_dump, pg_restore, psql, rsync trong PATH; thiếu thì báo SKIP.
-#   CI:       chạy trong container ottm-backup (job deploy-smoke), DATABASE_URL trỏ postgres của compose.
+#             — cần restic, pg_dump, pg_restore, psql trong PATH; thiếu thì báo SKIP.
+# Chỉ DB: ảnh/file nằm trên Cloudinary (AD-14), không nằm trong backup.
+#   CI:       chạy trong container ottm-backup (job deploy-config), DATABASE_URL trỏ postgres của compose.
 # Chỉ tạo/xoá database tạm ottm_bk_*; không đụng database trong DATABASE_URL.
 set -euo pipefail
 
@@ -10,7 +11,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 BACKUP_SH="$HERE/backup.sh"
 RESTORE_SH="$HERE/restore.sh"
 
-for bin in restic pg_dump pg_restore psql rsync; do
+for bin in restic pg_dump pg_restore psql; do
   if ! command -v "$bin" >/dev/null 2>&1; then
     echo "SKIP test-backup: thiếu $bin (CI chạy test này trong container ottm-backup)"
     exit 0
@@ -41,12 +42,11 @@ trap cleanup EXIT
 
 # Môi trường chạy backup.sh: chỉ biến của test, không kế thừa kho thật.
 REPO="$WORK/repo"
-MEDIA="$WORK/media"
 STAGE="$WORK/stage"
 export RESTIC_PASSWORD_TEST="test-$SUFFIX"
 run_backup() {
   env -u RESTIC_REPOSITORY -u RESTIC_PASSWORD -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY \
-    MEDIA_DIR="$MEDIA" BACKUP_STAGE_DIR="$STAGE" XDG_CACHE_HOME="$WORK/cache" "$@"
+    BACKUP_STAGE_DIR="$STAGE" XDG_CACHE_HOME="$WORK/cache" "$@"
 }
 latest_snapshot() {
   RESTIC_REPOSITORY="$REPO" RESTIC_PASSWORD="$RESTIC_PASSWORD_TEST" XDG_CACHE_HOME="$WORK/cache" \
@@ -56,10 +56,6 @@ snapshot_count() {
   RESTIC_REPOSITORY="$REPO" RESTIC_PASSWORD="$RESTIC_PASSWORD_TEST" XDG_CACHE_HOME="$WORK/cache" \
     restic snapshots --json --no-lock | grep -o '"short_id"' | wc -l | tr -d ' '
 }
-
-mkdir -p "$MEDIA/sub"
-printf 'xin chào media\n' >"$MEDIA/anh-1.txt"
-printf 'lồng nhau\n' >"$MEDIA/sub/anh-2.txt"
 
 psql_on "$BASE_URL" "create database $SRC_DB" >/dev/null
 psql_on "$BASE_URL" "create database $DST_DB" >/dev/null
@@ -99,9 +95,12 @@ code=$?
 set -e
 if ((code != 0)); then pass "kho chưa init → exit $code"; else fail "kho chưa init mà exit 0"; fi
 
-RESTIC_REPOSITORY="$REPO" RESTIC_PASSWORD="$RESTIC_PASSWORD_TEST" XDG_CACHE_HOME="$WORK/cache" restic init >/dev/null
+# Kho định dạng v1 (không nén): nếu restic không mã hoá thì tên file trong cây snapshot nằm nguyên văn trong kho,
+# nên kiểm "không chứa dữ liệu rõ" ở bước 3 thật sự có thể lỗi (dump -Fc đã nén nên không dùng nội dung dump để kiểm).
+RESTIC_REPOSITORY="$REPO" RESTIC_PASSWORD="$RESTIC_PASSWORD_TEST" XDG_CACHE_HOME="$WORK/cache" \
+  restic init --repository-version 1 >/dev/null
 
-# 3. Backup thành công: snapshot có dump + media, file dump tạm đã xoá.
+# 3. Backup thành công: snapshot chỉ có dump, file dump tạm đã xoá.
 if run_backup DATABASE_URL="$SERVER_URL/$SRC_DB" RESTIC_REPOSITORY="$REPO" RESTIC_PASSWORD="$RESTIC_PASSWORD_TEST" \
   "$BACKUP_SH" >"$WORK/backup1.log" 2>&1; then
   pass "backup lần 1 exit 0"
@@ -109,13 +108,14 @@ else
   fail "backup lần 1 lỗi: $(cat "$WORK/backup1.log")"
 fi
 listing="$(RESTIC_REPOSITORY="$REPO" RESTIC_PASSWORD="$RESTIC_PASSWORD_TEST" XDG_CACHE_HOME="$WORK/cache" restic ls latest --host ottm 2>/dev/null || true)"
-if [[ "$listing" == *"$STAGE/postgres.dump"* && "$listing" == *"$MEDIA/anh-1.txt"* && "$listing" == *"$MEDIA/sub/anh-2.txt"* ]]; then
-  pass "snapshot có postgres.dump và media"
+if [[ "$listing" == *"$STAGE/postgres.dump"* && "$listing" != *media* ]]; then
+  pass "snapshot có postgres.dump, không có media"
 else
-  fail "snapshot thiếu file: $listing"
+  fail "snapshot sai: $listing"
 fi
 if [[ ! -e "$STAGE/postgres.dump" ]]; then pass "file dump tạm đã xoá"; else fail "file dump tạm còn lại"; fi
-if grep -rqF "xin chào media" "$REPO"; then fail "dữ liệu trong kho không được mã hoá"; else pass "kho restic không chứa dữ liệu rõ"; fi
+# Tên file "postgres.dump" có trong cây snapshot (đã kiểm ở trên bằng restic ls) — kho không mã hoá thì grep thấy.
+if grep -rqF "postgres.dump" "$REPO"; then fail "dữ liệu trong kho không được mã hoá (thấy tên file rõ)"; else pass "kho restic không chứa dữ liệu rõ"; fi
 
 # 4. Backup lần 2 cùng ngày: --keep-daily giữ bản mới nhất của mỗi ngày → còn 1 snapshot.
 run_backup DATABASE_URL="$SERVER_URL/$SRC_DB" RESTIC_REPOSITORY="$REPO" RESTIC_PASSWORD="$RESTIC_PASSWORD_TEST" \
@@ -138,7 +138,7 @@ else
   fail "pg_dump lỗi → exit $code, còn $count snapshot, trước $before sau $after"
 fi
 
-# 6. restore.sh: thiếu --yes → từ chối; có --yes → DB đích có dữ liệu, media khớp.
+# 6. restore.sh: thiếu --yes → từ chối; có --yes → DB đích có dữ liệu.
 set +e
 run_backup RESTORE_DATABASE_URL="$SERVER_URL/$DST_DB" DATABASE_URL="$SERVER_URL/$DST_DB" RESTIC_REPOSITORY="$REPO" \
   RESTIC_PASSWORD="$RESTIC_PASSWORD_TEST" "$RESTORE_SH" latest >/dev/null 2>&1
@@ -146,9 +146,7 @@ code=$?
 set -e
 if ((code != 0)); then pass "restore thiếu --yes → exit $code"; else fail "restore thiếu --yes mà vẫn chạy"; fi
 
-mkdir -p "$WORK/restored-media"
-printf 'file cũ sẽ bị thay\n' >"$WORK/restored-media/cu.txt"
-if run_backup RESTORE_DATABASE_URL="$SERVER_URL/$DST_DB" RESTORE_MEDIA_DIR="$WORK/restored-media" \
+if run_backup RESTORE_DATABASE_URL="$SERVER_URL/$DST_DB" \
   DATABASE_URL="$SERVER_URL/$DST_DB" RESTIC_REPOSITORY="$REPO" RESTIC_PASSWORD="$RESTIC_PASSWORD_TEST" \
   "$RESTORE_SH" latest --yes >"$WORK/restore.log" 2>&1; then
   pass "restore exit 0"
@@ -157,12 +155,11 @@ else
 fi
 note="$(psql_on "$SERVER_URL/$DST_DB" "select note from marker where id = 1" 2>/dev/null || true)"
 if [[ "$note" == "sao lưu tiếng Việt" ]]; then pass "DB khôi phục có dữ liệu"; else fail "DB khôi phục sai: '$note'"; fi
-if diff -r "$MEDIA" "$WORK/restored-media" >/dev/null; then pass "media khôi phục khớp (file cũ đã bị thay)"; else fail "media khôi phục lệch"; fi
 
 # 7. Khôi phục đè lên DB đã có dữ liệu và đã "migrate xa hơn": bảng/dòng mới hơn snapshot phải biến mất,
 #    dữ liệu khớp nguồn (migrate của bản mới sẽ chạy lại migration từ đúng điểm snapshot — CI kiểm bằng
 #    service migrate thật).
-if run_backup RESTORE_DATABASE_URL="$SERVER_URL/$POP_DB" RESTORE_MEDIA_DIR="$WORK/restored-media-2" \
+if run_backup RESTORE_DATABASE_URL="$SERVER_URL/$POP_DB" \
   DATABASE_URL="$SERVER_URL/$POP_DB" RESTIC_REPOSITORY="$REPO" RESTIC_PASSWORD="$RESTIC_PASSWORD_TEST" \
   "$RESTORE_SH" latest --yes >"$WORK/restore2.log" 2>&1; then
   pass "restore đè DB có dữ liệu exit 0"
@@ -181,22 +178,31 @@ else
   fail "DB đè sai: '$state' (mong '1=sao lưu tiếng Việt|m0000|7|0')"
 fi
 
-# 8. Snapshot thiếu media → từ chối trừ khi --db-only (giả lập bằng MEDIA_DIR không có trong snapshot).
-set +e
-out="$(run_backup MEDIA_DIR="$WORK/khong-co-trong-snapshot" RESTORE_DATABASE_URL="$SERVER_URL/$DST_DB" \
-  RESTORE_MEDIA_DIR="$WORK/restored-media-3" DATABASE_URL="$SERVER_URL/$DST_DB" RESTIC_REPOSITORY="$REPO" \
-  RESTIC_PASSWORD="$RESTIC_PASSWORD_TEST" "$RESTORE_SH" latest --yes 2>&1)"
-code=$?
-set -e
-if ((code != 0)) && [[ "$out" == *"--db-only"* ]]; then pass "snapshot thiếu media → từ chối, gợi ý --db-only"; else fail "snapshot thiếu media → exit $code: $out"; fi
-if run_backup MEDIA_DIR="$WORK/khong-co-trong-snapshot" RESTORE_DATABASE_URL="$SERVER_URL/$DST_DB" \
-  RESTORE_MEDIA_DIR="$WORK/restored-media-3" DATABASE_URL="$SERVER_URL/$DST_DB" RESTIC_REPOSITORY="$REPO" \
-  RESTIC_PASSWORD="$RESTIC_PASSWORD_TEST" "$RESTORE_SH" latest --yes --db-only >"$WORK/restore3.log" 2>&1 \
-  && [[ ! -e "$WORK/restored-media-3" ]]; then
-  pass "--db-only khôi phục DB, không đụng media"
-else
-  fail "--db-only lỗi: $(cat "$WORK/restore3.log")"
-fi
+# 8. Snapshot kiểu cũ (trước Cloudinary: dump + thư mục media) → restore chỉ lấy dump, bỏ qua media;
+#    `--db-only` (lệnh cũ) vẫn được nhận.
+OLD_MEDIA="$WORK/old-media"
+mkdir -p "$OLD_MEDIA/sub" "$STAGE"
+printf 'ảnh cũ\n' >"$OLD_MEDIA/sub/anh-cu.txt"
+psql_on "$SERVER_URL/$SRC_DB" "update marker set note = 'snapshot kiểu cũ' where id = 1" >/dev/null
+pg_dump --format=custom --no-owner --no-privileges --dbname="$SERVER_URL/$SRC_DB" --file="$STAGE/postgres.dump"
+RESTIC_REPOSITORY="$REPO" RESTIC_PASSWORD="$RESTIC_PASSWORD_TEST" XDG_CACHE_HOME="$WORK/cache" \
+  restic backup --host ottm --tag ottm "$STAGE" "$OLD_MEDIA" >/dev/null
+rm -f "$STAGE/postgres.dump"
+for extra in "" "--db-only"; do
+  # shellcheck disable=SC2086 # $extra trống hoặc một cờ
+  if run_backup RESTORE_DATABASE_URL="$SERVER_URL/$DST_DB" DATABASE_URL="$SERVER_URL/$DST_DB" RESTIC_REPOSITORY="$REPO" \
+    RESTIC_PASSWORD="$RESTIC_PASSWORD_TEST" "$RESTORE_SH" latest --yes $extra >"$WORK/restore3.log" 2>&1; then
+    note="$(psql_on "$SERVER_URL/$DST_DB" "select note from marker where id = 1" 2>/dev/null || true)"
+    if [[ "$note" == "snapshot kiểu cũ" ]]; then
+      pass "snapshot cũ có media (${extra:-không cờ}) → chỉ khôi phục DB"
+    else
+      fail "snapshot cũ (${extra:-không cờ}) → DB sai: '$note'"
+    fi
+  else
+    fail "snapshot cũ (${extra:-không cờ}) → restore lỗi: $(cat "$WORK/restore3.log")"
+  fi
+  psql_on "$SERVER_URL/$DST_DB" "update marker set note = 'đổi tạm' where id = 1" >/dev/null
+done
 
 if ((failures > 0)); then
   echo "test-backup: $failures lỗi"

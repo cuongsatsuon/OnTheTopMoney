@@ -1,6 +1,6 @@
-# OnTheTopMoney — mẫu site nginx cho CHẾ ĐỘ TÁCH (WEB_MODE=external): host API (vd api.example.com) trên VPS, do chủ
+# OnTheTopMoney — mẫu site nginx cho CHẾ ĐỘ TÁCH (web ở Hostinger, COMPOSE_PROFILES trống): host API (vd api.example.com) trên VPS, do chủ
 # shop tự quản (TLS bằng certbot). Web tĩnh KHÔNG nằm ở đây: nó ở Hostinger (vd app.example.com, deploy/hostinger/),
-# gọi host này qua CORS có credentials. Chế độ cùng VPS (WEB_MODE=vps, mặc định) dùng deploy/nginx.conf.example.
+# gọi host này qua CORS có credentials. Chế độ cùng VPS (COMPOSE_PROFILES=web, mặc định) dùng deploy/nginx.conf.example.
 # Hướng dẫn: deploy/runbook.md mục 8 "Chế độ tách: web trên Hostinger".
 #
 # Cài: chép thành /etc/nginx/sites-available/ottm-api (Debian/Ubuntu) hoặc /etc/nginx/conf.d/ottm-api.conf, thay các
@@ -8,16 +8,14 @@
 # TLS khác mẫu cùng VPS (tiền tố ottm_api_) nên hai site cài cùng lúc được (lúc chuyển chế độ).
 #
 #   api.example.com          → host của PUBLIC_BASE_URL. Có ở: server_name, đường chứng chỉ, redirect.
-#   /var/lib/ottm/media      → MEDIA_DIR_HOST (thư mục media; api ghi bằng uid 1000, nginx chỉ đọc)
 #   127.0.0.1:3000           → 127.0.0.1:API_HOST_PORT (api chỉ nghe trên loopback)
 #   /var/www/letsencrypt     → thư mục webroot cho certbot (chỉ khi dùng `certbot certonly --webroot`)
 #
 # Sau mỗi lần deploy KHÔNG cần reload nginx.
 #
-# Hành vi phải giữ (CI `nginx -t` mẫu này; `SMOKE_MODE=api deploy/smoke-test.sh` kiểm hành vi):
+# Hành vi phải giữ (CI `nginx -t` mẫu này; runbook mục 8.5 kiểm tay bằng curl):
 #   /healthz, /api, /api/*, /webhooks, /webhooks/*, /oauth, /oauth/*, /privacy, /privacy/*  → api
-#   /media/*   → file trong MEDIA_DIR_HOST; thiếu → 404; CSP riêng sandbox + nosniff
-#   /, đường lạ → JSON 404 {"error":{"code":"NOT_FOUND",…}} (host này không phục vụ trang web)
+#   /, đường lạ (kể cả /media/* — ảnh nằm trên Cloudinary) → JSON 404 {"error":{"code":"NOT_FOUND",…}} (host này không phục vụ trang web)
 #   CORS của /api/v1/* do api tự đặt (ALLOWED_ORIGINS) — nginx KHÔNG thêm/ghi đè header Access-Control-*
 #   mọi response (kể cả lỗi) có CSP, HSTS, X-Content-Type-Options, Referrer-Policy, X-Frame-Options, Permissions-Policy
 #   SSE /api/v1/stream không đệm, không nén; đường api không bao giờ nén
@@ -33,15 +31,11 @@
 # server. Vì vậy mọi header chỉ đặt ở cấp server; phần khác nhau theo đường dẫn được tính bằng các map dưới đây.
 # KHÔNG thêm add_header vào location.
 
-# CSP. Host api chỉ trả JSON / chuyển hướng: không cho tải gì. /media (file do api ghi): chỉ ảnh, sandbox. Chỉ áp
-# cho response thành công của /media; lỗi (vd 404) dùng CSP chung.
-map "$status:$uri" $ottm_api_csp {
-    default "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
-    "~^(200|206|304):/media/" "default-src 'none'; img-src 'self'; sandbox";
-}
+# CSP. Host api chỉ trả JSON / chuyển hướng: không cho tải gì (đặt thẳng ở add_header bên dưới). Ảnh bài đăng / logo
+# nằm trên Cloudinary (AD-14) — web trên Hostinger nhúng URL https://res.cloudinary.com/…, không qua host này.
 
 # Cache-Control. Lỗi (4xx/5xx, kể cả JSON lỗi do nginx sinh) → no-store. Thành công: chuỗi rỗng = nginx không thêm
-# header (api tự quyết, /media để mặc định ETag/Last-Modified).
+# header (api tự quyết).
 map "$status:$uri" $ottm_api_cache_control_want {
     default  "";
     ~^[45]   "no-store";
@@ -103,7 +97,7 @@ server {
     ssl_session_tickets off;
 
     # Header bảo mật (AD-19) — `always`: có cả trên 404/502 và trang lỗi.
-    add_header Content-Security-Policy $ottm_api_csp always;
+    add_header Content-Security-Policy "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'" always;
     add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
     add_header X-Content-Type-Options "nosniff" always;
     add_header Referrer-Policy $ottm_api_referrer_policy always;
@@ -182,14 +176,6 @@ server {
         access_log off;
         default_type application/json;
         return 413 '{"error":{"code":"VALIDATION_FAILED","message":"request body too large"}}';
-    }
-
-    # ---- /media: ảnh công khai từ thư mục media (web trên Hostinger nhúng <img src="https://api.example.com/media/…">).
-    # Không try_files → file thiếu là 404. disable_symlinks: thư mục này do api ghi — không đi theo symlink.
-    location ^~ /media/ {
-        alias /var/lib/ottm/media/;
-        disable_symlinks on from=/var/lib/ottm/media;
-        autoindex off;
     }
 
     # ---- Còn lại (/, đường lạ): host api không phục vụ trang web → JSON 404 giống api.

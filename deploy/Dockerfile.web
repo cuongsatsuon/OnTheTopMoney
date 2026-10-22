@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # Image `ottm-web`: build web/ rồi phục vụ `dist` bằng nginx unprivileged (service `web` trong docker-compose.yml,
-# profile `web`, chỉ khi WEB_MODE=vps). nginx của chủ shop chuyển `/` tới 127.0.0.1:${WEB_HOST_PORT:-3080}
+# profile `web`, chỉ khi COMPOSE_PROFILES=web). nginx của chủ shop chuyển `/` tới 127.0.0.1:${WEB_HOST_PORT:-3080}
 # (deploy/nginx.conf.example). Build context = gốc repo. Cùng tag với ottm-server (rollback đổi cả hai).
 FROM node:24-slim AS build
 
@@ -22,7 +22,7 @@ RUN npm run build -w web \
 # Healthcheck khai ở docker-compose.yml (service web), không ở đây.
 FROM nginxinc/nginx-unprivileged:1.28.0-alpine
 
-# Nhãn để deploy/lib.sh phân biệt với image ottm-web cũ (chỉ mang /dist, không chạy được) khi rollback.
+# Nhãn phân biệt với image ottm-web cũ (chỉ mang /dist, không chạy được): `docker image inspect` khi chọn tag rollback.
 LABEL org.ottm.web="nginx"
 
 USER root

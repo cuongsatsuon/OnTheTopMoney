@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # Image `ottm-server` dùng chung cho api, worker, migrate (khác lệnh). Build context = gốc repo.
-#   docker compose build   (xem deploy/deploy.sh)
+#   docker compose build   (xem deploy/runbook.md mục 2)
 FROM node:24-slim
 
 ENV NODE_ENV=production \
@@ -22,10 +22,6 @@ COPY packages/shared packages/shared
 COPY server/src server/src
 COPY server/scripts server/scripts
 COPY server/drizzle server/drizzle
-
-# Production mount MEDIA_DIR_HOST (thư mục máy chủ, chủ uid 1000 = `node`) đè lên đây; thư mục này chỉ dùng khi
-# chạy image không có mount.
-RUN mkdir -p /data/media && chown node:node /data/media
 
 USER node
 WORKDIR /app/server

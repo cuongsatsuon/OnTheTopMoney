@@ -1,4 +1,4 @@
-# OnTheTopMoney — web tĩnh trên Hostinger (Apache/LiteSpeed), chế độ tách (WEB_MODE=external). File này do
+# OnTheTopMoney — web tĩnh trên Hostinger (Apache/LiteSpeed), chế độ tách (COMPOSE_PROFILES trống trên VPS). File này do
 # `vite build` sinh từ deploy/hostinger/htaccess.template khi đặt VITE_API_ORIGIN (đừng sửa bản trong dist — sửa mẫu
 # rồi build lại). Hướng dẫn: deploy/runbook.md mục 8 "Chế độ tách: web trên Hostinger".
 #
@@ -36,8 +36,8 @@ DirectoryIndex index.html
 
 <IfModule mod_headers.c>
     # Header bảo mật (AD-19) — `always`: có cả trên trang lỗi.
-    # connect-src / img-src gồm origin api (REST + SSE, ảnh /media do api phục vụ).
-    Header always set Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:{{API_SRC}} https://picsum.photos https://fastly.picsum.photos https://*.fbcdn.net https://*.cdninstagram.com; connect-src 'self'{{API_SRC}}; media-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+    # connect-src gồm origin api (REST + SSE); img-src gồm origin api và res.cloudinary.com (ảnh bài đăng / logo, AD-14).
+    Header always set Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:{{API_SRC}} https://res.cloudinary.com https://picsum.photos https://fastly.picsum.photos https://*.fbcdn.net https://*.cdninstagram.com; connect-src 'self'{{API_SRC}}; media-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
     Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains"
     Header always set X-Content-Type-Options "nosniff"
     Header always set Referrer-Policy "strict-origin-when-cross-origin"

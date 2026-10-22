@@ -48,6 +48,8 @@ export const ERROR_CODES = [
   // Ảnh (AD-14)
   'IMAGE_REJECTED',
   'IMAGE_FAILED',
+  /** Máy chủ chưa cấu hình kho ảnh/file Cloudinary (`CLOUDINARY_URL`). */
+  'MEDIA_NOT_CONFIGURED',
   // AI (AD-7, AD-8, AD-16, AD-21)
   'OPENAI_KEY_MISSING',
   'OPENAI_KEY_INVALID',

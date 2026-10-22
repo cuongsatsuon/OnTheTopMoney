@@ -45,6 +45,7 @@ export const ERROR_MESSAGES: Record<ErrorCode, string> = {
   // Ảnh
   IMAGE_REJECTED: 'Ảnh bị từ chối. Thử ảnh khác.',
   IMAGE_FAILED: 'Tạo ảnh chưa được. Thử lại.',
+  MEDIA_NOT_CONFIGURED: 'Chưa cấu hình kho ảnh (Cloudinary) nên chưa lưu được ảnh/file. Xem hướng dẫn cài đặt.',
   // AI
   OPENAI_KEY_MISSING: 'Thêm khoá OpenAI ở Cài đặt để dùng AI.',
   OPENAI_KEY_INVALID: 'Khoá OpenAI không hợp lệ. Cập nhật khoá ở Cài đặt.',

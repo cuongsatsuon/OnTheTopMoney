@@ -84,6 +84,13 @@ module.exports = {
       to: { path: '^src/adapters/meta/' },
     },
     {
+      name: 'ad14-media-adapter-callers',
+      severity: 'error',
+      comment: 'AD-14: adapters/media chỉ được gọi từ module và entrypoint (app/, worker/) — không từ platform hay adapter khác.',
+      from: { pathNot: '^src/(modules|app|worker|adapters/media)/' },
+      to: { path: '^src/adapters/media/' },
+    },
+    {
       name: 'no-circular',
       severity: 'error',
       comment: 'Không vòng phụ thuộc.',

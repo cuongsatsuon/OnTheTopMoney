@@ -38,6 +38,7 @@ describe('renderHtaccess', () => {
     const out = renderHtaccess(template, 'https://api.example.com')
     expect(csp(out)).toContain("connect-src 'self' https://api.example.com;")
     expect(csp(out)).toMatch(/img-src 'self' data: blob: https:\/\/api\.example\.com /)
+    expect(csp(out)).toMatch(/img-src [^;]*https:\/\/res\.cloudinary\.com/)
     expect(csp(out)).toContain("frame-ancestors 'none'")
     expect(out).not.toMatch(/\{\{/)
   })

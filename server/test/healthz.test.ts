@@ -23,7 +23,7 @@ describe('GET /healthz', () => {
   const halfFull: DiskUsageProbe = async () => 0.5
 
   async function get(sql = handle.sql, diskUsage: DiskUsageProbe = halfFull) {
-    const app = buildApp({ sql, db: handle.db, logger, health: { diskPath: '/data/media', diskUsage } })
+    const app = buildApp({ sql, db: handle.db, logger, health: { diskPath: '/srv/disk', diskUsage } })
     try {
       const res = await app.inject({ method: 'GET', url: '/healthz' })
       return { status: res.statusCode, body: res.json() }
@@ -97,7 +97,7 @@ describe('GET /healthz', () => {
         seen.push(path)
         return 0.1
       })
-      expect(seen).toEqual(['/data/media'])
+      expect(seen).toEqual(['/srv/disk'])
     })
 
     it('lỗi đọc đĩa → disk unknown, không làm 503', async () => {
