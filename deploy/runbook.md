@@ -6,8 +6,8 @@ Mọi lệnh `docker compose …` chạy trong thư mục `deploy/` của repo t
 ## Kiến trúc trong một hình
 
 ```
-Internet ──80/443──> nginx (máy chủ, bạn tự quản, TLS certbot)
-                       ├──> /var/www/ottm/current      web tĩnh (deploy.sh xuất bản, symlink theo tag)
+Internet ──80/443──> nginx (máy chủ, bạn tự quản, TLS certbot, header bảo mật)
+                       ├──> 127.0.0.1:3080 ──> web (docker compose: nginx trong container phục vụ build web)
                        ├──> /var/lib/ottm/media        /media (chỉ đọc; api/worker ghi bằng uid 1000)
                        └──> 127.0.0.1:3000 ──> api (docker compose) ──> postgres
                                                   └──> (Meta, OpenAI)          worker ──> postgres
@@ -22,7 +22,8 @@ cấu hình `deploy/nginx.conf.example`; `deploy.sh` không cài, không sửa, 
 
 | Thành phần | Vai trò | Cổng |
 |---|---|---|
-| nginx (máy chủ) | HTTPS, phục vụ web từ `WEB_ROOT/current`, `/media` từ `MEDIA_DIR_HOST`, chuyển `/healthz`, `/api`, `/webhooks`, `/oauth`, `/privacy` tới api, header bảo mật | 80, 443 (ra internet) |
+| nginx (máy chủ) | HTTPS, `/media` từ `MEDIA_DIR_HOST`, chuyển `/healthz`, `/api`, `/webhooks`, `/oauth`, `/privacy` tới api và mọi đường còn lại tới `web`, header bảo mật | 80, 443 (ra internet) |
+| `web` | build web (`ottm-web:<tag>`, cùng tag với api) do nginx trong container phục vụ: SPA fallback, `Cache-Control`. Không root, root FS chỉ đọc. Chỉ khi `WEB_MODE=vps` (profile `web`) | `127.0.0.1:WEB_HOST_PORT` (chỉ máy chủ) |
 | `migrate` | chạy migration DB một lần rồi thoát, trước api/worker | không |
 | `api` | REST, SSE, webhook, OAuth | `127.0.0.1:API_HOST_PORT` (chỉ máy chủ) |
 | `worker` | job nền, cron | không |
@@ -30,8 +31,20 @@ cấu hình `deploy/nginx.conf.example`; `deploy.sh` không cài, không sửa, 
 | `backup`, `restore` | chỉ chạy khi gọi (`docker compose run`) | không |
 
 Dữ liệu: volume Docker `pgdata` (DB), `restic_cache`; thư mục máy chủ `MEDIA_DIR_HOST` (ảnh công khai, mặc định
-`/var/lib/ottm/media`) và `WEB_ROOT` (các bản build web, mặc định `/var/www/ottm`). Chứng chỉ TLS ở `/etc/letsencrypt`
-(certbot).
+`/var/lib/ottm/media`). Build web nằm trong image `ottm-web:<tag>` (không có thư mục web trên máy chủ). Chứng chỉ TLS ở
+`/etc/letsencrypt` (certbot).
+
+Service `web` thuộc profile `web` của compose: `deploy.sh`/`rollback.sh` tự bật khi `WEB_MODE=vps`. Với lệnh
+`docker compose …` gõ tay, `deploy/.env` đặt sẵn `COMPOSE_PROFILES=web` (chế độ `vps`), nên chúng thấy service `web`
+như mọi service khác:
+
+- `docker compose up -d --build` build và chạy cả api, worker, migrate, postgres **và web**. Khác `deploy.sh`: không
+  sao lưu trước migration, không kiểm cổng bận, không chờ khoẻ/smoke-test, và build lại với `IMAGE_TAG` đang có sẽ ghi
+  đè image của tag đó (mất đường rollback về nó). Dùng để dựng thử nhanh; deploy thật dùng `./deploy/deploy.sh`.
+- `ps`, `logs`, `restart`, `down`, `--remove-orphans` cũng tính cả web. Thiếu dòng `COMPOSE_PROFILES=web` (file `.env`
+  cũ) thì các lệnh này bỏ qua web (`--remove-orphans` có thể xoá container web) — thêm dòng đó, hoặc gõ `--profile web`.
+  `deploy.sh`/`rollback.sh` cảnh báo khi thiếu.
+- `WEB_MODE=external` (mục 8): để trống `COMPOSE_PROFILES`; `deploy.sh`/`rollback.sh` từ chối nếu nó còn `web`.
 
 ---
 
@@ -68,9 +81,9 @@ sudo ufw allow 443/tcp
 sudo ufw enable
 ```
 
-Lưu ý: Docker tự mở firewall cho cổng mà container publish, bỏ qua ufw. Stack này chỉ publish cổng api trên
+Lưu ý: Docker tự mở firewall cho cổng mà container publish, bỏ qua ufw. Stack này chỉ publish cổng api và web trên
 `127.0.0.1` (không ra được internet, chỉ nginx trên máy chủ gọi tới); Postgres (5432) không publish. Đừng thêm
-`ports:` cho service khác, và đừng đổi `127.0.0.1:` của api thành cổng trần.
+`ports:` cho service khác, và đừng đổi `127.0.0.1:` của api/web thành cổng trần.
 
 Cài Docker Engine và plugin compose theo hướng dẫn chính thức (apt repository):
 <https://docs.docker.com/engine/install/ubuntu/>. Sau đó:
@@ -97,9 +110,9 @@ nano .env
 |---|---|
 | `PUBLIC_BASE_URL` | `https://app.example.com` (không dấu `/` cuối) — cùng tên miền với `server_name` trong nginx |
 | `WEB_MODE` | `vps` (mặc định). `external` = web trên Hostinger (mục 8, kèm `WEB_BASE_URL`, `ALLOWED_ORIGINS`) |
-| `WEB_ROOT` | mặc định `/var/www/ottm` (mục 1.5) |
 | `MEDIA_DIR_HOST` | mặc định `/var/lib/ottm/media` (mục 1.5) |
-| `API_HOST_PORT` | mặc định `3000`; đổi nếu cổng này đã có dịch vụ khác trên máy (nhớ đổi cả `upstream` trong nginx) |
+| `API_HOST_PORT` | mặc định `3000`; đổi nếu cổng này đã có dịch vụ khác trên máy (nhớ đổi cả `upstream ottm_api` trong nginx) |
+| `WEB_HOST_PORT` | mặc định `3080` (container web, chỉ `127.0.0.1`); đổi nếu bận (nhớ đổi cả `upstream ottm_web` trong nginx); phải khác `API_HOST_PORT` |
 | `POSTGRES_PASSWORD` | `openssl rand -hex 24` |
 | `RESTIC_REPOSITORY` | ví dụ `s3:s3.us-west-004.backblazeb2.com/ten-bucket/ottm` |
 | `RESTIC_PASSWORD` | `openssl rand -base64 32` |
@@ -129,11 +142,10 @@ Cách đơn giản: lưu cả nội dung `deploy/.env` thành một mục trong 
 
 ### 1.5 Thư mục trên máy chủ
 
-`deploy.sh` không dùng `sudo`; tạo sẵn hai thư mục (đổi đường dẫn nếu `deploy/.env` dùng giá trị khác):
+`deploy.sh` không dùng `sudo`; tạo sẵn thư mục media (đổi đường dẫn nếu `deploy/.env` dùng giá trị khác). Web không
+cần thư mục trên máy chủ (chạy trong container `web`).
 
 ```bash
-# Web: deploy.sh (người dùng deploy) ghi vào; nginx (www-data) đọc.
-sudo install -d -o deploy -g deploy -m 755 /var/www/ottm
 # Media: api/worker trong container chạy bằng uid 1000 (user `node`) và ghi vào; nginx chỉ đọc.
 sudo install -d -m 755 /var/lib/ottm
 sudo install -d -o 1000 -g 1000 -m 755 /var/lib/ottm/media
@@ -142,11 +154,10 @@ sudo install -d -o 1000 -g 1000 -m 755 /var/lib/ottm/media
 - Thư mục media phải thuộc **uid 1000** (dù trên máy chủ uid 1000 là người dùng nào — trên Ubuntu thường là người dùng
   tạo đầu tiên) với quyền `755`. `deploy.sh` kiểm (chủ sở hữu, uid 1000 ghi được, nginx đọc được, mọi thư mục cha có
   `o+x`) và dừng kèm lệnh sửa nếu sai.
-- `WEB_ROOT` và `MEDIA_DIR_HOST` phải là hai thư mục riêng (không cái nào nằm trong cái kia), đường dẫn tuyệt đối ít
-  nhất hai cấp, không phải thư mục hệ thống (`/var/www`, `/var/lib`, `/etc/…` bị từ chối). Docker không tự tạo thư mục này (`create_host_path: false`) để không
-  sinh ra thư mục của root mà api không ghi được.
-- Các thư mục cha (`/var/www`, `/var/lib/ottm`) phải cho người khác đi qua (`755`), để nginx đọc được.
-- Sau deploy, `WEB_ROOT` có dạng `/var/www/ottm/<tag>/…` và symlink `/var/www/ottm/current → <tag>`. Không sửa tay.
+- `MEDIA_DIR_HOST` phải là đường dẫn tuyệt đối ít nhất hai cấp, không phải thư mục hệ thống (`/var/www`, `/var/lib`,
+  `/etc/…` bị từ chối). Docker không tự tạo thư mục này (`create_host_path: false`) để không sinh ra thư mục của root
+  mà api không ghi được.
+- Các thư mục cha (`/var/lib/ottm`) phải cho người khác đi qua (`755`), để nginx đọc được.
 - `MEDIA_DIR_HOST` được sao lưu (mục 1.9) và khôi phục (mục 4.2).
 
 ### 1.6 nginx và chứng chỉ TLS (certbot)
@@ -176,8 +187,8 @@ cổng 443 để `nginx -t` qua).
 cd ~/OnTheTopMoney
 sudo cp deploy/nginx.conf.example /etc/nginx/sites-available/ottm
 sudo sed -i 's/app\.example\.com/<tên-miền-của-bạn>/g' /etc/nginx/sites-available/ottm
-# Nếu deploy/.env đổi WEB_ROOT / MEDIA_DIR_HOST / API_HOST_PORT: sửa tương ứng
-#   /var/www/ottm/current, /var/lib/ottm/media (cả dòng disable_symlinks), 127.0.0.1:3000
+# Nếu deploy/.env đổi MEDIA_DIR_HOST / API_HOST_PORT / WEB_HOST_PORT: sửa tương ứng
+#   /var/lib/ottm/media (cả dòng disable_symlinks), 127.0.0.1:3000 (upstream ottm_api), 127.0.0.1:3080 (upstream ottm_web)
 sudo ln -s ../sites-available/ottm /etc/nginx/sites-enabled/ottm
 sudo nginx -t && sudo systemctl reload nginx
 ```
@@ -185,18 +196,21 @@ sudo nginx -t && sudo systemctl reload nginx
 Những điểm **bắt buộc giữ** khi tự chỉnh (đầu file mẫu có danh sách đầy đủ; `deploy/smoke-test.sh` kiểm chúng):
 
 - Các đường `/healthz`, `/api`, `/webhooks`, `/oauth`, `/privacy` (kể cả không có `/…` phía sau) đi tới api;
-  `/media/` phục vụ file, thiếu → 404; `/assets/` thiếu → 404; còn lại SPA (`try_files $uri /index.html`).
+  `/media/` phục vụ file, thiếu → 404; còn lại `proxy_pass` tới container web (`upstream ottm_web`), container lo SPA
+  fallback, `/assets/` thiếu → 404 và `Cache-Control`.
+- `Cache-Control`: nginx máy chủ chỉ thêm `no-store` cho lỗi mà upstream chưa đặt — không thêm cái thứ hai lên
+  response của web/api (map `$ottm_cache_control`).
 - `proxy_set_header X-Forwarded-For $remote_addr;` — **không** dùng `$proxy_add_x_forwarded_for` (client tự gửi
   `X-Forwarded-For` giả để né giới hạn đăng nhập). api tin đúng một hop (`TRUST_PROXY=true`).
 - Header bảo mật chỉ đặt ở cấp `server` với `always`. Một `add_header` trong `location` làm location đó mất **mọi**
   header của server (quy tắc kế thừa của nginx) — mẫu dùng `map` thay cho add_header trong location.
 - `/api/v1/stream` (SSE): `proxy_buffering off`, `proxy_read_timeout` ≥ 1 giờ; không bật gzip trên đường api.
 - Không access log cho `/oauth`, `/webhooks` (URL mang `code`, `hub.verify_token`).
-- Sau mỗi deploy **không cần reload nginx**: `current` là symlink, nginx đọc theo từng request. Chỉ reload khi sửa
-  file cấu hình (`sudo nginx -t && sudo systemctl reload nginx`).
+- Sau mỗi deploy/rollback **không cần reload nginx**: container web luôn ở cùng cổng `127.0.0.1:WEB_HOST_PORT`. Chỉ
+  reload khi sửa file cấu hình (`sudo nginx -t && sudo systemctl reload nginx`).
 
 Thứ tự lần đầu: làm mục này **trước** khi deploy — `deploy.sh` kết thúc bằng smoke-test qua `PUBLIC_BASE_URL`, tức là
-qua nginx. Trước lần deploy đầu, nginx trả 404 cho web (chưa có `current`) và 502 JSON cho api — bình thường.
+qua nginx. Trước lần deploy đầu, nginx trả 502 `web unavailable` cho web và 502 JSON cho api — bình thường.
 
 ### 1.7 Triển khai lần đầu
 
@@ -205,9 +219,10 @@ cd ~/OnTheTopMoney
 ./deploy/deploy.sh
 ```
 
-Script kiểm thư mục (1.5), build image (tag = git SHA ngắn), chép build web ra `WEB_ROOT/<tag>`, ghi `IMAGE_TAG` vào
-`deploy/.env`, trỏ `WEB_ROOT/current` sang tag mới, chạy `migrate` rồi `api`, `worker`, chờ `/healthz` (gọi thẳng
-`127.0.0.1:API_HOST_PORT`) trả 200, rồi smoke-test qua `PUBLIC_BASE_URL` (nginx). Lần đầu mất vài phút (build).
+Script kiểm cấu hình và thư mục (1.4–1.5), build image `ottm-server`, `ottm-backup`, `ottm-web` (tag = git SHA ngắn),
+ghi `IMAGE_TAG` vào `deploy/.env`, chạy `migrate` rồi `api`, `worker`, `web`, chờ `/healthz` của api (gọi thẳng
+`127.0.0.1:API_HOST_PORT`) và của web (`127.0.0.1:WEB_HOST_PORT/healthz`) trả 200, rồi smoke-test qua `PUBLIC_BASE_URL`
+(nginx). Lần đầu mất vài phút (build).
 
 Kiểm từ máy khác:
 
@@ -302,6 +317,33 @@ ls /var/lib/ottm/media | head
 Rồi làm mục 1.6 và `./deploy/deploy.sh`. Khi app chạy ổn: `docker volume rm ottm_media` và xoá image cũ của proxy
 (`docker image ls`, `docker image rm <tên>:<tag>`).
 
+### 1.12 Máy đã chạy bản web chép ra thư mục máy chủ (`/var/www/ottm/current`)
+
+Chỉ cần nếu VPS từng chạy bản mà `deploy.sh` chép build web ra `/var/www/ottm/<tag>` và nginx phục vụ
+`root /var/www/ottm/current`. Nay web là service Docker `web`; làm một lần.
+
+**Đọc trước bước 2:** sau lần deploy đầu theo cách mới, `rollback.sh` **không** quay về được bất kỳ bản nào trước
+đó (image `ottm-web` cũ chỉ mang build web, không chạy được như service). Nếu phải lùi: checkout commit cũ, đổi lại
+site nginx cũ (`root /var/www/ottm/current`, giữ thư mục `/var/www/ottm` tới khi chắc chắn) rồi chạy `deploy.sh` của
+commit đó; hoặc khôi phục backup (mục 4.2). Ghi lại tag đang chạy (`grep '^IMAGE_TAG=' deploy/.env`) trước khi bắt đầu.
+
+1. `git pull`. Thêm `WEB_HOST_PORT=3080` vào `deploy/.env` (không thêm thì mặc định 3080; đổi nếu cổng bận — mục 1.4).
+   Dòng đường dẫn thư mục web cũ (`/var/www/ottm`) trong `deploy/.env` không còn dùng — xoá được.
+2. `./deploy/deploy.sh` — container web chạy ở `127.0.0.1:3080`, api/worker sang bản mới. Site nginx cũ **vẫn phục vụ
+   web cũ** từ `/var/www/ottm/current` (web cũ chạy với api mới), và smoke-test cuối của bước này kiểm web cũ đó chứ
+   không phải container; `deploy.sh` in CẢNH BÁO vì `index.html` qua tên miền khác của container. **Làm bước 3 ngay.**
+3. Sửa site nginx theo `deploy/nginx.conf.example` mới (hoặc chép lại từ mẫu như mục 1.6 và thay giá trị):
+   - thêm khối `upstream ottm_web { server 127.0.0.1:3080; keepalive 8; }`;
+   - thay map `$ottm_cache_control_want` bằng bản mới (chỉ `no-store` cho lỗi — container web tự đặt `Cache-Control`);
+   - bỏ `location ^~ /assets/` và `location = /.ottm…` (đánh dấu thư mục cũ); thay `location /` (`root …/current`,
+     `try_files`) bằng `location /` có `proxy_pass http://ottm_web;` và `location @ottm_web_unavailable` như mẫu.
+
+   Rồi `sudo nginx -t && sudo systemctl reload nginx` và `./deploy/smoke-test.sh https://app.example.com`. Kiểm lần nữa
+   là web đã từ container: `diff <(curl -s http://127.0.0.1:3080/) <(curl -s https://app.example.com/) && echo khớp`.
+4. Khi chạy ổn vài ngày: xoá tay thư mục cũ `sudo rm -rf /var/www/ottm` (script không tự xoá).
+5. Rollback chỉ tới các tag deploy **sau** bước 2 (xem cảnh báo đầu mục) — `rollback.sh` từ chối tag cũ hơn kèm
+   hướng dẫn. Các image cũ đó tự bị dọn dần (giữ 5 tag).
+
 ---
 
 ## 2. Triển khai bản mới
@@ -314,21 +356,21 @@ git pull
 
 - Tag image = `git rev-parse --short HEAD`. Có thay đổi chưa commit (kể cả file chưa track trong `server/`, `web/`,
   `packages/`, `deploy/`) thì script dừng (hoặc đặt `IMAGE_TAG=<tên>` để ép).
-- Build web được chép ra một thư mục chuẩn bị trong `WEB_ROOT` (`.publish-new-…`, chưa phục vụ) **trước** mọi thay đổi;
-  lỗi ở bước này hay ở bước sao lưu → script dừng, dọn thư mục chuẩn bị, `current` và stack giữ nguyên. Ngay trước
-  `docker compose up`, bản chuẩn bị mới vào `WEB_ROOT/<tag>` và `current` đổi sang (deploy lại cùng tag cũng thay an
-  toàn, `current` không lúc nào trỏ vào thư mục thiếu); sau đó mới ghi `IMAGE_TAG`. nginx thấy bản mới ngay, không cần reload.
+- `WEB_MODE`, `WEB_BASE_URL`, `WEB_HOST_PORT` (số 1–65535, khác `API_HOST_PORT`) được kiểm **trước** mọi thay đổi; sai →
+  dừng, không build, không ghi gì.
+- Image web (`ottm-web:<tag>`) build cùng lúc với `ottm-server`/`ottm-backup`; lỗi build hay lỗi sao lưu → script dừng,
+  stack đang chạy giữ nguyên. Sau đó ghi `IMAGE_TAG` và `docker compose up`: api, worker và web cùng sang tag mới.
+  Container web được thay trong khoảng một giây — trong lúc đó nginx trả `502 web unavailable` cho trang web (trình duyệt
+  tải lại là xong); không cần reload nginx.
 - Mỗi lúc chỉ một `deploy.sh`/`rollback.sh` chạy (khoá `deploy/.deploy.lock`, cần `flock`); lần chạy thứ hai dừng ngay.
-- Thư mục `.publish-old-…` trong `WEB_ROOT` chỉ còn lại khi thay bản cùng tag lỗi giữa chừng — script cảnh báo, không tự
-  xoá; kiểm rồi xoá tay.
 - Trước khi chạy bản mới, script sao lưu một bản (`docker compose run backup`) vì migration chỉ tiến. Bỏ qua bằng
   `SKIP_PREDEPLOY_BACKUP=1 ./deploy/deploy.sh` (chỉ khi backup đang hỏng và bạn chấp nhận rủi ro).
 - Migration chạy trước api/worker; chỉ tiến, tương thích ngược một phiên bản.
-- Script giữ 5 tag gần nhất (`KEEP_TAGS`) — cùng một tập tag cho image và thư mục `WEB_ROOT/<tag>`, không bao giờ xoá
-  bản đang `current` — để rollback, và in tag bản trước khi xong. Chỉ thư mục do script tạo (có file `.ottm-web-tag`
-  khớp tên) mới bị dọn; thư mục khác trong `WEB_ROOT` không bị đụng.
-- `/healthz` (qua `127.0.0.1:API_HOST_PORT`) không lên 200 trong 2 phút, hoặc `smoke-test.sh` qua `PUBLIC_BASE_URL`
-  (nginx, DNS, TLS) lỗi → script báo lỗi và in lệnh rollback. Smoke lỗi mà healthz ổn → thường do cấu hình nginx:
+- Script giữ 5 tag gần nhất (`KEEP_TAGS`) — cùng một tập tag cho `ottm-server`, `ottm-web`, `ottm-backup`, không bao
+  giờ xoá tag đang chạy — để rollback, và in tag bản trước khi xong.
+- `/healthz` của api (qua `127.0.0.1:API_HOST_PORT`) hoặc của web (qua `127.0.0.1:WEB_HOST_PORT`) không lên 200 trong
+  khoảng 2 phút, hoặc `smoke-test.sh` qua `PUBLIC_BASE_URL` (nginx, DNS, TLS) lỗi → script báo lỗi và in lệnh rollback
+  (`IMAGE_TAG` lúc đó đã là tag mới). Smoke lỗi mà healthz ổn → thường do cấu hình nginx:
   `sudo nginx -t`, `sudo tail -n 50 /var/log/nginx/error.log`. `/healthz` 503 chỉ vì đĩa đầy vẫn cho deploy qua nhưng in CẢNH BÁO — xử lý ngay (mục 5).
 - `smoke-test.sh` mặc định không thử đăng nhập (mỗi lần thử sai tốn 1/5 lượt đăng nhập của bạn trong 15 phút);
   `SMOKE_LOGIN=1` để bật.
@@ -337,12 +379,13 @@ git pull
 
 ```bash
 docker image ls ottm-server              # các tag còn giữ, mới nhất trước
-ls /var/www/ottm                         # các bản web còn giữ (WEB_ROOT)
+docker image ls ottm-web                 # bản web của từng tag (cùng tag với ottm-server)
 ./deploy/rollback.sh <tag>
 ```
 
-Không build lại; kiểm có đủ image `ottm-server:<tag>` và thư mục `WEB_ROOT/<tag>` (thiếu → dừng, không đổi gì), rồi
-trỏ `WEB_ROOT/current` về `<tag>`, đổi `IMAGE_TAG` trong `deploy/.env` và khởi động lại bằng image cũ.
+Không build lại; kiểm có đủ image `ottm-server:<tag>` và `ottm-web:<tag>` (thiếu, hoặc `ottm-web` kiểu cũ trước mục
+1.12 → dừng kèm hướng dẫn, không đổi gì), rồi đổi `IMAGE_TAG` trong `deploy/.env` và `docker compose up` bằng image cũ —
+api, worker và web cùng về `<tag>`, chờ cả hai `/healthz`.
 Migration chỉ tiến: image cũ chạy được trên schema mới hơn **một** phiên bản. Nếu cần lùi qua nhiều bản có đổi schema,
 khôi phục backup (mục 4.2) thay vì rollback.
 
@@ -371,6 +414,7 @@ curl -s https://app.example.com/healthz
 (`public`, `drizzle`, `pgboss`) rồi nạp dump trong **một transaction** (lỗi → DB giữ nguyên), và chỉ khi DB xong mới
 đồng bộ media (`rsync --delete-after`). Snapshot không có media → từ chối; chỉ muốn khôi phục DB thì thêm `--db-only`.
 Sau khôi phục, `docker compose up -d` chạy lại `migrate`, đưa schema từ thời điểm snapshot lên bản đang chạy.
+`docker compose up -d` (có `COMPOSE_PROFILES=web`) cũng đưa container web lên lại nếu nó đã dừng; web không dùng DB hay media nên khôi phục không ảnh hưởng nó.
 
 ### 4.3 Khôi phục sang VPS mới (máy cũ mất)
 
@@ -403,9 +447,10 @@ Ghi lại ngày diễn tập và thời gian khôi phục.
 
 ```bash
 cd ~/OnTheTopMoney/deploy
-docker compose ps
+docker compose --profile web ps
 docker compose logs -f --tail=100 api worker
 docker compose logs --tail=100 migrate postgres
+docker compose --profile web logs --tail=100 web     # nginx trong container web (chỉ error log; access log ở nginx máy chủ)
 sudo tail -f /var/log/nginx/access.log /var/log/nginx/error.log      # nginx (theo cấu hình của bạn)
 ```
 
@@ -417,7 +462,8 @@ mật) và chỉ ghi lỗi mức `crit` ở đó; đừng bật lại.
 
 ```bash
 docker compose restart api worker
-docker compose down          # dừng tất cả, GIỮ dữ liệu
+docker compose --profile web restart web         # khởi động lại web (WEB_MODE=vps)
+docker compose --profile web down                # dừng tất cả (cả web), GIỮ dữ liệu — thiếu --profile web có thể sót container web
 # KHÔNG chạy `docker compose down -v` trên production: -v xoá volume pgdata (toàn bộ DB).
 # (media nằm ở thư mục máy chủ MEDIA_DIR_HOST, không bị -v xoá — đừng xoá tay thư mục đó.)
 ```
@@ -439,8 +485,8 @@ docker image prune -f                    # image không còn tag
 docker builder prune -f --keep-storage 5GB
 ```
 
-Nếu vẫn đầy: xem kích thước volume (`docker system df -v`), media (`sudo du -sh /var/lib/ottm/media`), các bản web
-(`du -sh /var/www/ottm/*`, giảm `KEEP_TAGS`), nâng dung lượng đĩa VPS.
+Nếu vẫn đầy: xem kích thước volume (`docker system df -v`), media (`sudo du -sh /var/lib/ottm/media`), image theo tag
+(`docker image ls 'ottm-*'`, giảm `KEEP_TAGS`), nâng dung lượng đĩa VPS.
 
 ### Đổi mật khẩu chủ sở hữu
 
@@ -688,9 +734,11 @@ Xong thì bỏ các dòng trên khỏi `server/.env` để quay lại dev thư�
 | Đặt mật khẩu | `docker compose run --rm api node scripts/set-password.ts` |
 | Backup ngay | `docker compose run --rm backup` |
 | Xem snapshot | `docker compose run --rm --entrypoint restic backup snapshots` |
-| Khôi phục | `docker compose stop api worker && docker compose run --rm restore latest --yes && docker compose up -d` |
+| Khôi phục | `docker compose stop api worker && docker compose run --rm restore latest --yes && docker compose up -d` (web không bị đụng, không cần) |
 | Kiểm nhanh | `curl -s https://app.example.com/healthz` hoặc `./deploy/smoke-test.sh https://app.example.com` |
-| Log | `docker compose logs -f --tail=100 api worker` |
+| Log | `docker compose logs -f --tail=100 api worker` (web: `docker compose --profile web logs web`) |
+| Khởi động lại web (vps) | `docker compose --profile web up -d web` |
+| Dừng cả stack | `docker compose --profile web down` (không `-v`); lệnh gõ tay có `--remove-orphans` ở vps luôn kèm `--profile web` |
 | Xuất bản web (chế độ tách) | `VITE_API_ORIGIN=https://api.example.com HOSTINGER_SSH=… HOSTINGER_PATH=… ./deploy/hostinger/publish-web-hostinger.sh` (ở gốc repo, mục 8.4) |
 | Kiểm web (chế độ tách) | `./deploy/hostinger/check-htaccess.sh https://app.example.com https://api.example.com` (ở gốc repo) |
 | Kiểm host api (chế độ tách) | `SMOKE_MODE=api ORIGIN=https://app.example.com ./deploy/smoke-test.sh https://api.example.com` (ở gốc repo) |
@@ -725,15 +773,16 @@ Trình duyệt ──https──> app.example.com  (Hostinger: web/dist + .htacc
 
    ```dotenv
    WEB_MODE=external
+   COMPOSE_PROFILES=                            # để trống: không chạy service web trên VPS
    PUBLIC_BASE_URL=https://api.example.com      # host api: OAuth callback, webhook, /media
    WEB_BASE_URL=https://app.example.com         # host web: OAuth xong chuyển chủ shop về đây
    ALLOWED_ORIGINS=https://app.example.com      # origin web (phẩy ngăn cách nếu nhiều), phải gồm WEB_BASE_URL
    ```
 
-   `WEB_ROOT` không dùng (để nguyên hay xoá đều được). `deploy.sh`/`rollback.sh` kiểm trước khi build, sao lưu hay
+   `WEB_HOST_PORT` không dùng. `deploy.sh`/`rollback.sh` kiểm trước khi build, sao lưu hay
    đổi gì: `WEB_BASE_URL` phải là origin https, khác `PUBLIC_BASE_URL` và nằm trong `ALLOWED_ORIGINS` (sai → dừng,
    nêu tên biến). Ngược lại, `WEB_MODE=vps` mà còn `WEB_BASE_URL` khác `PUBLIC_BASE_URL` cũng bị từ chối.
-3. Thư mục: chỉ cần thư mục media (mục 1.5, bỏ phần `/var/www/ottm`).
+3. Thư mục: chỉ cần thư mục media (mục 1.5).
 4. nginx: dùng mẫu **`deploy/nginx-api.conf.example`** thay cho `nginx.conf.example`. Theo đúng thứ tự của mục 1.6:
    **lấy chứng chỉ trước** (DNS của host api đã trỏ đúng, cổng 80 mở), rồi mới bật site và `nginx -t` (site tham
    chiếu file chứng chỉ, chưa có thì `nginx -t` lỗi):
@@ -765,9 +814,9 @@ Trình duyệt ──https──> app.example.com  (Hostinger: web/dist + .htacc
    `MEDIA_DIR_HOST`; `/` và đường lạ → JSON 404 (host api không phục vụ trang web); CSP `default-src 'none'`;
    **không** thêm header `Access-Control-*` ở nginx (api tự đặt — thêm `*` ở nginx sẽ làm hỏng đăng nhập). Tên
    map/upstream có tiền tố `ottm_api_` nên cài song song được với site cùng VPS lúc chuyển chế độ.
-5. `./deploy/deploy.sh` — với `WEB_MODE=external` script bỏ qua build/xuất bản web (`Dockerfile.web`, `WEB_ROOT`),
-   chỉ build BE, chạy stack, chờ `/healthz`, rồi smoke-test host api (`SMOKE_MODE=api`, `Origin` = `WEB_BASE_URL`:
-   preflight CORS, `/` → JSON 404, header, `/media`). `rollback.sh` cũng chỉ quay BE.
+5. `./deploy/deploy.sh` — với `WEB_MODE=external` script không build/chạy service `web` (`Dockerfile.web`; container
+   web còn lại từ chế độ VPS bị dừng + xoá), chỉ build BE, chạy stack, chờ `/healthz`, rồi smoke-test host api (`SMOKE_MODE=api`, `Origin` = `WEB_BASE_URL`:
+   preflight CORS, `/` → JSON 404, header, `/media`). `rollback.sh` cũng chỉ quay BE (không cần `ottm-web:<tag>`).
 6. App Meta/Threads production: Redirect URI là `https://api.example.com/oauth/facebook/callback` và
    `https://api.example.com/oauth/threads/callback`, webhook `https://api.example.com/webhooks/meta` (mục 6.1, 6.3 —
    trên app **production**).
@@ -843,9 +892,9 @@ SMOKE_MODE=api ORIGIN=https://app.example.com ./deploy/smoke-test.sh https://api
    ra chứng chỉ hợp lệ). **Chỉ sau đó** kiểm 8.5 trên tên thật.
 5. Lúc chuyển, **mọi người bị đăng xuất một lần**: cookie `ottm_sid` cũ do host web cũ (cùng VPS) đặt, chỉ gửi tới
    host đó; host api mới không nhận được nó → đăng nhập lại ở `https://app.example.com`.
-6. Khi ổn: gỡ site `nginx.conf.example` cũ, xoá `WEB_ROOT` (`/var/www/ottm`) và image `ottm-web` cũ
-   (`docker image rm $(docker image ls ottm-web -q)`).
+6. Khi ổn: gỡ site `nginx.conf.example` cũ và image `ottm-web` cũ (`docker image rm $(docker image ls ottm-web -q)`;
+   container web đã được `deploy.sh` dừng + xoá ở bước 2).
 
 Quay lại chế độ VPS: `WEB_MODE=vps`, bỏ `WEB_BASE_URL` / `ALLOWED_ORIGINS` (hoặc đặt = `PUBLIC_BASE_URL` của tên miền
 chung — `deploy.sh` từ chối `WEB_BASE_URL` khác `PUBLIC_BASE_URL` khi `WEB_MODE=vps`), cài lại site
-`nginx.conf.example`, `./deploy/deploy.sh`.
+`nginx.conf.example`, `./deploy/deploy.sh` (build lại `ottm-web` và chạy container web).

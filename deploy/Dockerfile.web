@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1
-# Image `ottm-web`: chỉ để build web/ và mang `dist` ra ngoài. Không chạy như service.
-# deploy.sh (lib.sh: publish_web) chép /dist của image này ra WEB_ROOT/<tag> trên máy chủ; nginx của chủ shop
-# phục vụ WEB_ROOT/current (deploy/nginx.conf.example). Build context = gốc repo.
-FROM node:24-slim AS web
+# Image `ottm-web`: build web/ rồi phục vụ `dist` bằng nginx unprivileged (service `web` trong docker-compose.yml,
+# profile `web`, chỉ khi WEB_MODE=vps). nginx của chủ shop chuyển `/` tới 127.0.0.1:${WEB_HOST_PORT:-3080}
+# (deploy/nginx.conf.example). Build context = gốc repo. Cùng tag với ottm-server (rollback đổi cả hai).
+FROM node:24-slim AS build
 
 ENV NPM_CONFIG_UPDATE_NOTIFIER=false
 WORKDIR /app
@@ -17,6 +17,24 @@ COPY web web
 RUN npm run build -w web \
  && test -f web/dist/index.html
 
-# Chỉ còn dist: `docker create ottm-web:<tag> noop` rồi `docker cp <id>:/dist/. <đích>` (không cần chạy container).
-FROM scratch
-COPY --from=web /app/web/dist /dist
+# Ghim bản vá (nâng có chủ đích). Độc lập với NGINX_IMAGE trong CI — cái đó đóng vai nginx máy chủ của chủ shop.
+# Image unprivileged: user nginx (uid 101), nghe 8080 — không cần quyền root hay capability nào.
+# Healthcheck khai ở docker-compose.yml (service web), không ở đây.
+FROM nginxinc/nginx-unprivileged:1.28.0-alpine
+
+# Nhãn để deploy/lib.sh phân biệt với image ottm-web cũ (chỉ mang /dist, không chạy được) khi rollback.
+LABEL org.ottm.web="nginx"
+
+USER root
+# Cấu hình riêng thay cho mặc định (bỏ default.conf: entrypoint không sửa gì trên root FS chỉ đọc).
+RUN rm -f /etc/nginx/conf.d/default.conf /usr/share/nginx/html/*
+COPY deploy/web-nginx.conf /etc/nginx/nginx.conf
+COPY --from=build /app/web/dist /usr/share/nginx/html
+# Nội dung chỉ đọc với nginx (chủ root, a+rX).
+RUN chmod -R a+rX,go-w /usr/share/nginx/html /etc/nginx/nginx.conf \
+ && nginx -t -c /etc/nginx/nginx.conf \
+ && rm -rf /tmp/*_temp /tmp/nginx.pid
+USER 101
+
+ENV NGINX_ENTRYPOINT_QUIET_LOGS=1
+EXPOSE 8080

@@ -5,9 +5,11 @@
 #   docker compose run --rm backup                sao lưu (cron hằng đêm, xem runbook.md)
 #
 # Không có reverse proxy trong stack: nginx trên máy chủ (chủ shop tự quản, TLS bằng certbot) mở 80/443,
-# phục vụ web tĩnh từ WEB_ROOT/current, /media từ MEDIA_DIR_HOST, và chuyển phần api tới
-# 127.0.0.1:${API_HOST_PORT} (mẫu: deploy/nginx.conf.example). api chỉ publish trên 127.0.0.1;
+# phục vụ /media từ MEDIA_DIR_HOST, chuyển phần api tới 127.0.0.1:${API_HOST_PORT} và phần web (`/`) tới
+# 127.0.0.1:${WEB_HOST_PORT} (mẫu: deploy/nginx.conf.example). api và web chỉ publish trên 127.0.0.1;
 # worker, postgres không publish cổng nào. Không service nào giữ 80/443.
+# Service `web` thuộc profile `web`: deploy.sh/rollback.sh chỉ bật khi WEB_MODE=vps. Lệnh compose gõ tay: deploy/.env
+# đặt COMPOSE_PROFILES=web (vps) nên `docker compose up -d --build` chạy luôn web; external để trống.
 # Mỗi service chỉ nhận đúng biến nó cần (không env_file chung): api/worker không thấy khoá kho backup,
 # backup không thấy APP_ENCRYPTION_KEYS. Thêm biến app mới → thêm vào x-app-env và env.production.example.
 
@@ -121,6 +123,35 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  # Web tĩnh (WEB_MODE=vps): nginx unprivileged phục vụ web/dist, SPA fallback, Cache-Control. Header bảo mật, TLS do
+  # nginx máy chủ đặt. Cùng IMAGE_TAG với api: rollback đổi cả hai. WEB_MODE=external: không build, không chạy.
+  web:
+    image: ottm-web:${IMAGE_TAG:?đặt IMAGE_TAG (deploy.sh tự ghi vào deploy/.env)}
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.web
+    profiles: [web]
+    restart: unless-stopped
+    user: "101:101"
+    read_only: true
+    # Chỗ nginx cần ghi (pid, thư mục tạm) — root FS chỉ đọc.
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    # Chỉ nginx trên máy chủ gọi được: publish trên loopback, không bao giờ 0.0.0.0.
+    ports:
+      - "127.0.0.1:${WEB_HOST_PORT:-3080}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging: *logging
+    networks: [web]
+
   postgres:
     image: postgres:18
     restart: unless-stopped
@@ -184,8 +215,10 @@ services:
 
 networks:
   # Không `internal: true` vì api/worker/backup cần ra internet (Meta, OpenAI, kho backup) — cô lập bằng
-  # việc không publish cổng (trừ api trên 127.0.0.1).
+  # việc không publish cổng (trừ api, web trên 127.0.0.1).
   backend: {}
+  # Riêng cho web: không cần tới postgres/api (chỉ phục vụ file, nginx máy chủ gọi qua cổng loopback).
+  web: {}
 
 volumes:
   pgdata: {}

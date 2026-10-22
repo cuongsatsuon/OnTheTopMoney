@@ -65,9 +65,9 @@ jobs:
           # Schema Drizzle đổi mà quên sinh migration → generate tạo file mới → CI đỏ.
           test -z "$(git status --porcelain -- drizzle)" || { git status --porcelain -- drizzle; exit 1; }
 
-  # Story 1.3 (1.3b: reverse proxy là nginx của chủ shop): dựng image production bằng deploy.sh, chạy cả stack compose, dựng nginx
-  # chính thức từ deploy/nginx.conf.example (cổng 80, không TLS) và gọi thử qua nó, thử deploy/rollback/dọn image +
-  # thư mục web, backup và khôi phục (kể cả khôi phục đè DB đã migrate xa hơn snapshot).
+  # Story 1.3 (1.3b: reverse proxy là nginx của chủ shop; 1.3d: web là service Docker `web`): dựng image production
+  # bằng deploy.sh, chạy cả stack compose, dựng nginx chính thức từ deploy/nginx.conf.example (cổng 80, không TLS) và
+  # gọi thử qua nó, thử deploy/rollback/dọn image, backup và khôi phục (kể cả khôi phục đè DB đã migrate xa hơn snapshot).
   deploy-smoke:
     needs: check
     runs-on: ubuntu-latest
@@ -81,9 +81,9 @@ jobs:
       # Tag minor cố định của image nginx chính thức.
       NGINX_IMAGE: nginx:1.27-alpine
       # Khác giá trị mặc định để kiểm cả việc thay đường dẫn/cổng trong mẫu nginx.
-      CI_WEB_ROOT: /srv/ottm-ci/www
       CI_MEDIA_DIR: /srv/ottm-ci/media
       CI_API_PORT: "3100"
+      CI_WEB_PORT: "3180"
     steps:
       - uses: actions/checkout@v4
       - name: Giải phóng đĩa (healthz báo 503 khi đĩa >85%)
@@ -91,35 +91,49 @@ jobs:
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
           df -h /
-      - name: Thư mục trên máy chủ (WEB_ROOT, MEDIA_DIR_HOST uid 1000)
+      - name: Thư mục trên máy chủ (MEDIA_DIR_HOST uid 1000)
         run: |
-          sudo install -d -o "$(id -u)" -g "$(id -g)" -m 755 "$CI_WEB_ROOT"
           sudo install -d -o 1000 -g 1000 -m 755 "$CI_MEDIA_DIR"
-          ls -ld "$CI_WEB_ROOT" "$CI_MEDIA_DIR"
+          ls -ld "$CI_MEDIA_DIR"
       - name: Tạo deploy/.env với bí mật thử
         run: |
           cp env.production.example .env
           source ./lib.sh
           env_set PUBLIC_BASE_URL https://ottm-ci.example.test
-          env_set WEB_ROOT "$CI_WEB_ROOT"
           env_set MEDIA_DIR_HOST "$CI_MEDIA_DIR"
           env_set API_HOST_PORT "$CI_API_PORT"
+          env_set WEB_HOST_PORT "$CI_WEB_PORT"
           env_set POSTGRES_PASSWORD "$(openssl rand -hex 16)"
           env_set APP_ENCRYPTION_KEYS "k1:$(openssl rand -base64 32)"
           env_set APP_ENCRYPTION_ACTIVE_KEY k1
           env_set IMAGE_TAG ci-config
           grep -v -e PASSWORD -e APP_ENCRYPTION_KEYS .env
-      - name: docker compose config — chỉ api publish, trên 127.0.0.1; không ai giữ 80/443; media là bind mount
+      - name: docker compose config — chỉ api, web publish, trên 127.0.0.1; web không root, chỉ đọc; không ai giữ 80/443; media là bind mount
         run: |
           docker compose config --quiet
-          docker compose --profile backup --profile restore config --quiet
-          cfg="$(docker compose --profile backup --profile restore config --format json)"
-          published="$(jq -r '.services | to_entries[] | select((.value.ports // []) | length > 0) | .key' <<<"$cfg")"
+          docker compose --profile web --profile backup --profile restore config --quiet
+          # .env mẫu (vps) có COMPOSE_PROFILES=web → `docker compose up -d --build` gõ tay chạy luôn web.
+          grep -qx web <<<"$(docker compose config --services)"
+          # Không bật profile (COMPOSE_PROFILES trống = WEB_MODE=external) → web không nằm trong danh sách chạy.
+          services="$(COMPOSE_PROFILES= docker compose config --services)"
+          echo "$services"
+          if grep -qx web <<<"$services"; then echo "web phải thuộc profile web"; exit 1; fi
+          grep -qx web <<<"$(docker compose --profile web config --services)"
+          cfg="$(docker compose --profile web --profile backup --profile restore config --format json)"
+          published="$(jq -r '.services | to_entries[] | select((.value.ports // []) | length > 0) | .key' <<<"$cfg" | sort | tr '\n' ' ')"
           echo "service có publish cổng: $published"
-          test "$published" = "api"
-          jq '.services.api.ports' <<<"$cfg"
+          test "$published" = "api web "
+          jq '.services.api.ports, .services.web.ports' <<<"$cfg"
           jq -e --arg p "$CI_API_PORT" '.services.api.ports | length == 1
             and .[0].host_ip == "127.0.0.1" and .[0].target == 3000 and (.[0].published | tostring) == $p' <<<"$cfg"
+          jq -e --arg p "$CI_WEB_PORT" '.services.web.ports | length == 1
+            and .[0].host_ip == "127.0.0.1" and .[0].target == 8080 and (.[0].published | tostring) == $p' <<<"$cfg"
+          jq -e '.services.web | .read_only == true and .user == "101:101" and (.tmpfs | length) == 1
+            and (.cap_drop == ["ALL"]) and (.healthcheck.test | length) > 0 and (.volumes // [] | length) == 0' <<<"$cfg"
+          jq -e '.services.web.image | startswith("ottm-web:")' <<<"$cfg"
+          jq -e '.services.web | (.networks | keys) == ["web"]
+            and (.security_opt | index("no-new-privileges:true")) != null
+            and (.tmpfs[0] | split(":")[1] | split(",") | contains(["noexec", "nosuid", "nodev"]))' <<<"$cfg"
           jq -e '[.services[].ports[]? | .published | tostring] | any(. == "80" or . == "443") | not' <<<"$cfg"
           for s in api worker backup restore; do
             jq -e --arg s "$s" --arg m "$CI_MEDIA_DIR" \
@@ -138,19 +152,19 @@ jobs:
               -e '/^[[:space:]]*listen \[::\]:443/d' \
               -e 's/^\([[:space:]]*\)listen 443 ssl http2;/\1listen 80;/' \
               -e 's/app\.example\.com/localhost/g' \
-              -e "s#/var/www/ottm/current#$CI_WEB_ROOT/current#g" \
               -e "s#/var/lib/ottm/media#$CI_MEDIA_DIR#g" \
               -e "s/127\.0\.0\.1:3000;/127.0.0.1:$CI_API_PORT;/" \
+              -e "s/127\.0\.0\.1:3080;/127.0.0.1:$CI_WEB_PORT;/" \
               nginx.conf.example > "$conf"
-          grep -nE '^[[:space:]]*(listen|server |root|alias|server_name|disable_symlinks)' "$conf"
+          grep -nE '^[[:space:]]*(listen|server |root|alias|server_name|disable_symlinks|proxy_pass)' "$conf"
           # Không còn TLS hay giá trị mẫu ngoài chú thích (ký hiệu trong mẫu bị đổi → bước này đỏ).
-          if grep -nE '^[^#]*(ssl|443|example\.com|/var/www/ottm|/var/lib/ottm|127\.0\.0\.1:3000)' "$conf"; then
+          if grep -nE '^[^#]*(ssl|443|example\.com|/var/www|/var/lib/ottm|127\.0\.0\.1:3000|127\.0\.0\.1:3080)' "$conf"; then
             echo "mẫu nginx còn TLS/giá trị mẫu sau khi thay — ký hiệu cho CI trong nginx.conf.example đã đổi?"; exit 1
           fi
           grep -q '^[[:space:]]*listen 80;' "$conf"
+          grep -q "server 127.0.0.1:$CI_WEB_PORT;" "$conf"
           NGINX_RUN=(--network host
             -v "$conf:/etc/nginx/conf.d/default.conf:ro"
-            -v "$CI_WEB_ROOT:$CI_WEB_ROOT:ro"
             -v "$CI_MEDIA_DIR:$CI_MEDIA_DIR:ro")
           docker run --rm "${NGINX_RUN[@]}" "$NGINX_IMAGE" nginx -t
           docker run -d --name ottm-nginx "${NGINX_RUN[@]}" "$NGINX_IMAGE"
@@ -174,12 +188,74 @@ jobs:
           # Kiểm riêng và kiểm cùng mẫu cùng VPS (tên map/upstream/zone không trùng → cài song song được).
           docker run --rm -v "$conf:/etc/nginx/conf.d/default.conf:ro" -v "$CI_MEDIA_DIR:$CI_MEDIA_DIR:ro" "$NGINX_IMAGE" nginx -t
           docker run --rm -v "$conf:/etc/nginx/conf.d/api.conf:ro" -v "$RUNNER_TEMP/nginx/ottm.conf:/etc/nginx/conf.d/default.conf:ro" \
-            -v "$CI_MEDIA_DIR:$CI_MEDIA_DIR:ro" -v "$CI_WEB_ROOT:$CI_WEB_ROOT:ro" "$NGINX_IMAGE" nginx -t
+            -v "$CI_MEDIA_DIR:$CI_MEDIA_DIR:ro" "$NGINX_IMAGE" nginx -t
+      - name: WEB_HOST_PORT sai/trùng API_HOST_PORT → deploy.sh dừng trước mọi thay đổi
+        run: |
+          source ./lib.sh
+          for bad in 0 70000 abc "$CI_API_PORT"; do
+            if WEB_HOST_PORT="$bad" IMAGE_TAG=ci-port bash ./deploy.sh; then echo "WEB_HOST_PORT=$bad phải bị từ chối"; exit 1; fi
+          done
+          test "$(env_get IMAGE_TAG)" = ci-config
+          if docker image inspect ottm-server:ci-port >/dev/null 2>&1; then echo "không được build khi cổng sai"; exit 1; fi
+          # Cổng hợp lệ nhưng bị tiến trình khác giữ → dừng trước build/ghi IMAGE_TAG, nêu cổng.
+          busy=3190
+          python3 -m http.server "$busy" --bind 127.0.0.1 >/dev/null 2>&1 &
+          busy_pid=$!
+          for i in $(seq 1 20); do [[ -n "$(ss -ltnH "( sport = :$busy )")" ]] && break; sleep 0.5; done
+          set +e; out="$(WEB_HOST_PORT="$busy" IMAGE_TAG=ci-port bash ./deploy.sh 2>&1)"; code=$?; set -e
+          kill "$busy_pid" || true
+          echo "$out"
+          test "$code" -ne 0
+          grep -q "cổng $busy (WEB_HOST_PORT)" <<<"$out"
+          test "$(env_get IMAGE_TAG)" = ci-config
+          if docker image inspect ottm-server:ci-port >/dev/null 2>&1; then echo "không được build khi cổng bận"; exit 1; fi
       - name: deploy.sh (tag ci-a)
         run: |
           IMAGE_TAG=ci-a bash ./deploy.sh
-          test "$(readlink "$CI_WEB_ROOT/current")" = ci-a
-          test -f "$CI_WEB_ROOT/ci-a/index.html"
+          test "$(docker inspect --format '{{.Config.Image}}' "$(docker compose --profile web ps -q web)")" = ottm-web:ci-a
+      - name: Container web — healthy, không root, root FS chỉ đọc, đúng image, chỉ 127.0.0.1
+        run: |
+          cid="$(docker compose --profile web ps -q web)"
+          test -n "$cid"
+          for i in $(seq 1 45); do
+            st="$(docker inspect --format '{{.State.Health.Status}}' "$cid")"
+            [[ "$st" == healthy ]] && break
+            sleep 2
+          done
+          echo "health: $st"
+          test "$st" = healthy
+          test "$(docker inspect --format '{{.HostConfig.ReadonlyRootfs}}' "$cid")" = true
+          test "$(docker inspect --format '{{index .Config.Labels "org.ottm.web"}}' "$cid")" = nginx
+          uid="$(docker exec "$cid" id -u)"
+          echo "uid trong container: $uid"
+          test "$uid" != 0
+          if docker exec "$cid" sh -c 'touch /usr/share/nginx/html/x || touch /etc/nginx/x'; then echo "root FS ghi được"; exit 1; fi
+          docker exec "$cid" sh -c 'touch /tmp/x && rm /tmp/x'
+          ss -ltnH "( sport = :$CI_WEB_PORT )" || true
+          addrs="$(ss -ltnH "( sport = :$CI_WEB_PORT )" | awk '{print $4}')"
+          test -n "$addrs" || { echo "không thấy socket nào nghe cổng $CI_WEB_PORT — không kiểm được"; exit 1; }
+          if grep -v "^127\.0\.0\.1:$CI_WEB_PORT$" <<<"$addrs" | grep .; then echo "web nghe ngoài 127.0.0.1"; exit 1; fi
+          ip="$(hostname -I | awk '{print $1}')"
+          test -n "$ip"
+          if curl -s --max-time 3 "http://$ip:$CI_WEB_PORT/"; then echo "web lộ cổng $CI_WEB_PORT trên $ip"; exit 1; fi
+          # Gọi thẳng container (không qua nginx): chỉ Cache-Control, không header bảo mật (nginx máy chủ đặt).
+          h="$RUNNER_TEMP/web.headers"
+          test "$(curl -s -D "$h" -o /dev/null -w '%{http_code}' "http://127.0.0.1:$CI_WEB_PORT/trang-nhom/abc")" = 200
+          cat "$h"
+          test "$(grep -ci '^cache-control:' "$h")" = 1
+          grep -qi '^cache-control: no-cache' "$h"
+          if grep -qi '^content-security-policy:' "$h"; then echo "container web không được tự đặt CSP"; exit 1; fi
+          test "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$CI_WEB_PORT/healthz")" = 200
+          test "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$CI_WEB_PORT/.env")" = 404
+          # Asset thiếu → 404 chữ (không phải HTML, không index.html), no-store; asset có → immutable.
+          test "$(curl -s -D "$h" -o /dev/null -w '%{http_code}' "http://127.0.0.1:$CI_WEB_PORT/assets/khong-co.js")" = 404
+          grep -qi '^content-type: text/plain' "$h"
+          grep -qi '^cache-control: no-store' "$h"
+          asset="$(curl -s "http://127.0.0.1:$CI_WEB_PORT/" | grep -oE '/assets/[A-Za-z0-9._-]+\.js' | head -n1)"
+          test -n "$asset"
+          test "$(curl -s -D "$h" -o /dev/null -w '%{http_code}' "http://127.0.0.1:$CI_WEB_PORT$asset")" = 200
+          test "$(grep -ci '^cache-control:' "$h")" = 1
+          grep -qi '^cache-control: public, max-age=31536000, immutable' "$h"
       - name: migrate chạy xong với exit 0
         run: test "$(docker inspect --format '{{.State.ExitCode}}' "$(docker compose ps -a -q migrate)")" = "0"
       - name: api chỉ nghe trên 127.0.0.1, postgres không lộ ra máy chủ
@@ -244,6 +320,13 @@ jobs:
           grep -qi '^content-type: application/json' "$h"
           grep -qi '^cache-control: no-store' "$h"
           grep -q '"code":"VALIDATION_FAILED"' "$b"
+          # Đường web (location / → container): 413 cũng là JSON VALIDATION_FAILED.
+          code="$(curl -s --max-time 20 -D "$h" -o "$b" -w '%{http_code}' -X POST \
+            --data-binary "@$RUNNER_TEMP/big.bin" http://localhost/trang-nhom/abc || true)"
+          cat "$h" "$b"; echo
+          test "$code" = 413
+          grep -qi '^content-type: application/json' "$h"
+          grep -q '"code":"VALIDATION_FAILED"' "$b"
           # Mẫu nginx-api: cùng hành vi 413 JSON.
           code="$(curl -s --max-time 20 -D "$h" -o "$b" -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
             --data-binary "@$RUNNER_TEMP/big.bin" http://localhost:8081/api/v1/auth/login || true)"
@@ -273,65 +356,90 @@ jobs:
           grep -q '{"error":{"code":"INTERNAL","message":"api unavailable"}}' "$b"
           if docker logs ottm-nginx-api 2>&1 | grep -F 'bi-mat-ci-api'; then echo "log nginx-api có query bí mật"; exit 1; fi
           docker compose start api
-      - name: xuất bản web lỗi → không đổi current
+      - name: container web dừng → nginx trả 502 chữ (không phải JSON api), no-store, header bảo mật; api vẫn chạy
         run: |
-          if bash -c 'source ./lib.sh; publish_web ci-khong-co-image'; then echo "publish_web phải lỗi"; exit 1; fi
-          test "$(readlink "$CI_WEB_ROOT/current")" = ci-a
-          test ! -e "$CI_WEB_ROOT/ci-khong-co-image"
-          test "$(cat "$CI_WEB_ROOT/ci-a/.ottm-web-tag")" = ci-a
-          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost/.ottm-web-tag)" = 404
-          if docker ps -a --format '{{.Image}}' | grep '^ottm-web:'; then echo "còn container tạm của ottm-web"; exit 1; fi
-          if ls -a "$CI_WEB_ROOT" | grep -q '^\.publish-'; then echo "còn thư mục tạm .publish-*"; exit 1; fi
+          h="$RUNNER_TEMP/webdown.headers"
+          b="$RUNNER_TEMP/webdown.body"
+          # Bước trước vừa start lại api: chờ api + web khoẻ rồi mới dừng web.
+          bash -c 'source ./lib.sh; wait_healthy 120'
+          docker compose --profile web stop web
+          # Web dừng → kiểm web và wait_healthy (vps chờ cả web) phải báo lỗi.
+          if bash -c 'source ./lib.sh; wait_web_healthy 5'; then echo "wait_web_healthy phải lỗi khi web dừng"; exit 1; fi
+          if bash -c 'source ./lib.sh; wait_healthy 35'; then echo "wait_healthy phải lỗi khi web dừng"; exit 1; fi
+          code="$(curl -s --max-time 10 -D "$h" -o "$b" -w '%{http_code}' http://localhost/trang-nhom/abc || true)"
+          cat "$h" "$b"; echo
+          test "$code" = 502
+          grep -qi '^content-type: text/plain' "$h"
+          grep -q 'web unavailable' "$b"
+          test "$(grep -ci '^cache-control:' "$h")" = 1
+          grep -qi '^cache-control: no-store' "$h"
+          grep -qi '^content-security-policy: .*frame-ancestors' "$h"
+          grep -qi '^strict-transport-security:' "$h"
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost/api/v1/auth/me)" = 401
+          docker compose --profile web start web
+          bash -c 'source ./lib.sh; wait_web_healthy 60'
       - name: deploy.sh (tag ci-b), rollback.sh ci-a
         run: |
           running_tag() {
-            for s in api worker; do docker inspect --format '{{.Config.Image}}' "$(docker compose ps -q "$s")"; done | sort -u
+            for s in api worker web; do docker inspect --format '{{.Config.Image}}' "$(docker compose --profile web ps -q "$s")"; done | sort -u
           }
           IMAGE_TAG=ci-b bash ./deploy.sh
           source ./lib.sh
           test "$(env_get IMAGE_TAG)" = ci-b
-          test "$(readlink "$CI_WEB_ROOT/current")" = ci-b
           running_tag
           test "$(running_tag | sed 's/.*://' | sort -u)" = ci-b
+          test "$(running_tag | grep -c '^ottm-web:')" = 1
           bash ./rollback.sh ci-a
           test "$(env_get IMAGE_TAG)" = ci-a
-          test "$(readlink "$CI_WEB_ROOT/current")" = ci-a
           running_tag
           test "$(running_tag | sed 's/.*://' | sort -u)" = ci-a
+          test "$(running_tag | grep -c '^ottm-web:')" = 1
           SMOKE_ALLOW_DISK_FULL=1 bash ./smoke-test.sh http://localhost
-      - name: rollback.sh tới tag thiếu thư mục web → dừng, không đổi gì
+          # WEB_HOST_PORT trùng API_HOST_PORT → rollback dừng trước khi đổi IMAGE_TAG (dùng ci-b để thấy IMAGE_TAG không đổi).
+          set +e; out="$(WEB_HOST_PORT="$CI_API_PORT" bash ./rollback.sh ci-b 2>&1)"; code=$?; set -e
+          echo "$out"
+          test "$code" -ne 0
+          grep -q WEB_HOST_PORT <<<"$out"
+          test "$(env_get IMAGE_TAG)" = ci-a
+          test "$(running_tag | sed 's/.*://' | sort -u)" = ci-a
+      - name: rollback.sh tới tag thiếu image web / image web cũ (chỉ dist) → dừng, không đổi gì
         run: |
           source ./lib.sh
-          docker tag ottm-server:ci-a ottm-server:ci-nodir
-          if bash ./rollback.sh ci-nodir; then echo "rollback phải từ chối"; exit 1; fi
+          running_web() { docker inspect --format '{{.Config.Image}}' "$(docker compose --profile web ps -q web)"; }
+          docker tag ottm-server:ci-a ottm-server:ci-noweb
+          set +e; out="$(bash ./rollback.sh ci-noweb 2>&1)"; code=$?; set -e
+          echo "$out"
+          test "$code" -ne 0
+          grep -q 'ottm-web:ci-noweb' <<<"$out"
           test "$(env_get IMAGE_TAG)" = ci-a
-          test "$(readlink "$CI_WEB_ROOT/current")" = ci-a
-          docker image rm ottm-server:ci-nodir
-      - name: prune_images giữ tag đang chạy (image + thư mục web), từ chối KEEP_TAGS sai
+          test "$(running_web)" = ottm-web:ci-a
+          # Image ottm-web kiểu cũ (FROM scratch, chỉ /dist, không nhãn org.ottm.web) → từ chối kèm hướng dẫn.
+          docker tag ottm-server:ci-a ottm-server:ci-oldweb
+          printf 'FROM scratch\nCOPY smoke-test.sh /dist/index.html\n' | docker build -q -t ottm-web:ci-oldweb -f - .
+          set +e; out="$(bash ./rollback.sh ci-oldweb 2>&1)"; code=$?; set -e
+          echo "$out"
+          test "$code" -ne 0
+          grep -q 'image cũ' <<<"$out"
+          test "$(env_get IMAGE_TAG)" = ci-a
+          test "$(running_web)" = ottm-web:ci-a
+          docker image rm ottm-server:ci-noweb ottm-server:ci-oldweb ottm-web:ci-oldweb
+      - name: prune_images giữ tag đang chạy cho mọi image (cả ottm-web), từ chối KEEP_TAGS sai
         run: |
-          # ci-old: bản web cũ có đánh dấu → bị xoá. khong-phai-web, ci-sai-dau: thư mục lạ / đánh dấu không khớp → giữ.
-          mkdir -p "$CI_WEB_ROOT/ci-old" "$CI_WEB_ROOT/khong-phai-web" "$CI_WEB_ROOT/ci-sai-dau"
-          touch "$CI_WEB_ROOT/ci-old/index.html" "$CI_WEB_ROOT/khong-phai-web/index.html"
-          echo ci-old > "$CI_WEB_ROOT/ci-old/.ottm-web-tag"
-          echo ci-khac > "$CI_WEB_ROOT/ci-sai-dau/.ottm-web-tag"
+          # ci-old: tag cũ của ottm-web (cùng image với ci-a) không nằm trong tập giữ → bị gỡ tag.
+          docker tag ottm-web:ci-a ottm-web:ci-old
           if KEEP_TAGS=0 bash -c 'source ./lib.sh; prune_images ci-a'; then echo "KEEP_TAGS=0 phải bị từ chối"; exit 1; fi
-          test -d "$CI_WEB_ROOT/ci-old"
+          docker image inspect ottm-web:ci-old > /dev/null
           KEEP_TAGS=1 bash -c 'source ./lib.sh; prune_images ci-a'
           docker image ls 'ottm-*'
-          ls -la "$CI_WEB_ROOT"
           docker image inspect ottm-server:ci-a ottm-web:ci-a ottm-backup:ci-a > /dev/null
-          test -f "$CI_WEB_ROOT/ci-a/index.html"
-          test ! -e "$CI_WEB_ROOT/ci-old"
-          test -d "$CI_WEB_ROOT/khong-phai-web"
-          test -d "$CI_WEB_ROOT/ci-sai-dau"
-          test "$(readlink "$CI_WEB_ROOT/current")" = ci-a
-      - name: WEB_MODE — vps từ chối WEB_BASE_URL sót lại; external thiếu WEB_BASE_URL → dừng; external deploy/rollback không đụng web
+          if docker image inspect ottm-web:ci-old >/dev/null 2>&1; then echo "prune phải xoá ottm-web:ci-old"; exit 1; fi
+      - name: WEB_MODE — vps từ chối WEB_BASE_URL sót lại; external thiếu WEB_BASE_URL → dừng; external dừng + xoá web, không build web
         env:
           CI_EXT_WEB: https://ottm-ci-web.example.test
         run: |
           source ./lib.sh
-          web_state() { ls -A "$CI_WEB_ROOT"; readlink "$CI_WEB_ROOT/current"; }
-          before="$(web_state)"
+          web_ids() { docker ps -aq --filter label=com.docker.compose.project=ottm --filter label=com.docker.compose.service=web; }
+          test -n "$(web_ids)"
           tag_before="$(env_get IMAGE_TAG)"
           # vps + WEB_BASE_URL khác PUBLIC_BASE_URL → dừng trước build, không đổi gì.
           env_set WEB_BASE_URL "$CI_EXT_WEB"
@@ -339,31 +447,42 @@ jobs:
           test "$(env_get IMAGE_TAG)" = "$tag_before"
           # external + WEB_BASE_URL rỗng → dừng.
           env_set WEB_MODE external
+          env_set COMPOSE_PROFILES ""
           env_set WEB_BASE_URL ""
           env_set ALLOWED_ORIGINS "$CI_EXT_WEB"
           if IMAGE_TAG=ci-ext bash ./deploy.sh; then echo "external thiếu WEB_BASE_URL phải bị từ chối"; exit 1; fi
           test "$(env_get IMAGE_TAG)" = "$tag_before"
           # external hợp lệ: compose truyền đúng cấu hình 2 host cho api.
           env_set WEB_BASE_URL "$CI_EXT_WEB"
+          # external mà COMPOSE_PROFILES còn web → dừng trước build (compose gõ tay sẽ chạy web trên VPS).
+          env_set COMPOSE_PROFILES web
+          if IMAGE_TAG=ci-ext bash ./deploy.sh; then echo "external với COMPOSE_PROFILES=web phải bị từ chối"; exit 1; fi
+          test "$(env_get IMAGE_TAG)" = "$tag_before"
+          env_set COMPOSE_PROFILES ""
           cfg="$(docker compose config --format json)"
           jq -e --arg w "$CI_EXT_WEB" '.services.api.environment.WEB_BASE_URL == $w and .services.api.environment.ALLOWED_ORIGINS == $w
             and .services.api.environment.PUBLIC_BASE_URL == "https://ottm-ci.example.test"' <<<"$cfg"
-          # deploy.sh external: smoke qua nginx-api (8081), ORIGIN = WEB_BASE_URL; không build ottm-web, không đụng WEB_ROOT.
+          # deploy.sh external: smoke qua nginx-api (8081), ORIGIN = WEB_BASE_URL; không build ottm-web; container web
+          # cũ (từ vps) bị dừng + xoá.
           IMAGE_TAG=ci-ext SMOKE_URL=http://localhost:8081 bash ./deploy.sh
           test "$(env_get IMAGE_TAG)" = ci-ext
           if docker image inspect ottm-web:ci-ext >/dev/null 2>&1; then echo "external không được build ottm-web"; exit 1; fi
-          test "$(web_state)" = "$before"
+          if [[ -n "$(web_ids)" ]]; then docker ps -a; echo "external phải dừng + xoá container web"; exit 1; fi
           curl -s -D - -o /dev/null -X OPTIONS -H "Origin: $CI_EXT_WEB" -H 'Access-Control-Request-Method: POST' \
             http://localhost:8081/api/v1/auth/login | grep -qi "^access-control-allow-origin: $CI_EXT_WEB"
+          # external: rollback không cần ottm-web:<tag>, không chạy web — và dọn container web còn sót.
+          IMAGE_TAG=ci-a docker compose --profile web up -d --no-build web
+          test -n "$(web_ids)"
           bash ./rollback.sh ci-a
           test "$(env_get IMAGE_TAG)" = ci-a
-          test "$(web_state)" = "$before"
-          # Trả về vps cho các bước sau.
+          test -z "$(web_ids)"
+          # Trả về vps cho các bước sau: rollback.sh (vps) chạy lại container web cùng tag.
           env_set WEB_MODE vps
+          env_set COMPOSE_PROFILES web
           env_set WEB_BASE_URL ""
           env_set ALLOWED_ORIGINS ""
-          IMAGE_TAG=ci-a docker compose up -d --no-build
-          wait_healthy 120
+          bash ./rollback.sh ci-a
+          test "$(docker inspect --format '{{.Config.Image}}' "$(docker compose --profile web ps -q web)")" = ottm-web:ci-a
           ORIGIN=https://ottm-ci.example.test SMOKE_ALLOW_DISK_FULL=1 bash ./smoke-test.sh http://localhost
       - name: Backup + khôi phục trong container ottm-backup (kho restic cục bộ)
         run: |
@@ -412,12 +531,13 @@ jobs:
       - name: Log khi lỗi
         if: failure()
         run: |
-          docker compose --profile backup logs --tail=200
+          docker compose --profile web --profile backup logs --tail=200
+          docker compose --profile web ps -a || true
           docker logs --tail=200 ottm-nginx || true
           docker logs --tail=200 ottm-nginx-api || true
-          ls -la "$CI_WEB_ROOT" "$CI_MEDIA_DIR" || true
+          ls -la "$CI_MEDIA_DIR" || true
       - name: Dọn
         if: always()
         run: |
           docker rm -f ottm-nginx ottm-nginx-api || true
-          docker compose --profile backup --profile restore down -v --remove-orphans
+          docker compose --profile web --profile backup --profile restore down -v --remove-orphans

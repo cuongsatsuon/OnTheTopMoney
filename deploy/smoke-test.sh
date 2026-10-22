@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Gọi stack qua reverse proxy (nginx của chủ shop) và kiểm route, header bảo mật, CORS, SPA fallback, /media theo ma
-# trận của story 1.3 (+ 1.3c).
+# trận của story 1.3 (+ 1.3c; 1.3d: web là container sau nginx — deep link, asset, đúng một Cache-Control).
 #   ./deploy/smoke-test.sh http://localhost            # CI (nginx mẫu ở cổng 80, không TLS)
 #   ./deploy/smoke-test.sh https://app.example.com     # sau deploy trên VPS (WEB_MODE=vps)
 #   SMOKE_MODE=api ORIGIN=https://app.example.com ./deploy/smoke-test.sh https://api.example.com   # WEB_MODE=external
@@ -47,6 +47,18 @@ request() {
 }
 
 header_value() { grep -i "^$1:" "$HEADERS" | head -n1 | cut -d: -f2- | tr -d '\r' | sed 's/^ *//'; }
+header_count() { grep -ci "^$1:" "$HEADERS"; }
+
+# Đúng một Cache-Control (container web quyết cho đường web; nginx máy chủ không thêm cái thứ hai) và chứa $2.
+expect_cache_control() {
+  local name="$1" want="$2" n
+  n="$(header_count Cache-Control)"
+  if [[ "$n" == 1 && "$(header_value Cache-Control)" == *"$want"* ]]; then
+    pass "$name: Cache-Control $(header_value Cache-Control)"
+  else
+    fail "$name: mong đúng một Cache-Control chứa '$want', nhận $n: $(grep -i '^Cache-Control:' "$HEADERS" | tr -d '\r' | tr '\n' ' ')"
+  fi
+}
 
 check_security_headers() {
   local name="$1" missing=() h
@@ -173,18 +185,22 @@ if [[ "$SMOKE_MODE" == api ]]; then
     [[ "$(header_value Cache-Control)" == *no-store* ]] && pass "$path: Cache-Control no-store" || fail "$path: Cache-Control '$(header_value Cache-Control)'"
   done
 else
-  # --- SPA
+  # --- SPA (container web sau nginx)
   request spa-root GET /
   expect_status "/" 200
   expect_body_contains "/" 'id="root"'
   check_security_headers "/"
+  expect_cache_control "/" no-cache
 
-  request spa-route GET /hop-thu
-  expect_status "/hop-thu (SPA fallback)" 200
-  expect_body_contains "/hop-thu (SPA fallback)" 'id="root"'
-  [[ "$(header_value Content-Type)" == text/html* ]] && pass "/hop-thu: text/html" || fail "/hop-thu: Content-Type $(header_value Content-Type)"
-  check_security_headers "/hop-thu"
-  [[ "$(header_value Cache-Control)" == *no-cache* ]] && pass "/hop-thu: Cache-Control no-cache" || fail "/hop-thu: Cache-Control '$(header_value Cache-Control)'"
+  for path in /hop-thu /trang-nhom/abc; do
+    name="spa${path//\//-}"
+    request "$name" GET "$path"
+    expect_status "$path (SPA fallback)" 200
+    expect_body_contains "$path (SPA fallback)" 'id="root"'
+    [[ "$(header_value Content-Type)" == text/html* ]] && pass "$path: text/html" || fail "$path: Content-Type $(header_value Content-Type)"
+    check_security_headers "$path"
+    expect_cache_control "$path" no-cache
+  done
 
   asset="$(grep -oE '/assets/[A-Za-z0-9._-]+\.js' "$WORK/spa-root.body" | head -n1 || true)"
   if [[ -n "$asset" ]]; then
@@ -192,7 +208,7 @@ else
     expect_status "$asset" 200
     [[ "$BODY" != *'id="root"'* ]] && pass "$asset: là file JS, không phải index.html" || fail "$asset: trả index.html"
     check_security_headers "$asset"
-    [[ "$(header_value Cache-Control)" == *immutable* ]] && pass "$asset: cache immutable" || fail "$asset: Cache-Control '$(header_value Cache-Control)'"
+    expect_cache_control "$asset" immutable
   else
     fail "index.html không tham chiếu file /assets/*.js"
   fi
@@ -201,6 +217,7 @@ else
   expect_status "/assets/<thiếu>" 404
   [[ "$BODY" != *'id="root"'* ]] && pass "/assets/<thiếu>: không rơi về index.html" || fail "/assets/<thiếu>: trả index.html"
   check_security_headers "/assets/<thiếu>"
+  expect_cache_control "/assets/<thiếu>" no-store
 fi
 
 # --- /media

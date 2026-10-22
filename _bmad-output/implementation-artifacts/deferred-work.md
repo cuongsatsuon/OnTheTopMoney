@@ -16,3 +16,9 @@
 - source_spec: `spec-1-3c-fe-hostinger-be-vps.md`
   summary: Header CORS cho lỗi do nginx-api tự sinh (413/502/503/504) để web đọc được JSON lỗi.
   evidence: Hiện trình duyệt chặn phản hồi đó (không có Allow-Origin) và web báo lỗi mạng; quan trọng khi có upload media (413). Cần map `$http_origin` theo ALLOWED_ORIGINS trong nginx.
+- source_spec: `spec-1-3d-web-chay-trong-docker.md`
+  summary: Kiểm nén gzip của asset web qua nginx (Content-Encoding, một Vary) trong smoke-test.
+  evidence: gzip đã dời vào container web (`deploy/web-nginx.conf`); không bước nào kiểm.
+- source_spec: `spec-1-3d-web-chay-trong-docker.md`
+  summary: Test CI "build web lỗi → IMAGE_TAG và container đang chạy giữ nguyên".
+  evidence: Bước CI "xuất bản web lỗi → không đổi current" bị bỏ cùng cơ chế WEB_ROOT; cần cách cố ý làm hỏng build `ottm-web` (vd nginx -t lỗi) trong CI.

@@ -368,6 +368,7 @@ Job hết retry phát `job.failed`; `notifications` tạo thông báo cho queue 
 | Meta Graph API | v26.0 |
 | OpenAI model (seed, đổi được ở Cài đặt) | chữ `gpt-6-luna`; ảnh `gpt-image-2.5-flare` qua Images API |
 | nginx + certbot | do chủ shop cài và quản trên VPS (mẫu `deploy/nginx.conf.example`; chế độ tách: `deploy/nginx-api.conf.example`) |
+| Phục vụ web (chế độ VPS) | service compose `web`: `nginxinc/nginx-unprivileged:1.28.0-alpine` + `web/dist` (`deploy/Dockerfile.web`, `deploy/web-nginx.conf`) |
 | Hosting web tĩnh (tuỳ chọn) | Hostinger (Apache/LiteSpeed, `.htaccess`) khi `WEB_MODE=external`; xuất bản bằng `deploy/hostinger/publish-web-hostinger.sh` |
 | Frontend (đã có) | Vite 8, React 19, Tailwind v4, react-router 7, oxlint |
 
@@ -382,7 +383,8 @@ graph LR
   Threads[Threads API] -->|webhook| Nginx
   Ping[Uptime ping ngoài] -->|/healthz| Nginx
   subgraph VPS[VPS Docker Compose]
-    Nginx[nginx trên host + certbot: TLS, web tĩnh + SPA fallback, /media, reverse proxy tới 127.0.0.1:3000]
+    Nginx[nginx trên host + certbot: TLS, header bảo mật, /media, reverse proxy tới api 127.0.0.1:3000 và web 127.0.0.1:3080]
+    Web[web: nginx unprivileged phục vụ web/dist, SPA fallback, Cache-Control]
     Migrate[migrate: one-shot]
     API[api: Fastify REST + SSE + webhooks + OAuth]
     Worker[worker: pg-boss jobs + cron]
@@ -391,6 +393,7 @@ graph LR
     Priv[(volume file riêng tư)]
   end
   Nginx --> API
+  Nginx --> Web
   Nginx --> Pub
   API --> Pub
   Migrate --> PG
@@ -407,7 +410,7 @@ graph LR
 ```
 
 - **Môi trường:** `local` (docker compose postgres; webhook qua tunnel; **Meta Test App + Threads test app riêng**, không bao giờ trỏ callback của app production về tunnel) và `production` (một VPS khu vực Singapore [ASSUMPTION], app Meta Live). Không staging. Biến bắt buộc theo môi trường: `PUBLIC_BASE_URL`, `META_APP_ID/SECRET`, `THREADS_APP_ID/SECRET`, `META_VERIFY_TOKEN`, `APP_ENCRYPTION_KEYS`, `APP_ENCRYPTION_ACTIVE_KEY`, `SESSION_SECRET`, `DATABASE_URL`.
-- **Triển khai:** image `server` gắn tag git SHA (giữ 5 tag để rollback); `deploy.sh` dựng `web/` (image `ottm-web:<tag>`) rồi xuất bản ra `WEB_ROOT/<tag>` trên host, đổi symlink `current`. Service `migrate` one-shot chạy migration Drizzle (chỉ tiến, tương thích ngược một phiên bản); `api` và `worker` `depends_on: service_completed_successfully`. pg-boss tự tạo schema của nó khi `start()`. Một bản api, một bản worker. nginx của chủ shop: `/healthz`, `/api`, `/webhooks`, `/oauth`, `/privacy` → api (`127.0.0.1:3000`); `/media` → thư mục media trên host; còn lại → SPA `index.html`. Chứng chỉ do certbot quản. Chế độ tách (`WEB_MODE=external`, spec 1.3c): `deploy.sh`/`rollback.sh` bỏ qua build/xuất bản web; nginx chỉ phục vụ host api (`deploy/nginx-api.conf.example`: các đường api, `/media`, còn lại JSON 404); web build với `VITE_API_ORIGIN=https://api.<miền>` (sinh `.htaccess`) rồi rsync lên Hostinger (`assets/` trước, `index.html` cuối).
+- **Triển khai:** image `ottm-server`, `ottm-web`, `ottm-backup` gắn cùng tag git SHA (giữ 5 tag để rollback); web chạy như service compose `web` (image `ottm-web:<tag>`: build `web/` rồi nginx unprivileged phục vụ `dist`, không root, root FS chỉ đọc, publish `127.0.0.1:${WEB_HOST_PORT:-3080}`, profile `web` chỉ bật khi `WEB_MODE=vps`). Rollback = đổi `IMAGE_TAG` rồi `docker compose up` (api, worker, web cùng về tag), không có file web nào trên host. Service `migrate` one-shot chạy migration Drizzle (chỉ tiến, tương thích ngược một phiên bản); `api` và `worker` `depends_on: service_completed_successfully`. pg-boss tự tạo schema của nó khi `start()`. Một bản api, một bản worker. nginx của chủ shop: `/healthz`, `/api`, `/webhooks`, `/oauth`, `/privacy` → api (`127.0.0.1:3000`); `/media` → thư mục media trên host; còn lại → container web (`127.0.0.1:3080`: SPA fallback, `/assets/*` immutable, còn lại `no-cache` — container quyết `Cache-Control`, nginx máy chủ giữ header bảo mật và chỉ thêm `no-store` cho lỗi). Chứng chỉ do certbot quản. Chế độ tách (`WEB_MODE=external`, spec 1.3c): `deploy.sh`/`rollback.sh` không build/chạy service web (container web cũ bị dừng + xoá); nginx chỉ phục vụ host api (`deploy/nginx-api.conf.example`: các đường api, `/media`, còn lại JSON 404); web build với `VITE_API_ORIGIN=https://api.<miền>` (sinh `.htaccess`) rồi rsync lên Hostinger (`assets/` trước, `index.html` cuối).
 - **Vận hành:** `GET /healthz` trả 503 khi heartbeat worker (`worker_heartbeats`) cũ hơn 2 phút, đĩa >85% hoặc Postgres lỗi; một dịch vụ uptime ping ngoài gọi mỗi 5 phút. Backup hằng đêm `pg_dump -Fc` + rsync media, mã hoá, lưu ở nhà cung cấp khác VPS, giữ 14 bản; RPO 24 giờ; diễn tập khôi phục trước go-live và mỗi quý [ASSUMPTION].
 
 ### Thực thể chính
@@ -493,7 +496,7 @@ OnTheTopMoney/
     src/adapters/crypto/    # envelope AES-256-GCM
     src/platform/           # db, jobs (queues.ts), events, realtime, config, log
     drizzle/                # migration
-  deploy/                   # docker-compose.yml, nginx.conf.example, nginx-api.conf.example, backup script, runbook.md
+  deploy/                   # docker-compose.yml, Dockerfile.server, Dockerfile.web + web-nginx.conf (service web), nginx.conf.example, nginx-api.conf.example, backup script, runbook.md
     hostinger/              # chế độ tách: htaccess.template, publish-web-hostinger.sh, check-htaccess.sh
 ```
 

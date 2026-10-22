@@ -4,18 +4,20 @@
 # dưới đây cho khớp deploy/.env, rồi `sudo nginx -t && sudo systemctl reload nginx`.
 #
 #   app.example.com          → tên miền (host của PUBLIC_BASE_URL). Có ở: server_name, đường chứng chỉ, redirect.
-#   /var/www/ottm/current    → WEB_ROOT/current (deploy.sh xuất bản web vào WEB_ROOT/<tag> và đổi symlink `current`)
 #   /var/lib/ottm/media      → MEDIA_DIR_HOST (thư mục media; api ghi bằng uid 1000, nginx chỉ đọc)
 #   127.0.0.1:3000           → 127.0.0.1:API_HOST_PORT (api chỉ nghe trên loopback)
+#   127.0.0.1:3080           → 127.0.0.1:WEB_HOST_PORT (container web — docker compose service `web` — chỉ nghe loopback)
 #   /var/www/letsencrypt     → thư mục webroot cho certbot (chỉ khi dùng `certbot certonly --webroot`)
 #
-# Sau mỗi lần deploy KHÔNG cần reload nginx: `current` là symlink, nginx đọc theo từng request.
+# Sau mỗi lần deploy/rollback KHÔNG cần reload nginx: web là container cùng cổng (deploy.sh thay container theo tag).
 #
 # Hành vi phải giữ (CI job deploy-smoke + deploy/smoke-test.sh kiểm qua đúng file này):
 #   /healthz, /api, /api/*, /webhooks, /webhooks/*, /oauth, /oauth/*, /privacy, /privacy/*  → api
 #   /media/*   → file trong MEDIA_DIR_HOST; thiếu → 404 (không rơi về index.html); CSP riêng sandbox + nosniff
-#   /assets/*  → file build có hash; thiếu → 404; có → Cache-Control immutable 1 năm
-#   còn lại    → file tĩnh nếu có, không thì index.html (SPA), Cache-Control no-cache
+#   còn lại    → container web (deploy/web-nginx.conf): /assets/* có → immutable 1 năm, thiếu → 404 (không phải
+#                HTML); file tĩnh nếu có, không thì index.html (SPA), Cache-Control no-cache. Container quyết
+#                Cache-Control cho đường web — nginx này không thêm cái thứ hai (mỗi response đúng một Cache-Control)
+#   container web không trả lời → 502 text/plain "web unavailable" (không phải JSON của api)
 #   mọi response (kể cả lỗi) có CSP, HSTS, X-Content-Type-Options, Referrer-Policy, X-Frame-Options, Permissions-Policy
 #   SSE /api/v1/stream không đệm, không nén; đường api không bao giờ nén
 #   502/503/504 do nginx sinh trên đường api → JSON {"error":{"code":"INTERNAL","message":"api unavailable"}};
@@ -39,18 +41,14 @@ map "$status:$uri" $ottm_csp {
     "~^(200|206|304):/media/" "default-src 'none'; img-src 'self'; sandbox";
 }
 
-# Cache-Control. Lỗi (4xx/5xx, kể cả JSON lỗi do nginx sinh trên đường api) → no-store. Thành công: chuỗi rỗng =
-# nginx không thêm header (đường api tự quyết, /media để mặc định ETag/Last-Modified); sau SPA fallback $uri là
-# /index.html → no-cache (luôn lấy index.html mới sau deploy).
-map "$status:$uri" $ottm_cache_control_want {
-    default                                          "no-cache";
-    ~^[45]                                           "no-store";
-    ~^[0-9]+:/assets/                                "public, max-age=31536000, immutable";
-    ~^[0-9]+:/media/                                 "";
-    ~^[0-9]+:/healthz$                               "";
-    ~^[0-9]+:/(api|webhooks|oauth|privacy)(/|$)      "";
+# Cache-Control. Lỗi (4xx/5xx, kể cả lỗi do nginx sinh trên đường api/web) → no-store. Thành công: chuỗi rỗng =
+# nginx không thêm header — đường web do container web tự đặt (immutable cho /assets, no-cache cho trang), đường api
+# tự quyết, /media để mặc định ETag/Last-Modified.
+map $status $ottm_cache_control_want {
+    default  "";
+    ~^[45]   "no-store";
 }
-# api đã tự đặt Cache-Control (vd SSE, trang OAuth) → giữ của api, không thêm cái thứ hai.
+# Upstream (api hoặc container web) đã tự đặt Cache-Control → giữ của nó, không thêm cái thứ hai.
 map $upstream_http_cache_control $ottm_cache_control {
     ""      $ottm_cache_control_want;
     default "";
@@ -66,6 +64,12 @@ map $upstream_http_referrer_policy $ottm_referrer_policy {
 upstream ottm_api {
     server 127.0.0.1:3000;
     keepalive 16;
+}
+
+# ---------------------------------------------------------------- web (docker compose service `web`, chỉ loopback)
+upstream ottm_web {
+    server 127.0.0.1:3080;
+    keepalive 8;
 }
 
 # ---------------------------------------------------------------- HTTP → HTTPS
@@ -115,16 +119,16 @@ server {
     add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()" always;
     add_header Cache-Control $ottm_cache_control always;
 
-    # Nén chỉ bật trong location file tĩnh. Ở đây tắt để đường api (SSE) không bao giờ bị nén/gom,
-    # kể cả khi nginx.conf chung bật gzip.
+    # Tắt nén ở đây để đường api (SSE) không bao giờ bị nén/gom, kể cả khi nginx.conf chung bật gzip. File web do
+    # container web tự nén (gzip, theo Accept-Encoding chuyển qua) — nginx này chuyển nguyên.
     gzip off;
 
     # api giới hạn body 1 MB và tự trả lỗi JSON 413; nginx để rộng hơn một chút để lỗi đến từ api. Quá 2 MB thì
     # nginx chặn trước — trả cùng dạng JSON (@ottm_too_large).
     client_max_body_size 2m;
 
-    # Proxy tới api — đặt ở cấp server để mọi location api thừa hưởng (giống add_header: location nào tự đặt
-    # proxy_set_header sẽ mất hết các dòng này).
+    # Proxy tới api và container web — đặt ở cấp server để mọi location thừa hưởng (giống add_header: location nào
+    # tự đặt proxy_set_header sẽ mất hết các dòng này).
     proxy_http_version 1.1;
     proxy_set_header Connection "";
     proxy_set_header Host $host;
@@ -197,28 +201,19 @@ server {
         autoindex off;
     }
 
-    # ---- /assets: file build có hash. Thiếu → 404 (không trả index.html với MIME sai sau deploy).
-    location ^~ /assets/ {
-        root /var/www/ottm/current;
-        try_files $uri =404;
-        gzip on;
-        gzip_vary on;
-        gzip_types text/css application/javascript application/json image/svg+xml;
-    }
-
-    # Đánh dấu thư mục của deploy.sh (tag đang chạy) — không phục vụ.
-    location = /.ottm-web-tag {
-        return 404;
-    }
-
-    # ---- SPA: file tĩnh nếu có, còn lại index.html (React Router). Thiếu cả index.html (WEB_ROOT/current chưa có)
-    # → 404, không lặp chuyển hướng nội bộ thành 500.
+    # ---- web: mọi đường còn lại → container web (SPA fallback, /assets, Cache-Control do container quyết).
+    # error_page ở location thay toàn bộ error_page của server: container không trả lời → trang lỗi chữ của web (không
+    # phải JSON "api unavailable"); 413 giữ dạng JSON như đường api.
     location / {
-        root /var/www/ottm/current;
-        index index.html;
-        try_files $uri /index.html =404;
-        gzip on;
-        gzip_vary on;
-        gzip_types text/css application/javascript application/json image/svg+xml;
+        proxy_pass http://ottm_web;
+        error_page 502 503 504 = @ottm_web_unavailable;
+        error_page 413 = @ottm_too_large;
+    }
+
+    location @ottm_web_unavailable {
+        # types rỗng: Content-Type không lấy theo đuôi URI (vd /assets/x.js) mà luôn là text/plain.
+        types { }
+        default_type text/plain;
+        return 502 "web unavailable\n";
     }
 }
