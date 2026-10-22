@@ -2,6 +2,7 @@
 // FE dựng request từ cùng giới hạn (tên bắt buộc, giọng điệu ≤3, màu ≤6…). Một hồ sơ cho mỗi `(ownerType, ownerId)`.
 // Logo là tuỳ chọn, tải lên riêng (ảnh công khai qua Cloudinary) → `logoPath` là URL; phần chữ lưu được dù chưa có logo.
 import { z } from 'zod'
+import { AiViolation } from './ai.ts'
 import { ConfigOwnerType } from './enums.ts'
 
 const IsoDateTime = z.iso.datetime({ offset: false })
@@ -114,6 +115,30 @@ export type BrandProfileDto = z.infer<typeof BrandProfileDto>
 /** `GET …` — hồ sơ hoặc `null` (owner chưa có hồ sơ → FE form trống). */
 export const BrandProfileResponse = z.object({ profile: BrandProfileDto.nullable() })
 export type BrandProfileResponse = z.infer<typeof BrandProfileResponse>
+
+/* ---------- Viết thử bằng AI (Story 3.4, AD-7 + AD-21) ---------- */
+
+/**
+ * Body `POST /api/v1/brand-profiles/sample` — hồ sơ NHÁP đang soạn (kể cả chưa lưu). Giống `SaveBrandProfileRequest`
+ * nhưng `name` không bắt buộc ([ASSUMPTION] cho phép viết thử khi tên còn rỗng; prompt dùng tên gợi ý khi trống).
+ */
+export const BrandSampleRequest = SaveBrandProfileRequest.extend({
+  name: z.string().trim().max(BRAND_NAME_MAX, `Tên thương hiệu tối đa ${BRAND_NAME_MAX} ký tự`).default(''),
+}).strict()
+export type BrandSampleRequest = z.input<typeof BrandSampleRequest>
+export type ParsedBrandSample = z.output<typeof BrandSampleRequest>
+
+/**
+ * `POST …/sample` — caption AI viết theo hồ sơ nháp. `violations` rỗng = sạch → FE hiện "Đã tránh N từ cấm"
+ * (`avoidedBannedCount`); có `violations` = vẫn vi phạm sau khi sinh lại một lần → FE đánh dấu từng cụm.
+ */
+export const BrandSampleResponse = z.object({
+  caption: z.string(),
+  violations: z.array(AiViolation),
+  /** Số từ cấm đã khai trong hồ sơ ([ASSUMPTION] N = số từ cấm) — FE hiện "Đã tránh N từ cấm" khi sạch. */
+  avoidedBannedCount: z.number().int().nonnegative(),
+})
+export type BrandSampleResponse = z.infer<typeof BrandSampleResponse>
 
 /* ---------- Kế thừa Nhóm→Trang (Story 3.2 + 3.3, AD-8) ---------- */
 

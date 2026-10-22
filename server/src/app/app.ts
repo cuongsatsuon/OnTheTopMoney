@@ -14,6 +14,7 @@ import { createMediaStores, type MediaStores } from '../adapters/media/index.ts'
 import { authPlugin, type LoginLimiter } from './auth/index.ts'
 import { registerAiBudget } from './ai-budget.ts'
 import { registerBrandProfiles } from './brand-profiles.ts'
+import { registerBrandSample } from './brand-sample.ts'
 import { registerConnections } from './connections.ts'
 import { registerCors } from './cors.ts'
 import { registerGroups } from './groups.ts'
@@ -123,6 +124,16 @@ export function buildApp({ sql, db, logger, http = {}, loginLimiter, health, eve
   if (events) registerGroups(app, { db, events })
   // Hồ sơ thương hiệu (Story 3.1): không cần `events`; `media` thiếu → kho chưa cấu hình (logo trả MEDIA_NOT_CONFIGURED).
   registerBrandProfiles(app, { db, media: media ?? createMediaStores({ CLOUDINARY_FOLDER: 'ottm' }) })
+  // Viết thử bằng AI (Story 3.4): cần `events` (reserve/settle hạn mức của AI gateway, AD-7).
+  if (events) {
+    registerBrandSample(app, {
+      db,
+      events,
+      cipher: ai?.cipher ?? null,
+      ...(ai?.openai ? { openai: ai.openai } : {}),
+      log: logger.child({ component: 'ai' }),
+    })
+  }
   if (events && connections) {
     const deps: ConnectionsDeps = { ...connections, db, events, log: logger.child({ component: 'connections' }) }
     registerConnections(app, deps)

@@ -4,10 +4,14 @@
 import {
   BrandProfileDto,
   BrandProfileResponse,
+  BrandSampleResponse,
   EffectiveBrandProfileResponse,
   LOGO_MAX_BYTES,
   LOGO_MIMES,
+  type AiViolation,
+  type AiViolationKind,
   type BrandEmojiLevel,
+  type BrandSampleRequest,
   type ConfigOwnerType,
   type ConfigSource,
   type EffectiveBrandProfileResponse as EffectiveBrandProfileResponseT,
@@ -165,6 +169,65 @@ export const confirmBeforeToggle = (next: boolean): boolean => next === false
 /** Body `PUT …/use-own` — chỉ gọi khi bấm Lưu (bật/tắt công tắc chưa Lưu không đụng server). */
 export const toUseOwnRequest = (useOwn: boolean): SetUseOwnRequest => ({ useOwn })
 
+/* ---------- Viết thử bằng AI (Story 3.4) — helper thuần ---------- */
+
+/** Form → body `POST /brand-profiles/sample` (hồ sơ nháp, không lưu). Giống lưu nhưng tên có thể rỗng. */
+export function toSampleRequest(form: BrandForm): BrandSampleRequest {
+  return toSaveRequest(form)
+}
+
+/** Mã lỗi server khiến khoá nút AI (UX-DR2): hết hạn mức, thiếu/khoá OpenAI hỏng. Chủ shop vẫn sửa tay. */
+const AI_LOCK_CODES = new Set(['OPENAI_KEY_MISSING', 'OPENAI_KEY_INVALID', 'AI_BUDGET_EXCEEDED'])
+export function isAiLockError(err: unknown): boolean {
+  return isApiError(err) && AI_LOCK_CODES.has(err.code)
+}
+
+/**
+ * Nhãn khi caption sạch: N = số từ cấm đã khai được kiểm (không phải số lần "tránh" thực) → "Không có từ cấm (đã
+ * kiểm N từ)". `null` khi hồ sơ không khai từ cấm nào (không hiện gì).
+ */
+export function avoidedBannedLabel(count: number): string | null {
+  return count > 0 ? `Không có từ cấm (đã kiểm ${count} từ).` : null
+}
+
+/** Một đoạn caption để tô: `kind` != null = cụm vi phạm (từ cấm / URL lạ) cần đánh dấu. */
+export interface CaptionSegment {
+  text: string
+  kind: AiViolationKind | null
+}
+
+/**
+ * Chia caption thành các đoạn, đánh dấu đúng cụm vi phạm (từ cấm / URL lạ) để FE tô. Quét trái→phải, lấy cụm
+ * khớp sớm nhất tại mỗi vị trí; so khớp KHÔNG phân biệt hoa thường để mọi lần lặp của cụm (kể cả khác hoa thường
+ * với văn bản server trả) đều được đánh dấu. `too_long` không phải cụm trong caption → bỏ qua.
+ */
+export function markViolations(text: string, violations: readonly AiViolation[]): CaptionSegment[] {
+  const phrases = violations.filter((v) => v.kind !== 'too_long' && v.text).map((v) => ({ text: v.text.toLowerCase(), kind: v.kind }))
+  if (phrases.length === 0) return text ? [{ text, kind: null }] : []
+  const lower = text.toLowerCase()
+  const segments: CaptionSegment[] = []
+  let i = 0
+  let plainStart = 0
+  while (i < text.length) {
+    let hit: { len: number; kind: AiViolationKind } | null = null
+    for (const p of phrases) {
+      if (lower.startsWith(p.text, i)) {
+        if (!hit || p.text.length > hit.len) hit = { len: p.text.length, kind: p.kind }
+      }
+    }
+    if (hit) {
+      if (plainStart < i) segments.push({ text: text.slice(plainStart, i), kind: null })
+      segments.push({ text: text.slice(i, i + hit.len), kind: hit.kind })
+      i += hit.len
+      plainStart = i
+    } else {
+      i += 1
+    }
+  }
+  if (plainStart < text.length) segments.push({ text: text.slice(plainStart), kind: null })
+  return segments
+}
+
 /** File → base64 (không tiền tố data:) để gửi trong JSON. */
 export async function fileToBase64(file: File): Promise<string> {
   const bytes = new Uint8Array(await file.arrayBuffer())
@@ -213,6 +276,17 @@ export function useClearBrandLogo(owner: BrandOwner) {
   return useMutation({
     mutationFn: () => apiFetch(`${pathOf(owner)}/logo`, { method: 'DELETE', schema: BrandProfileDto }),
     onSuccess: (profile) => qc.setQueryData(brandProfileKey(owner), { profile }),
+  })
+}
+
+/**
+ * "Viết thử bằng AI" (Story 3.4): gọi `POST /brand-profiles/sample` với hồ sơ nháp. `signal` để nút "Dừng" huỷ
+ * request thật (server truyền AbortSignal sang OpenAI). Không lưu hồ sơ, không cache (mỗi lần viết là một lần mới).
+ */
+export function useBrandSample() {
+  return useMutation({
+    mutationFn: ({ brand, signal }: { brand: BrandSampleRequest; signal?: AbortSignal }) =>
+      apiFetch('/brand-profiles/sample', { method: 'POST', body: brand, schema: BrandSampleResponse, ...(signal ? { signal } : {}) }),
   })
 }
 

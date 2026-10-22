@@ -58,3 +58,6 @@ export {
   type GenerateTextResult,
 } from './gateway.ts'
 export { handleAiEvent } from './events.ts'
+// Hậu kiểm đầu ra AI (AD-21) — hàm DUY NHẤT; mẫu prompt dùng chung (AD-7).
+export { checkOutput, type CheckBrand, type CheckOutputResult } from './check-output.ts'
+export { CAPTION_MAX_OUTPUT_TOKENS, buildCaptionPrompt, captionInput, captionInstructions, type CaptionBrand } from './prompts/index.ts'

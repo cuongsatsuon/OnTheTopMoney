@@ -55,6 +55,35 @@ export const AiCategoryCost = z.object({
 })
 export type AiCategoryCost = z.infer<typeof AiCategoryCost>
 
+/* ---------- Hậu kiểm đầu ra AI (AD-21, Story 3.4) ---------- */
+
+/**
+ * Loại nội dung quyết định độ dài tối đa khi hậu kiểm (AD-21 "độ dài tối đa theo kênh/nền tảng").
+ * `caption` = bài đăng (Viết thử bằng AI), `reply` = tin nhắn trả lời, `comment` = trả lời bình luận công khai.
+ */
+export const AI_OUTPUT_KINDS = ['caption', 'reply', 'comment'] as const
+export const AiOutputKind = z.enum(AI_OUTPUT_KINDS)
+export type AiOutputKind = z.infer<typeof AiOutputKind>
+
+/** Độ dài tối đa (số ký tự Unicode) theo loại — ngưỡng xác định của `checkOutput`. */
+export const AI_OUTPUT_MAX_CHARS: Record<AiOutputKind, number> = {
+  caption: 2_200,
+  reply: 2_000,
+  comment: 1_000,
+}
+
+/**
+ * Loại vi phạm mà `ai.checkOutput` phát hiện: từ cấm của hồ sơ, URL ngoài domain cho phép, hoặc quá độ dài.
+ * FE đánh dấu cụm `banned_word` / `disallowed_url` trong caption; `too_long` hiện một ghi chú chung.
+ */
+export const AI_VIOLATION_KINDS = ['banned_word', 'disallowed_url', 'too_long'] as const
+export const AiViolationKind = z.enum(AI_VIOLATION_KINDS)
+export type AiViolationKind = z.infer<typeof AiViolationKind>
+
+/** Một cụm vi phạm để FE đánh dấu: `text` là đúng cụm trong caption (với `too_long` là mô tả "N/Max ký tự"). */
+export const AiViolation = z.object({ kind: AiViolationKind, text: z.string() })
+export type AiViolation = z.infer<typeof AiViolation>
+
 /** `GET /api/v1/ai/budget`. Chưa có dòng tháng → mọi số = 0. `byCategory` luôn đủ ba hạng mục theo thứ tự `AI_CATEGORIES`. */
 export const AiBudgetSummary = z.object({
   /** Tháng lịch giờ Việt Nam, `YYYY-MM`. */

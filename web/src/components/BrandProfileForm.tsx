@@ -1,3 +1,4 @@
+import type { AiViolation } from '@ottm/shared'
 import { ImagePlus, Plus, Square, Trash2, X } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
@@ -12,14 +13,19 @@ import {
   INDUSTRIES,
   PRONOUNS,
   TONES,
+  avoidedBannedLabel,
   blankBrand,
   brandDataOf,
   brandNameError,
   fieldErrorsOf,
+  isAiLockError,
   isRealOwner,
   logoFileError,
+  markViolations,
+  toSampleRequest,
   toSaveRequest,
   useBrandProfile,
+  useBrandSample,
   useClearBrandLogo,
   useEffectiveBrandProfile,
   useSaveBrandProfile,
@@ -745,7 +751,7 @@ function BrandProfileFormInner({ target }: { target: Target }) {
         </Card>
 
         {/* Xem trước */}
-        <VoicePreview data={data} pageName={page?.name ?? data.name} page={page} />
+        <VoicePreview data={data} pageName={page?.name ?? data.name} page={page} real={real} />
       </div>
 
       {/* Footer cố định */}
@@ -797,28 +803,82 @@ function BrandProfileFormInner({ target }: { target: Target }) {
 
 /* ---------- Khung xem trước giọng văn ---------- */
 
-function VoicePreview({ data, pageName, page }: { data: BrandData; pageName: string; page?: Page }) {
+function VoicePreview({ data, pageName, page, real }: { data: BrandData; pageName: string; page?: Page; real: boolean }) {
   const { openAiKeySet } = useApp()
   const [state, setState] = useState<'idle' | 'writing' | 'done'>('idle')
   const [text, setText] = useState('')
   const [variant, setVariant] = useState(0)
+  // Vi phạm còn lại (từ cấm / URL lạ) sau khi server sinh lại một lần (AD-21) để FE đánh dấu; số từ cấm đã tránh khi sạch.
+  const [violations, setViolations] = useState<AiViolation[]>([])
+  const [avoided, setAvoided] = useState(0)
+  // Mã lỗi khoá nút (UX-DR2): hết hạn mức / thiếu khoá — chủ shop vẫn sửa tay caption bên dưới.
+  const [lockMessage, setLockMessage] = useState<string | null>(null)
+  // Lỗi không khoá nút (provider / mạng / nội dung) — hiện thông báo, nút vẫn bấm lại được.
+  const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const timer = useRef<number | undefined>(undefined)
+  const controller = useRef<AbortController | null>(null)
+  const sampleM = useBrandSample()
 
-  useEffect(() => () => window.clearTimeout(timer.current), [])
+  useEffect(
+    () => () => {
+      window.clearTimeout(timer.current)
+      controller.current?.abort()
+    },
+    [],
+  )
 
   const run = () => {
+    setLockMessage(null)
+    setErrorMsg(null)
     setState('writing')
-    const v = state === 'done' ? variant + 1 : variant
-    setVariant(v)
-    timer.current = window.setTimeout(() => {
-      setText(writeSample(data, v))
-      setState('done')
-    }, 1100)
+    // Chủ thật (id uuid) → gọi AI thật; id kho mẫu → mô phỏng như cũ (giữ UX demo, các epic khác còn mock).
+    if (!real) {
+      const v = state === 'done' ? variant + 1 : variant
+      setVariant(v)
+      timer.current = window.setTimeout(() => {
+        setText(writeSample(data, v))
+        setViolations([])
+        setAvoided(data.banned.length)
+        setState('done')
+      }, 1100)
+      return
+    }
+    const ctrl = new AbortController()
+    controller.current = ctrl
+    sampleM.mutate(
+      { brand: toSampleRequest(data), signal: ctrl.signal },
+      {
+        onSuccess: (res) => {
+          setText(res.caption)
+          setViolations(res.violations)
+          setAvoided(res.avoidedBannedCount)
+          setState('done')
+        },
+        onError: (err) => {
+          if (ctrl.signal.aborted) return // nút Dừng: giữ nguyên trạng thái trước đó
+          // Lỗi khoá (hết hạn mức / thiếu khoá) → khoá nút; lỗi khác (provider / mạng / nội dung) → chỉ hiện thông báo.
+          if (isAiLockError(err)) setLockMessage(errorMessageOf(err))
+          else setErrorMsg(errorMessageOf(err))
+          setState(text ? 'done' : 'idle')
+        },
+        onSettled: () => {
+          if (controller.current === ctrl) controller.current = null
+        },
+      },
+    )
   }
   const stop = () => {
     window.clearTimeout(timer.current)
+    controller.current?.abort()
     setState(text ? 'done' : 'idle')
   }
+
+  // Nút khoá khi chưa có khoá OpenAI (UX-DR2) hoặc server báo mã lỗi khoá (hết hạn mức / khoá hỏng).
+  const locked = !openAiKeySet || lockMessage !== null
+  const marks = violations.filter((v) => v.kind !== 'too_long')
+  const tooLong = violations.some((v) => v.kind === 'too_long')
+  // "Không có từ cấm" chỉ khi SẠCH hoàn toàn (kể cả không quá dài).
+  const avoidedLabel = violations.length === 0 ? avoidedBannedLabel(avoided) : null
 
   return (
     <Card className="sticky top-4">
@@ -861,26 +921,62 @@ function VoicePreview({ data, pageName, page }: { data: BrandData; pageName: str
             </div>
           </div>
         ) : state === 'done' ? (
-          <div className="rounded-md border border-border">
-            <div className="flex items-center justify-between border-b border-border px-3 py-2">
-              <span className="flex min-w-0 items-center gap-2 text-[13px] font-medium">
-                {page && <PageAvatar page={page} size={22} />}
-                <span className="truncate">{pageName || 'Thương hiệu của bạn'}</span>
-              </span>
-              <AiBadge />
+          <div className="space-y-2">
+            <div className="rounded-md border border-border">
+              <div className="flex items-center justify-between border-b border-border px-3 py-2">
+                <span className="flex min-w-0 items-center gap-2 text-[13px] font-medium">
+                  {page && <PageAvatar page={page} size={22} />}
+                  <span className="truncate">{pageName || 'Thương hiệu của bạn'}</span>
+                </span>
+                <AiBadge />
+              </div>
+              <Textarea
+                value={text}
+                onChange={(e) => {
+                  setText(e.target.value)
+                  // Sửa tay → caption khác bản AI đã kiểm; gỡ đánh dấu cũ để box cảnh báo không kẹt.
+                  if (violations.length) setViolations([])
+                }}
+                rows={9}
+                className="rounded-none border-0 text-[13px] leading-relaxed focus:ring-0"
+                aria-label="Bài viết thử"
+              />
             </div>
-            <Textarea value={text} onChange={(e) => setText(e.target.value)} rows={9} className="rounded-none border-0 text-[13px] leading-relaxed focus:ring-0" aria-label="Bài viết thử" />
+            {tooLong && (
+              <div className="rounded-md border border-amber-300 bg-amber-50 p-2.5 text-xs text-amber-800" role="alert">
+                Caption quá dài cho một bài đăng — rút gọn bớt trước khi dùng.
+              </div>
+            )}
+            {marks.length > 0 && (
+              <div className="rounded-md border border-amber-300 bg-amber-50 p-2.5 text-xs text-amber-800" role="alert">
+                <p className="font-medium">AI vẫn dùng cụm cần tránh — sửa lại trước khi dùng:</p>
+                {/* Xem trước có đánh dấu: từ cấm (đỏ) và URL ngoài allowlist (cam). markViolations là helper thuần (đã test). */}
+                <p className="mt-1.5 leading-relaxed break-words whitespace-pre-wrap text-amber-900">
+                  {markViolations(text, violations).map((seg, i) =>
+                    seg.kind === null ? (
+                      <span key={i}>{seg.text}</span>
+                    ) : (
+                      <mark key={i} className={cn('rounded px-0.5', seg.kind === 'banned_word' ? 'bg-red-200 text-red-900' : 'bg-orange-200 text-orange-900')}>
+                        {seg.text}
+                      </mark>
+                    ),
+                  )}
+                </p>
+              </div>
+            )}
           </div>
         ) : (
           <div className="rounded-md border border-dashed border-slate-300 px-3 py-6 text-center text-[13px] text-muted-foreground">Bấm “Viết thử bằng AI” để xem AI viết theo giọng của bạn.</div>
         )}
 
-        <AiLockHint locked={!openAiKeySet} className="flex w-full">
-          <Button variant="ai" className="w-full" onClick={run} disabled={state === 'writing' || !openAiKeySet}>
+        <AiLockHint locked={locked} className="flex w-full">
+          <Button variant="ai" className="w-full" onClick={run} disabled={state === 'writing' || locked}>
             {state === 'done' ? 'Viết lại bằng AI' : 'Viết thử bằng AI'}
           </Button>
         </AiLockHint>
-        {state === 'done' && data.banned.length > 0 && <p className="text-center text-xs text-muted-foreground">Đã tránh {data.banned.length} từ cấm trong hồ sơ.</p>}
+        {lockMessage && <p className="text-center text-xs text-destructive">{lockMessage}</p>}
+        {errorMsg && !lockMessage && <p className="text-center text-xs text-destructive">{errorMsg}</p>}
+        {state === 'done' && avoidedLabel && <p className="text-center text-xs text-muted-foreground">{avoidedLabel}</p>}
       </div>
     </Card>
   )

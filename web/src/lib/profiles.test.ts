@@ -6,6 +6,7 @@ import {
   BRAND_NAME_REQUIRED,
   LOGO_SIZE_ERROR,
   LOGO_TYPE_ERROR,
+  avoidedBannedLabel,
   blankBrand,
   brandDataOf,
   brandNameError,
@@ -14,10 +15,13 @@ import {
   emojiToLevel,
   fieldErrorsOf,
   inheritanceLabel,
+  isAiLockError,
   isConfigMissing,
   isInheritingFromGroup,
   isRealOwner,
   logoFileError,
+  markViolations,
+  toSampleRequest,
   toSaveRequest,
   toUseOwnRequest,
 } from './profiles'
@@ -145,5 +149,59 @@ describe('kế thừa Nhóm→Trang (Story 3.2)', () => {
     expect(confirmBeforeToggle(true)).toBe(false)
     expect(toUseOwnRequest(true)).toEqual({ useOwn: true })
     expect(toUseOwnRequest(false)).toEqual({ useOwn: false })
+  })
+})
+
+describe('Viết thử bằng AI (Story 3.4)', () => {
+  it('toSampleRequest: giống body lưu (bỏ sản phẩm trống)', () => {
+    const form = { ...blankBrand('Shop'), products: [{ name: 'Son', price: '150k' }, { name: '', price: '' }], banned: ['x'] }
+    expect(toSampleRequest(form)).toEqual(toSaveRequest(form))
+    expect(toSampleRequest(form).products).toEqual([{ name: 'Son', price: '150k' }])
+  })
+
+  it('isAiLockError: chỉ khoá nút với hết hạn mức / thiếu / khoá OpenAI hỏng (UX-DR2)', () => {
+    expect(isAiLockError(new ApiError('OPENAI_KEY_MISSING', 400, 'x'))).toBe(true)
+    expect(isAiLockError(new ApiError('OPENAI_KEY_INVALID', 400, 'x'))).toBe(true)
+    expect(isAiLockError(new ApiError('AI_BUDGET_EXCEEDED', 402, 'x'))).toBe(true)
+    expect(isAiLockError(new ApiError('AI_PROVIDER_ERROR', 502, 'x'))).toBe(false)
+    expect(isAiLockError(new ApiError('AI_POLICY_BLOCKED', 422, 'x'))).toBe(false)
+    expect(isAiLockError(new Error('khác'))).toBe(false)
+  })
+
+  it('avoidedBannedLabel: N = số từ cấm đã kiểm (không phải số lần tránh); ẩn khi không khai từ cấm', () => {
+    expect(avoidedBannedLabel(3)).toBe('Không có từ cấm (đã kiểm 3 từ).')
+    expect(avoidedBannedLabel(0)).toBeNull()
+  })
+
+  it('markViolations: tách đoạn và đánh dấu đúng cụm từ cấm / URL; too_long bị bỏ qua', () => {
+    const segs = markViolations('Siêu GIAM GIA tại evil.com nhé', [
+      { kind: 'banned_word', text: 'GIAM GIA' },
+      { kind: 'disallowed_url', text: 'evil.com' },
+      { kind: 'too_long', text: '5000/2200' },
+    ])
+    expect(segs).toEqual([
+      { text: 'Siêu ', kind: null },
+      { text: 'GIAM GIA', kind: 'banned_word' },
+      { text: ' tại ', kind: null },
+      { text: 'evil.com', kind: 'disallowed_url' },
+      { text: ' nhé', kind: null },
+    ])
+    // Chuỗi nối lại bằng caption gốc.
+    expect(segs.map((s) => s.text).join('')).toBe('Siêu GIAM GIA tại evil.com nhé')
+  })
+
+  it('markViolations: không vi phạm → một đoạn thường; rỗng → []', () => {
+    expect(markViolations('Mẫu mới nhé', [])).toEqual([{ text: 'Mẫu mới nhé', kind: null }])
+    expect(markViolations('', [])).toEqual([])
+  })
+
+  it('markViolations: đánh dấu mọi lần lặp dù khác hoa thường (giữ nguyên hoa thường gốc)', () => {
+    const segs = markViolations('spam rồi SPAM nữa', [{ kind: 'banned_word', text: 'spam' }])
+    expect(segs).toEqual([
+      { text: 'spam', kind: 'banned_word' },
+      { text: ' rồi ', kind: null },
+      { text: 'SPAM', kind: 'banned_word' },
+      { text: ' nữa', kind: null },
+    ])
   })
 })
