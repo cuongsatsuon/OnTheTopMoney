@@ -19,7 +19,7 @@ import type { MediaStores } from '../adapters/media/index.ts'
 import {
   clearLogo,
   getProfile,
-  resolveEffective,
+  resolveEffectiveOrNull,
   setLogo,
   setUseOwn,
   upsertProfile,
@@ -33,15 +33,9 @@ import { mediaAppError } from './media-errors.ts'
 const OwnerParams = z.object({ ownerType: ConfigOwnerType, ownerId: z.uuid() })
 const PageIdParams = z.object({ id: z.uuid() })
 
-/** `resolveEffective` ném `CONFIG_MISSING` khi trang không nhóm & không hồ sơ → route trả `{effective:null}`. */
-async function effectiveOrNull(db: Db, pageId: string): Promise<EffectiveBrandProfile | null> {
-  try {
-    return await resolveEffective<BrandProfileDto>(db, pageId, 'brand')
-  } catch (err) {
-    if (err instanceof AppError && err.code === 'CONFIG_MISSING') return null
-    throw err
-  }
-}
+/** Trang không nhóm & không hồ sơ (`CONFIG_MISSING`) → route trả `{effective:null}`. */
+const effectiveOrNull = (db: Db, pageId: string): Promise<EffectiveBrandProfile | null> =>
+  resolveEffectiveOrNull<BrandProfileDto>(db, pageId, 'brand')
 
 /** base64 của 2 MB (+ JSON) ~ 2.8 MB; bodyLimit mặc định của Fastify là 1 MB → nâng riêng cho route logo. */
 const LOGO_BODY_LIMIT = Math.ceil((LOGO_MAX_BYTES * 4) / 3) + 64 * 1024

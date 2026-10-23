@@ -19,6 +19,7 @@
 // bình luận đã xoá/ẩn thì AI không gửi), huỷ tin AI khi bình luận bị gỡ trước lúc gửi.
 // Story 5.6: `handoff` tạm đóng khôi phục được (`resumableHandoff`) — ảnh chụp lượt và áp quyết định nhận cả trạng thái
 // này (`handoff → ai` `GATE_OPEN`); tin AI gửi lỗi phía gửi → `AI_SEND_FAILED`.
+// Story 5.7: `latestAiReply` — tin AI đã gửi gần nhất cho cao trào Màn chào (`app/read-models/onboarding.ts`).
 export const MODULE = 'inbox'
 
 export {
@@ -189,6 +190,7 @@ export {
   encodeCursor,
   getConversation,
   getMessage,
+  latestAiReply,
   listConversations,
   listMessages,
   needsAttention,

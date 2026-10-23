@@ -23,6 +23,7 @@ export {
   getPageConfigState,
   onGroupProfileSaved,
   resolveEffective,
+  resolveEffectiveOrNull,
   setUseOwn,
   type ConfigKindOps,
 } from './inheritance.ts'

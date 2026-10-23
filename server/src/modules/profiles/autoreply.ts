@@ -13,7 +13,6 @@ import type {
   BulkSetAutoreplyResponse,
   ConfigSource,
   EffectiveAutoreplyConfigResponse,
-  EffectiveConfig,
   ParsedAutoreplyConfig,
   Platform,
 } from '@ottm/shared'
@@ -23,7 +22,7 @@ import { AppError } from '../../platform/errors/index.ts'
 import { getGroup, getPage, listGroups, listPages } from '../pages/index.ts'
 import { autoreplyValues, getAutoreplyRow, upsertAutoreplyRow } from './autoreply-row.ts'
 import { scriptForIndustry, scriptFromBrand } from './autoreply-template.ts'
-import { getPageConfigState, onGroupProfileSaved, resolveEffective, setUseOwn } from './inheritance.ts'
+import { getPageConfigState, onGroupProfileSaved, resolveEffective, resolveEffectiveOrNull, setUseOwn } from './inheritance.ts'
 import { assertKnowledgeFits, knowledgeTokens, tooLarge } from './knowledge.ts'
 import { listReadyKnowledge, readyKnowledgeTokens, type ReadyKnowledgeEntry } from './knowledge-row.ts'
 import type { ProfileOwner } from './row.ts'
@@ -58,16 +57,6 @@ export async function saveAutoreplyConfig(db: Db, owner: ProfileOwner, input: Pa
   })
 }
 
-/** `resolveEffective` nhưng `CONFIG_MISSING` → `null` (lỗi khác ném tiếp). */
-async function effectiveOrNull<T>(db: DbExecutor, pageId: string, kind: 'autoreply' | 'brand'): Promise<EffectiveConfig<T> | null> {
-  try {
-    return await resolveEffective<T>(db, pageId, kind)
-  } catch (err) {
-    if (err instanceof AppError && err.code === 'CONFIG_MISSING') return null
-    throw err
-  }
-}
-
 /** Trang dùng cấu hình riêng: cờ `use_own`, hoặc trang không nhóm (không có gì để kế thừa). */
 async function usesOwn(db: DbExecutor, page: { id: string; groupId: string | null }): Promise<boolean> {
   return !page.groupId || (await getPageConfigState(db, page.id, 'autoreply')).useOwn
@@ -77,7 +66,7 @@ async function usesOwn(db: DbExecutor, page: { id: string; groupId: string | nul
 export async function getEffectiveAutoreply(db: DbExecutor, pageId: string): Promise<EffectiveAutoreplyConfigResponse> {
   const page = await getPage(db, pageId)
   if (!page) throw new AppError('NOT_FOUND', 404, { message: 'Trang không tồn tại', details: { pageId } })
-  return { effective: await effectiveOrNull<AutoreplyConfigDto>(db, pageId, 'autoreply'), useOwn: await usesOwn(db, page) }
+  return { effective: await resolveEffectiveOrNull<AutoreplyConfigDto>(db, pageId, 'autoreply'), useOwn: await usesOwn(db, page) }
 }
 
 /** Bật/tắt "Dùng cấu hình AI riêng" (áp khi Lưu) — luật ở `setUseOwn`; trả hiệu lực mới. */
@@ -100,7 +89,7 @@ export async function buildAutoreplyScript(db: DbExecutor, req: AutoreplyScriptT
     if (!profile || !group) throw brandMissing(owner)
     return { script: scriptFromBrand(profile), brandSource: { ownerType: 'group', ownerId: group.id, name: group.name } }
   }
-  const effective = await effectiveOrNull<BrandProfileDto>(db, owner.ownerId, 'brand')
+  const effective = await resolveEffectiveOrNull<BrandProfileDto>(db, owner.ownerId, 'brand')
   if (!effective) throw brandMissing(owner)
   return { script: scriptFromBrand(effective.config), brandSource: effective.source }
 }
@@ -123,7 +112,7 @@ export async function autoreplyOverview(db: DbExecutor): Promise<AutoreplyOvervi
   }
   const pageRows: AutoreplyOverviewResponse['pages'] = []
   for (const p of pages) {
-    const effective = await effectiveOrNull<AutoreplyConfigDto>(db, p.id, 'autoreply')
+    const effective = await resolveEffectiveOrNull<AutoreplyConfigDto>(db, p.id, 'autoreply')
     pageRows.push({
       pageId: p.id,
       groupId: p.groupId,
@@ -150,7 +139,7 @@ export async function bulkSetAutoreplyEnabled(db: Db, pageIds: readonly string[]
   for (const pageId of new Set(pageIds)) {
     try {
       const outcome = await db.transaction(async (tx): Promise<BulkOutcome> => {
-        const effective = await effectiveOrNull<AutoreplyConfigDto>(tx, pageId, 'autoreply')
+        const effective = await resolveEffectiveOrNull<AutoreplyConfigDto>(tx, pageId, 'autoreply')
         if (!effective) {
           if (!enabled) return 'unchanged'
           throw new AppError('CONFIG_MISSING', 422, { message: 'Trang chưa có cấu hình AI', details: { pageId } })
@@ -205,7 +194,7 @@ export async function autoreplyTestSources(db: DbExecutor, owner: ProfileOwner):
     kbOwner = owner
   } else {
     const page = (await getPage(db, owner.ownerId))!
-    const brand = await effectiveOrNull<BrandProfileDto>(db, page.id, 'brand')
+    const brand = await resolveEffectiveOrNull<BrandProfileDto>(db, page.id, 'brand')
     sources = { name: page.name, pageId: page.id, platforms: [page.platform], brand: brand?.config ?? null }
     kbOwner = (await usesOwn(db, page)) ? owner : { ownerType: 'group', ownerId: page.groupId! }
   }
@@ -253,7 +242,7 @@ export function capKnowledge(entries: readonly ReadyKnowledgeEntry[], max = KNOW
 export async function autoreplyRunSources(db: DbExecutor, pageId: string): Promise<AutoreplyRunSources> {
   const effective = await resolveEffective<AutoreplyConfigDto>(db, pageId, 'autoreply')
   const page = await getPage(db, pageId)
-  const brand = await effectiveOrNull<BrandProfileDto>(db, pageId, 'brand')
+  const brand = await resolveEffectiveOrNull<BrandProfileDto>(db, pageId, 'brand')
   const kbOwner: ProfileOwner = { ownerType: effective.source.ownerType, ownerId: effective.source.ownerId }
   const { kept, dropped } = capKnowledge(await listReadyKnowledge(db, kbOwner))
   return {

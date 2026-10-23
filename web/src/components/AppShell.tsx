@@ -18,7 +18,7 @@ import {
   Users,
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { groups, pages, pagesInGroup } from '../data/mock'
 import { BUDGET_BANNER_ACTION, BUDGET_BANNER_TEXT, budgetView, useAiBudget, useAiBudgetToasts } from '../lib/ai-budget'
 import { useApp, type Scope } from '../lib/app-context'
@@ -28,6 +28,7 @@ import { useLogout } from '../lib/session'
 import { errorMessageOf } from '../lib/error-messages'
 import { useNeedsHumanCount } from '../lib/inbox'
 import { useNotificationToasts, useNotifications } from '../lib/notifications'
+import { WELCOME_PATH, shouldOpenWelcome, welcomeOpenedThisLoad } from '../lib/onboarding'
 import { useRealtimeStatus } from '../lib/realtime'
 import { isPaletteShortcut, shortcutLabel } from '../lib/search'
 import { CommandPalette } from './CommandPalette'
@@ -335,7 +336,13 @@ function Topbar() {
 export default function AppShell() {
   const { notify } = useApp()
   // Tải trang thật (và chép vào kho mẫu) ở mọi màn để bộ chọn phạm vi và màn chi tiết thấy chúng (Story 2.2).
-  usePages()
+  const realPages = usePages()
+  // Story 5.7: mở app ở Tổng quan khi chưa có trang nào → Màn chào (một lần mỗi lần tải app, xem `shouldOpenWelcome`).
+  const navigate = useNavigate()
+  const { pathname } = useLocation()
+  useEffect(() => {
+    if (shouldOpenWelcome({ pathname, pages: realPages.data, opened: welcomeOpenedThisLoad() })) navigate(WELCOME_PATH, { replace: true })
+  }, [pathname, realPages.data, navigate])
   useNotificationToasts(notify)
   useAiBudgetToasts(notify)
   return (

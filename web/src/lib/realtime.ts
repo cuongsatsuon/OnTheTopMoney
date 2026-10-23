@@ -41,13 +41,16 @@ export function entityMatches(root: unknown, entity: string): boolean {
  * - Story 4.9: `message`, `conversation` → khách `['contacts', …]` (tin mới nhất, "Xử lý bởi", lịch sử); `contact`
  *   (sửa hồ sơ, gộp khách `contact.merged`) → cả tin `['messages', …]` (tên người viết trong luồng bình luận).
  * - Story 4.10: `page` (kết nối lại đổi tên, gỡ), `group` (xoá nhóm), `contact` → kết quả ⌘K `['search', …]`.
+ * - Story 5.7: `page`, `openai_key`, `settings`, `message` → trạng thái Màn chào `['onboarding']` (bước xong, tin AI đã
+ *   gửi); `message` → sức khoẻ webhook `['webhooks', …]` ("Nhận tin gần nhất: vừa xong" ngay khi tin về, không chờ
+ *   lần hỏi lại mỗi phút).
  */
 export const ENTITY_ALSO_INVALIDATES: Readonly<Record<string, readonly string[]>> = {
-  openai_key: ['settings'],
-  settings: ['ai_budget'],
-  message: ['conversation', 'contact'],
+  openai_key: ['settings', 'onboarding'],
+  settings: ['ai_budget', 'onboarding'],
+  message: ['conversation', 'contact', 'onboarding', 'webhook'],
   contact: ['conversation', 'message', 'search'],
-  page: ['search'],
+  page: ['search', 'onboarding'],
   group: ['search'],
   conversation: ['message', 'contact'],
 }

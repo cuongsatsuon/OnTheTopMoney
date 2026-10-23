@@ -1,5 +1,6 @@
-import { ArrowRight, Check, KeyRound, Loader2, Sparkles } from 'lucide-react'
+import { ArrowRight, Check, KeyRound, Loader2, MessageCircle, Sparkles } from 'lucide-react'
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import ConnectResultModal from '../components/ConnectResultModal'
 import { Button, Input, PlatformIcon, cn } from '../components/ui'
@@ -18,7 +19,22 @@ import {
   useStartConnect,
 } from '../lib/connections'
 import { errorMessage, errorMessageOf } from '../lib/error-messages'
+import {
+  ONBOARDING_KEY,
+  activeStep,
+  autoreplyPath,
+  brandProfilePath,
+  doneCount,
+  inboxPathOf,
+  markWelcomeOpened,
+  setupPageId,
+  stepLock,
+  useOnboardingStatus,
+  welcomePhase,
+  type StepKey,
+} from '../lib/onboarding'
 import { keyErrorMessage, keyFormatError, useOpenAiSettings, useSaveOpenAiKey } from '../lib/openai'
+import { lastEventLabel, useWebhookHealth } from '../lib/webhooks'
 
 /** Facebook và Instagram Business dùng chung một cửa sổ Meta; Threads có OAuth riêng (Story 2.3). */
 const CONNECTORS: { platform: Platform; label: string; hint: string; note?: string }[] = [
@@ -32,6 +48,8 @@ const CONNECTORS: { platform: Platform; label: string; hint: string; note?: stri
   { platform: 'threads', label: 'Threads', hint: 'Nhận bình luận, đăng bài tự động' },
 ]
 
+/** Chưa tải được trạng thái → coi như chưa xong bước nào (bước 1 vẫn bấm được). */
+const NO_STEPS = { pageConnected: false, openAiKeyValid: false, brandProfile: false, autoreplyEnabled: false }
 
 function Step({ n, title, done, active, children }: { n: number; title: string; done: boolean; active: boolean; children?: ReactNode }) {
   return (
@@ -57,7 +75,18 @@ function Step({ n, title, done, active, children }: { n: number; title: string; 
 export default function Welcome() {
   const { notify } = useApp()
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
+  // Story 5.7: bước nào "Xong" lấy từ endpoint tổng hợp (dẫn xuất từ dữ liệu thật); realtime làm cũ khi trang, khoá,
+  // tin nhắn đổi; quay lại từ Chi tiết trang / AI trả lời thì tải lại khi mở màn.
+  const onboarding = useOnboardingStatus()
+  const steps = onboarding.data?.steps ?? NO_STEPS
+  const current: StepKey | null = activeStep(steps)
+  const phase = welcomePhase(onboarding.data)
+  const lastAiReply = onboarding.data?.lastAiReply ?? null
+  // Pha chờ / cao trào: "Đang chờ tin đầu tiên" → "Nhận tin gần nhất: vừa xong" (realtime `message.*` làm cũ).
+  const webhookHealth = useWebhookHealth()
+  const metaHealth = webhookHealth.data?.products.find((p) => p.product === 'meta')
   // Bước 1 dùng chung luồng kết nối với Trang & Nhóm (`from: 'welcome'` → callback đưa về /bat-dau).
   const pagesQuery = usePages()
   const startConnect = useStartConnect()
@@ -87,10 +116,13 @@ export default function Welcome() {
       ),
     [setSearchParams],
   )
-  // Bỏ `#` / `#_` mà callback OAuth để lại trên thanh địa chỉ.
+  // Bỏ `#` / `#_` mà callback OAuth để lại trên thanh địa chỉ. Đánh dấu đã mở màn chào: Tổng quan không tự chuyển
+  // về đây nữa trong lần tải app này ("Bỏ qua, vào bảng điều khiển").
   useEffect(() => {
     stripOAuthFragment()
+    markWelcomeOpened()
   }, [])
+  const refreshSteps = useCallback(() => void queryClient.invalidateQueries({ queryKey: ONBOARDING_KEY }), [queryClient])
   useEffect(() => {
     if (!connectError) return
     notify(errorMessage(connectError, resultProvider))
@@ -118,13 +150,17 @@ export default function Welcome() {
       return
     }
     setApiKey('')
+    refreshSteps()
     notify('Đã kết nối OpenAI')
   }
 
   const savedKey = openAiQuery.data?.key
-  const step1 = pages.length > 0
-  const step2 = savedKey?.status === 'valid'
-  const doneCount = Number(step1) + Number(step2)
+  const step1 = steps.pageConnected
+  const step2 = steps.openAiKeyValid
+  const done = doneCount(steps)
+  const setupPage = setupPageId(pages)
+  const brandLock = stepLock('brandProfile', steps)
+  const aiLock = stepLock('autoreplyEnabled', steps)
 
   return (
     <div className="min-h-full bg-background">
@@ -146,14 +182,22 @@ export default function Welcome() {
           </p>
           <div className="mt-4 flex items-center gap-3">
             <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-200">
-              <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${(doneCount / 4) * 100}%` }} />
+              <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${(done / 4) * 100}%` }} />
             </div>
-            <span className="tabular text-[13px] font-medium text-muted-foreground">{doneCount}/4 bước</span>
+            <span className="tabular text-[13px] font-medium text-muted-foreground">{done}/4 bước</span>
           </div>
+          {onboarding.isError && (
+            <div className="mt-3 flex flex-wrap items-center gap-3 rounded-md border border-red-200 bg-red-50/60 px-3 py-2 text-[13px]" role="alert">
+              <span className="text-danger-foreground">Chưa tải được tiến độ các bước. {errorMessageOf(onboarding.error)}</span>
+              <Button size="sm" onClick={() => void onboarding.refetch()}>
+                Thử lại
+              </Button>
+            </div>
+          )}
         </div>
 
         <ol className="mt-6 space-y-3">
-          <Step n={1} title="Kết nối trang" done={step1} active={!step1}>
+          <Step n={1} title="Kết nối trang" done={step1} active={current === 'pageConnected'}>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
               {CONNECTORS.map((c) => {
                 const isDone = connected.has(c.platform)
@@ -202,7 +246,7 @@ export default function Welcome() {
                 </Button>
               </div>
             )}
-            {step1 && (
+            {pages.length > 0 && (
               <p className="mt-3 text-[13px]">
                 Đã kết nối {pages.length} trang: {pages.map((p) => p.name).join(', ')}.
               </p>
@@ -212,7 +256,7 @@ export default function Welcome() {
             </p>
           </Step>
 
-          <Step n={2} title="Thêm khoá OpenAI" done={step2} active={step1 && !step2}>
+          <Step n={2} title="Thêm khoá OpenAI" done={step2} active={current === 'openAiKeyValid'}>
             <div className="rounded-md border border-ai/20 bg-ai-soft/50 p-3 text-[13px]">
               <span className="flex items-start gap-2">
                 <Sparkles size={15} className="mt-0.5 shrink-0 text-ai" />
@@ -267,20 +311,36 @@ export default function Welcome() {
             )}
           </Step>
 
-          <Step n={3} title="Điền hồ sơ thương hiệu" done={false} active={step1 && step2}>
+          <Step n={3} title="Điền hồ sơ thương hiệu" done={steps.brandProfile} active={current === 'brandProfile'}>
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <p className="text-[13px] text-muted-foreground">Giọng điệu, sản phẩm chủ lực, từ cấm — AI dùng để viết bài và trả lời đúng giọng shop.</p>
-              <Button disabled={!step1} onClick={() => navigate('/trang-nhom')}>
-                Điền hồ sơ
+              <p className="text-[13px] text-muted-foreground">
+                {steps.brandProfile
+                  ? 'Đã có hồ sơ thương hiệu. AI viết bài và trả lời theo giọng shop trong hồ sơ.'
+                  : 'Giọng điệu, sản phẩm chủ lực, từ cấm — AI dùng để viết bài và trả lời đúng giọng shop.'}
+              </p>
+              <Button
+                variant={current === 'brandProfile' ? 'primary' : 'secondary'}
+                disabled={brandLock !== null}
+                title={brandLock ?? undefined}
+                onClick={() => navigate(brandProfilePath(setupPage))}
+              >
+                {steps.brandProfile ? 'Xem hồ sơ' : 'Điền hồ sơ'}
               </Button>
             </div>
           </Step>
 
-          <Step n={4} title="Bật AI trả lời" done={false} active={false}>
+          <Step n={4} title="Bật AI trả lời" done={steps.autoreplyEnabled} active={current === 'autoreplyEnabled'}>
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <p className="text-[13px] text-muted-foreground">AI trả lời tin nhắn trong vài giây và chuyển cho bạn khi cần.</p>
-              <Button disabled={!step1 || !step2} onClick={() => navigate('/ai-tra-loi')} title={step2 ? undefined : 'Thêm khoá OpenAI ở bước 2'}>
-                Bật AI trả lời
+              <p className="text-[13px] text-muted-foreground">
+                {steps.autoreplyEnabled ? 'AI trả lời đang bật.' : 'AI trả lời tin nhắn trong vài giây và chuyển cho bạn khi cần.'}
+              </p>
+              <Button
+                variant={current === 'autoreplyEnabled' ? 'primary' : 'secondary'}
+                disabled={aiLock !== null}
+                title={aiLock ?? undefined}
+                onClick={() => navigate(autoreplyPath(setupPage))}
+              >
+                {steps.autoreplyEnabled ? 'Xem cấu hình AI' : 'Bật AI trả lời'}
               </Button>
             </div>
           </Step>
@@ -296,14 +356,67 @@ export default function Welcome() {
             retrying={startConnect.isPending}
             onConnected={(connectedPages) => {
               clearConnectParams()
+              refreshSteps()
               notify(`Đã kết nối ${connectedPages.length} trang`)
             }}
           />
         )}
 
-        {step1 && step2 && (
+        {phase === 'waiting' && (
+          <section className="mt-6 rounded-lg border border-primary/40 bg-surface p-5" aria-live="polite">
+            <div className="flex items-center gap-3">
+              <Loader2 size={18} className="shrink-0 animate-spin text-primary" aria-hidden />
+              <h2 className="text-base font-semibold">Xong 4 bước! Giờ chờ khách nhắn tin</h2>
+            </div>
+            <div className="mt-3 space-y-2 pl-[30px] text-[13px]">
+              <p>
+                <span className="font-medium">Webhook Facebook / Instagram:</span> {lastEventLabel(metaHealth?.lastEventAt ?? null)}
+              </p>
+              <p className="text-muted-foreground">
+                Nhờ ai đó nhắn thử vào Fanpage (hoặc tự nhắn từ một tài khoản Facebook khác). AI trả lời trong vài giây, màn này tự cập nhật.
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Nếu Fanpage đang bật Trả lời tức thì hoặc tin nhắn vắng mặt trong Meta Business Suite, hãy tắt đi: app coi tin tự động đó là bạn đã trả lời và tắt AI cho hội thoại.
+              </p>
+              <div className="flex flex-wrap gap-2 pt-1">
+                <Button size="sm" onClick={() => navigate('/hop-thu')} icon={<MessageCircle size={14} />}>
+                  Mở Hộp thư
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => navigate('/')}>
+                  Vào bảng điều khiển
+                </Button>
+              </div>
+            </div>
+          </section>
+        )}
+
+        {phase === 'climax' && lastAiReply && (
+          <section className="mt-6 rounded-lg border border-ai/30 bg-ai-soft/50 p-5" aria-live="polite">
+            <div className="flex items-center gap-3">
+              <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-ai text-white" aria-hidden>
+                <Sparkles size={15} />
+              </span>
+              <h2 className="text-base font-semibold">AI đã trả lời khách đầu tiên</h2>
+            </div>
+            <div className="mt-3 space-y-3 pl-10 text-[13px]">
+              <p>
+                <span className="font-medium">Webhook Facebook / Instagram:</span> {lastEventLabel(metaHealth?.lastEventAt ?? null)}. Hội thoại và tin AI đã gửi đang ở Hộp thư.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Button variant="primary" onClick={() => navigate(inboxPathOf(lastAiReply))} icon={<ArrowRight size={15} />}>
+                  Mở Hộp thư
+                </Button>
+                <Button variant="ghost" onClick={() => navigate('/')}>
+                  Vào bảng điều khiển
+                </Button>
+              </div>
+            </div>
+          </section>
+        )}
+
+        {phase === 'setup' && step1 && step2 && (
           <div className="mt-6 flex justify-end">
-            <Button variant="primary" onClick={() => navigate('/')} icon={<ArrowRight size={15} />}>
+            <Button onClick={() => navigate('/')} icon={<ArrowRight size={15} />}>
               Vào bảng điều khiển
             </Button>
           </div>

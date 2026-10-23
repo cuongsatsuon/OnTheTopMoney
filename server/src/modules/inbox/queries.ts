@@ -32,7 +32,7 @@ import type {
   AttachmentStatus,
   InboxTab,
 } from '@ottm/shared'
-import { and, asc, count, desc, eq, inArray, lt, or, sql, type SQL } from 'drizzle-orm'
+import { and, asc, count, desc, eq, inArray, isNotNull, lt, or, sql, type SQL } from 'drizzle-orm'
 import type { DbExecutor } from '../../platform/db/index.ts'
 import { AppError } from '../../platform/errors/index.ts'
 import { getPage } from '../pages/index.ts'
@@ -158,6 +158,34 @@ export async function countConversations(db: DbExecutor, pageIds: readonly strin
     .from(conversations)
     .where(and(inArray(conversations.pageId, [...pageIds]), tabCondition(tab)))
   return Number(row?.n ?? 0)
+}
+
+/** Tin AI đã tới tay khách (Story 5.7): `app_ai`, `sent|delivered|read` (`sent_at` có từ Story 5.4). */
+const AI_DELIVERED: readonly MessageStatus[] = ['sent', 'delivered', 'read']
+
+/**
+ * Tin AI đã gửi gần nhất trong các trang `pageIds` (bên gọi truyền trang chưa gỡ) — cao trào Màn chào (Story 5.7)
+ * dẫn vào đúng hội thoại. `null` khi AI chưa gửi được tin nào. Không đọc nội dung tin.
+ */
+export async function latestAiReply(
+  db: DbExecutor,
+  pageIds: readonly string[],
+): Promise<{ conversationId: string; pageId: string; sentAt: Date } | null> {
+  if (pageIds.length === 0) return null
+  const [row] = await db
+    .select({ conversationId: messages.conversationId, pageId: messages.pageId, sentAt: messages.sentAt })
+    .from(messages)
+    .where(
+      and(
+        inArray(messages.pageId, [...pageIds]),
+        eq(messages.origin, 'app_ai'),
+        inArray(messages.status, [...AI_DELIVERED]),
+        isNotNull(messages.sentAt),
+      ),
+    )
+    .orderBy(desc(messages.sentAt), desc(messages.id))
+    .limit(1)
+  return row?.sentAt ? { conversationId: row.conversationId, pageId: row.pageId, sentAt: row.sentAt } : null
 }
 
 /** Một hội thoại; `null` khi không có hoặc trang của nó đã gỡ. */

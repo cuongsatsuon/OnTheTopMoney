@@ -136,6 +136,16 @@ export async function resolveEffective<T = unknown>(db: DbExecutor, pageId: stri
   throw configMissing(pageId, kind)
 }
 
+/** `resolveEffective` nhưng `CONFIG_MISSING` → `null` (lỗi khác, kể cả trang không tồn tại, ném tiếp). */
+export async function resolveEffectiveOrNull<T = unknown>(db: DbExecutor, pageId: string, kind: ConfigKind): Promise<EffectiveConfig<T> | null> {
+  try {
+    return await resolveEffective<T>(db, pageId, kind)
+  } catch (err) {
+    if (err instanceof AppError && err.code === 'CONFIG_MISSING') return null
+    throw err
+  }
+}
+
 const sourceOf = (ownerType: ConfigSource['ownerType'], ownerId: string, name: string): ConfigSource => ({ ownerType, ownerId, name })
 
 function configMissing(pageId: string, kind: ConfigKind): AppError {

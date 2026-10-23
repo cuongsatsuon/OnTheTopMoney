@@ -74,18 +74,18 @@ development_status:
   4-10-tìm-nhanh-bằng-k: review
   epic-4-retrospective: optional
 
-  epic-5: in-progress
+  epic-5: review
   5-1-cấu-hình-ai-trả-lời-theo-nhóm-và-trang: review
   5-2-kho-kiến-thức: review
   5-3-thử-ai-trước-khi-bật: review
   5-4-ai-tự-trả-lời-tin-nhắn-và-chuyển-cho-bạn: review
   5-5-ai-trả-lời-bình-luận-công-khai-và-nhắn-riêng: review
   5-6-ai-dừng-và-chạy-lại-đúng-lúc-khi-hết-hạn-mức-hoặc-khoá-lỗi: review
-  5-7-màn-chào-4-bước-chạy-trọn: in-progress
+  5-7-màn-chào-4-bước-chạy-trọn: review
   epic-5-retrospective: optional
 
-  epic-6: backlog
-  6-1-soạn-bài-nháp-cho-nhiều-trang: backlog
+  epic-6: in-progress
+  6-1-soạn-bài-nháp-cho-nhiều-trang: in-progress
   6-2-viết-caption-bằng-ai-theo-hồ-sơ-từng-trang: backlog
   6-3-sinh-ảnh-ai: backlog
   6-4-lên-lịch-và-đăng-bài-theo-từng-trang: backlog

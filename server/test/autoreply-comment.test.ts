@@ -207,7 +207,9 @@ const aiMessagesOf = (id: string) =>
 const runsOf = (id: string) =>
   handle.sql<{ outcome: string | null; reason_code: string | null; llm_calls: number; message_ids: string[] }[]>`
     select outcome, reason_code, llm_calls, message_ids from autoreply_runs where conversation_id = ${id} order by started_at`
-const sendJobs = () => handle.sql<{ data: { messageId: string } }[]>`select data from pgboss.job where name = 'inbox.send' order by created_on`
+// Hai job cùng transaction có cùng `created_on` → thêm id tin (uuidv7, theo thứ tự ghi) để thứ tự không lệch ngẫu nhiên.
+const sendJobs = () =>
+  handle.sql<{ data: { messageId: string } }[]>`select data from pgboss.job where name = 'inbox.send' order by created_on, data->>'messageId'`
 const lastRequest = () => fake.responseRequests.at(-1)!
 const inputOf = (i: number) => fake.responseRequests[i]!.input as string
 const removeComment = (pageId: string, commentId: string, removal: 'deleted' | 'hidden') =>
