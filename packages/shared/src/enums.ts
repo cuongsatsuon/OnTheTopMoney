@@ -161,6 +161,16 @@ export const CAMPAIGN_MODES = ['review', 'auto'] as const
 export const CampaignMode = z.enum(CAMPAIGN_MODES)
 export type CampaignMode = z.infer<typeof CampaignMode>
 
+// Story 7.1: mục tiêu chiến dịch (bước 1 wizard) — AI chọn chủ đề và giọng bài theo mục tiêu.
+export const CAMPAIGN_GOALS = ['engage', 'follow', 'sell', 'launch'] as const
+export const CampaignGoal = z.enum(CAMPAIGN_GOALS)
+export type CampaignGoal = z.infer<typeof CampaignGoal>
+
+// Story 7.1: tần suất đăng của một trang trong chiến dịch (3 bài/tuần, 1–3 bài/ngày).
+export const CAMPAIGN_FREQUENCIES = ['3_per_week', '1_per_day', '2_per_day', '3_per_day'] as const
+export const CampaignFrequency = z.enum(CAMPAIGN_FREQUENCIES)
+export type CampaignFrequency = z.infer<typeof CampaignFrequency>
+
 export const PAUSE_REASONS = [
   'PAGE_DISCONNECTED',
   'AI_BUDGET_EXCEEDED',

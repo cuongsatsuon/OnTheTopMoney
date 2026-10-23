@@ -209,3 +209,21 @@
 - source_spec: `spec-6-5-lich-noi-dung.md`
   summary: Kéo thả một ô slot chiến dịch (nhiều bài 1 : 1 gom theo giờ) gửi mỗi bài một request — không nguyên tử: một bài lỗi (409 / giới hạn/24h) thì các bài trước đã đổi giờ.
   evidence: `web/src/lib/calendar.ts` `groupCalls`; route chuyển trạng thái theo từng bài. Hiện `campaignId` luôn `null` (cột có ở Epic 7). Khi Epic 7 thêm slot: cân nhắc route chuyển trạng thái theo danh sách target nhiều bài, hoặc chấp nhận và báo "Đã dời n/m bài".
+- source_spec: `spec-7-1-wizard-chien-dich.md`
+  summary: Kiểm bằng trình duyệt wizard `/chien-dich/tao` với phiên chủ shop và trang thật:
+    - 3 bước theo nhóm / từng trang; trang mất kết nối / thiếu hồ sơ mờ kèm lý do;
+    - tổng tỉ lệ 90% → báo dưới ô; sang bước 4 → URL `?id=`, tải lại nạp đúng nháp;
+    - ghi chú "Instagram luôn cần ảnh".
+  evidence: Chỉ có test API (Postgres thật, `server/test/campaigns.test.ts`) và test helper web (`web/src/lib/campaigns.test.ts`); chưa chạy UI (dev không có mật khẩu mẫu).
+- source_spec: `spec-7-1-wizard-chien-dich.md`
+  summary: Ước tính chi phí AI thật ở cột Tóm tắt của wizard. Đã bỏ số giả "~700đ/bài"; hướng làm: tính theo model đang chọn bằng `ai.estimateTextCost` / `estimateImageCost` × số bài / số bài có ảnh.
+  evidence: Chưa có lời gọi `campaign_generate` nào để biết số token thật mỗi bài. Làm khi Story 7.2 sinh bài xem trước.
+- source_spec: `spec-7-1-wizard-chien-dich.md`
+  summary: Danh sách chiến dịch nháp. Nháp chỉ mở lại được qua `/chien-dich/tao?id=<id>`; `/chien-dich` (tab "Bản nháp") vẫn chạy dữ liệu mẫu; chưa xoá được nháp.
+  evidence: Danh sách chiến dịch + read-model tiến độ thuộc Story 7.3, xoá thuộc Story 7.5. Story 7.1 chỉ lưu và đọc từng nháp.
+- source_spec: `spec-7-1-wizard-chien-dich.md`
+  summary: Trang chọn được (`GET /campaigns/page-options`) không tự cập nhật khi hồ sơ thương hiệu đổi, vì lưu hồ sơ không phát sự kiện realtime. Chỉ `page.*` làm cũ danh sách này.
+  evidence: Wizard mở lâu có thể vẫn thấy "Chưa có hồ sơ thương hiệu" dù vừa tạo hồ sơ ở tab khác. Server vẫn kiểm lại khi lưu, nên không lưu sai.
+- source_spec: `spec-7-1-wizard-chien-dich.md`
+  summary: Hai tab cùng sửa một nháp chiến dịch → lần lưu sau đè im lặng lần lưu trước (`PUT /campaigns/:id` thay toàn bộ, không điều kiện phiên bản).
+  evidence: `campaigns/drafts.ts` `updateCampaignDraft` khoá dòng (`for update`) nên hai lần lưu không đan nhau, nhưng không so `updatedAt` gửi lên. Chỉ ảnh hưởng nháp của một chủ shop mở hai tab. Hướng sửa: body/`If-Match` mang `updatedAt` đã đọc, khác → 409 `VERSION_CONFLICT`, wizard báo "Nháp đã đổi ở tab khác — tải lại".

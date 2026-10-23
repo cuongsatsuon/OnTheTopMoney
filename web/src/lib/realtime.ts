@@ -46,13 +46,14 @@ export function entityMatches(root: unknown, entity: string): boolean {
  * - Story 5.7: `page`, `openai_key`, `settings`, `message` → trạng thái Màn chào `['onboarding']` (bước xong, tin AI đã
  *   gửi); `message` → sức khoẻ webhook `['webhooks', …]` ("Nhận tin gần nhất: vừa xong" ngay khi tin về, không chờ
  *   lần hỏi lại mỗi phút).
+ * - Story 7.1: `page` (mất kết nối / kết nối lại / gỡ) → trang chọn được của wizard chiến dịch `['campaigns', …]`.
  */
 export const ENTITY_ALSO_INVALIDATES: Readonly<Record<string, readonly string[]>> = {
   openai_key: ['settings', 'onboarding'],
   settings: ['ai_budget', 'onboarding'],
   message: ['conversation', 'contact', 'onboarding', 'webhook'],
   contact: ['conversation', 'message', 'search'],
-  page: ['search', 'onboarding'],
+  page: ['search', 'onboarding', 'campaign'],
   group: ['search'],
   conversation: ['message', 'contact'],
   // Story 6.4: target đăng xong / lỗi → bài đang mở ở Soạn bài `['posts', id]`.

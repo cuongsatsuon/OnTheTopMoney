@@ -218,6 +218,13 @@
       "when": 1792795282284,
       "tag": "0030_demonic_red_hulk",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1792796828925,
+      "tag": "0031_regular_makkari",
+      "breakpoints": true
     }
   ]
 }
