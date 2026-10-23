@@ -2,6 +2,8 @@
 // `pages.resolveScope`), một hội thoại, trang tin của hội thoại. Cursor mờ `{items, nextCursor}`, mặc định 50.
 // - Danh sách: mới nhất trước theo `(last_message_at, id)`; xem trước = tin mới nhất không phải `system`.
 // - Tin: trang MỚI NHẤT theo `(platform_timestamp, id)`, trả theo thứ tự hiển thị (cũ → mới); cursor lùi về tin cũ.
+// - Story 4.4: hội thoại `comment` kèm bài được bình luận; tin kèm sửa/xoá/ẩn và khách viết tin (luồng bình luận có
+//   thể có nhiều người).
 // Trang đã gỡ → hội thoại không còn hiện (danh sách lọc theo trang chưa gỡ; `getConversation` kiểm `getPage`).
 import type {
   AttachmentDto,
@@ -13,6 +15,8 @@ import type {
   MessageDirection,
   MessageDto,
   MessageOrigin,
+  MessageRemoval,
+  MessageSender,
   MessageStatus,
   StateChangeReason,
   AttachmentError,
@@ -171,6 +175,7 @@ async function toConversationDtos(db: DbExecutor, rows: ConversationRow[]): Prom
       needsAttention: needsAttention(state, preview?.origin ?? null),
       contact: { id: r.contactId, name: r.contactName, stage: r.contactStage as ContactStage, pageIds: pagesOf.get(r.contactId) ?? [] },
       preview,
+      post: r.platformPostId ? { platformPostId: r.platformPostId, text: r.postTextSnapshot } : null,
     }
   })
 }
@@ -226,6 +231,22 @@ export async function listMessages(db: DbExecutor, conversationId: string, query
     })
     attachmentsOf.set(a.messageId, list)
   }
+  // Khách viết tin inbound: định danh của tin; tin trước Story 4.4 chưa có → định danh của hội thoại.
+  const [conv] = await db
+    .select({ identityId: conversations.contactIdentityId })
+    .from(conversations)
+    .where(eq(conversations.id, conversationId))
+  const senderIdOf = (m: (typeof page)[number]) => (m.direction === 'inbound' ? (m.senderIdentityId ?? conv?.identityId ?? null) : null)
+  const identityIds = [...new Set(page.map(senderIdOf).filter((id): id is string => id !== null))]
+  const senders = identityIds.length
+    ? await db
+        .select({ identityId: contactIdentities.id, contactId: contacts.id, name: contacts.name })
+        .from(contactIdentities)
+        .innerJoin(contacts, eq(contacts.id, contactIdentities.contactId))
+        .where(inArray(contactIdentities.id, identityIds))
+    : []
+  const senderOf = new Map<string, MessageSender>(senders.map((x) => [x.identityId, { contactId: x.contactId, name: x.name }]))
+
   const items: MessageDto[] = page.reverse().map((m) => ({
     id: m.id,
     conversationId: m.conversationId,
@@ -236,6 +257,9 @@ export async function listMessages(db: DbExecutor, conversationId: string, query
     status: (m.status as MessageStatus | null) ?? null,
     platformTimestamp: m.platformTimestamp.toISOString(),
     attachments: attachmentsOf.get(m.id) ?? [],
+    editedAt: m.editedAt?.toISOString() ?? null,
+    removal: (m.removal as MessageRemoval | null) ?? null,
+    sender: senderOf.get(senderIdOf(m) ?? '') ?? null,
   }))
   return { items, nextCursor: rows.length > query.limit && oldest ? encodeCursor(oldest.platformTimestamp, oldest.id) : null }
 }

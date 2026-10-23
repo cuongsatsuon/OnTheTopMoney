@@ -57,6 +57,7 @@ export interface QueuePayloads {
   'autoreply.triage': EventEnvelope
   'inbox.fetch_attachment': { attachmentId: string }
   'inbox.fetch_profile': { identityId: string }
+  'inbox.fetch_post_text': { conversationId: string }
 }
 
 export const QUEUES = {
@@ -139,7 +140,7 @@ export const QUEUES = {
   // Việc ghi mục `failed` do handler webhook.route tự làm ở lần thử cuối (không qua `job.failed`); chủ shop thấy
   // mục lỗi ở nhật ký Cài đặt › Webhook và bấm "Xử lý lại". Story 4.2 giữ không critical (chỉ có banner sức khoẻ);
   // dead-letter + thông báo cho `webhook.route` hoãn (deferred-work.md).
-  // Story 4.3: mục `messages` gọi `inbox.ingest` → hỏi job mỗi 0,5 giây để tin hiện trên Hộp thư trong ≤3 giây.
+  // Story 4.3/4.4: tin/bình luận gọi `inbox.ingest` → hỏi job mỗi 0,5 giây để tin hiện trên Hộp thư trong ≤3 giây.
   'webhook.route': {
     policy: 'standard',
     retryLimit: 5,
@@ -200,6 +201,16 @@ export const QUEUES = {
   // Module `inbox` (Story 4.3): lấy tên khách từ Meta cho định danh mới (`GET /{PSID|IGSID}`). Không ghi đè tên đã
   // có. Theo policy `connections.*` của AD-24 (gọi Meta nền): retry 3, concurrency 2.
   'inbox.fetch_profile': {
+    policy: 'standard',
+    retryLimit: 3,
+    retryDelay: 30,
+    retryBackoff: true,
+    concurrency: 2,
+    expireInSeconds: 60,
+  },
+  // Module `inbox` (Story 4.4, AD-16): caption bài được bình luận, lấy một lần khi tạo hội thoại `comment`
+  // (`post_text_snapshot` cho autoreply Epic 5). Gọi Meta nền như `inbox.fetch_profile`: retry 3, concurrency 2.
+  'inbox.fetch_post_text': {
     policy: 'standard',
     retryLimit: 3,
     retryDelay: 30,

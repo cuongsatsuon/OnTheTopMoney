@@ -37,10 +37,12 @@ export const EVENTS = {
     to: ConversationState,
     reasonCode: StateChangeReason,
   }),
+  // Story 4.4: hội thoại đổi phần hiển thị không phải trạng thái (caption bài được bình luận lấy xong).
+  'conversation.updated': event(true, { pageId: Id }),
   'message.received': event(true, { pageId: Id, conversationId: Id }),
   'message.sent': event(true, { pageId: Id, conversationId: Id }),
   'message.failed': event(true, { pageId: Id, conversationId: Id, errorCode: ErrorCode }),
-  // Story 4.3: tin đã có đổi phần hiển thị (đính kèm tải xong/lỗi; sau này sửa nội dung, trạng thái gửi).
+  // Story 4.3: tin đã có đổi phần hiển thị (đính kèm tải xong/lỗi); Story 4.4: bình luận bị sửa/xoá/ẩn/bỏ ẩn.
   'message.updated': event(true, { pageId: Id, conversationId: Id }),
   // Story 4.3: thông tin khách đổi (tên lấy từ Meta). `id` = contactId.
   'contact.updated': event(true, {}),

@@ -1,10 +1,11 @@
-// Hộp thư `/hop-thu` (Story 4.3): danh sách hội thoại, khung chat, panel khách đọc API thật. Tin mới tới → hint
+// Hộp thư `/hop-thu` (Story 4.3, 4.4): danh sách hội thoại (tin DM, bình luận FB/IG, trả lời Threads), khung chat, panel
+// khách đọc API thật. Tin mới tới → hint
 // realtime làm cũ `['conversations', …]` + `['messages', …]` → refetch (≤3 giây); mất kết nối → dải "Đang kết nối
 // lại…" của AppShell, nối lại thì tải bù (lib/realtime.ts).
 // Thao tác của story sau (Tiếp quản, Đánh dấu xong, bật AI — 4.6; gửi tin — 4.7; Gợi ý bằng AI — 4.8; sửa panel
 // khách — 4.9) hiện nhưng khoá, có gợi ý "Sắp có": không giả lập thao tác trên khách thật.
 import type { AttachmentDto, ConversationDto, MessageDto, Platform } from '@ottm/shared'
-import { CheckCheck, FileText, Hand, MessageSquareText, Paperclip, Search, Sparkles, TriangleAlert, UserRound } from 'lucide-react'
+import { CheckCheck, FileText, Hand, MessageSquareText, Newspaper, Paperclip, Search, Sparkles, TriangleAlert, UserRound } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { Skeleton } from '../components/Skeleton'
@@ -16,8 +17,11 @@ import {
   ATTACHMENT_ERROR_TEXT,
   CHANNEL_LABEL,
   REASON_TEXT,
+  REMOVAL_TEXT,
   attachmentUrl,
   bubbleKind,
+  channelLabel,
+  composerNote,
   contactLabel,
   countNeedsAttention,
   durationLabel,
@@ -25,7 +29,9 @@ import {
   listTimeLabel,
   matchesTab,
   messageTimeLabel,
+  postLine,
   previewText,
+  senderLabel,
   useConversation,
   useConversations,
   useMessages,
@@ -200,13 +206,13 @@ export default function Inbox() {
         {selected ? (
           <>
             <ChatHeader conv={selected} name={name} page={page} now={now} onOpenPanel={() => setPanelOpen(true)} />
-            <ChatBody conv={selected} name={name} now={now} />
-            <ComposerSoon />
+            <ChatBody conv={selected} platform={page?.platform} now={now} />
+            <ComposerSoon note={composerNote(page?.platform, selected.channel)} />
           </>
         ) : (
           <div className="flex flex-1 items-center justify-center">
             <EmptyState icon={<MessageSquareText size={22} />} title="Chọn một hội thoại để bắt đầu">
-              Tin nhắn Messenger và Instagram của mọi trang trong phạm vi đang chọn hiện ở cột bên trái.
+              Tin nhắn Messenger, Instagram, bình luận và trả lời Threads của mọi trang trong phạm vi đang chọn hiện ở cột bên trái.
             </EmptyState>
           </div>
         )}
@@ -313,7 +319,7 @@ function ConversationRow({ conv, now, active, onClick, buttonRef }: { conv: Conv
           <span className="ml-auto shrink-0 text-xs text-muted-foreground">{listTimeLabel(conv.lastMessageAt, now)}</span>
         </span>
         <span className="block truncate text-xs text-muted-foreground">
-          {page ? `qua ${page.name} · ${CHANNEL_LABEL[page.platform]}` : 'Đang tải trang…'}
+          {page ? `qua ${page.name} · ${channelLabel(page.platform, conv.channel)}` : 'Đang tải trang…'}
         </span>
         <span className={cn('mt-0.5 block truncate text-[13px]', conv.needsAttention ? 'text-foreground' : 'text-muted-foreground')}>{previewText(conv.preview)}</span>
         <span className="mt-1.5 block">
@@ -356,6 +362,14 @@ function ChatHeader({ conv, name, page, now, onOpenPanel }: { conv: Conversation
           Hồ sơ khách
         </Button>
       </div>
+      {conv.post && (
+        <div className="flex items-center gap-2 border-t border-border px-5 py-2 text-[13px] text-muted-foreground">
+          <Newspaper size={15} className="shrink-0" />
+          <span className="truncate" title={conv.post.text ?? undefined}>
+            {postLine(conv.post, page?.platform)}
+          </span>
+        </div>
+      )}
       {conv.state === 'handoff' && conv.stateReason && (
         <div className="flex items-center gap-2 border-t border-amber-200 bg-warning-soft px-5 py-2 text-[13px] text-amber-900">
           <TriangleAlert size={15} className="shrink-0 text-warning" />
@@ -369,7 +383,7 @@ function ChatHeader({ conv, name, page, now, onOpenPanel }: { conv: Conversation
   )
 }
 
-function ChatBody({ conv, name, now }: { conv: ConversationDto; name: string; now: Date }) {
+function ChatBody({ conv, platform, now }: { conv: ConversationDto; platform: Platform | undefined; now: Date }) {
   const messages = useMessages(conv.id)
   const items = useMemo(() => flattenMessages(messages.data?.pages), [messages.data])
   const endRef = useRef<HTMLDivElement>(null)
@@ -403,7 +417,7 @@ function ChatBody({ conv, name, now }: { conv: ConversationDto; name: string; no
               </div>
             )}
             {items.map((m) => (
-              <Bubble key={m.id} msg={m} contactName={name} now={now} />
+              <Bubble key={m.id} msg={m} senderName={senderLabel(m, conv, platform)} now={now} />
             ))}
           </>
         )}
@@ -434,7 +448,7 @@ function WebhookStalledBanner() {
   )
 }
 
-function Bubble({ msg, contactName, now }: { msg: MessageDto; contactName: string; now: Date }) {
+function Bubble({ msg, senderName, now }: { msg: MessageDto; senderName: string; now: Date }) {
   const time = messageTimeLabel(msg.platformTimestamp, now)
   const kind = bubbleKind(msg.origin)
   if (kind === 'system')
@@ -455,7 +469,7 @@ function Bubble({ msg, contactName, now }: { msg: MessageDto; contactName: strin
           ))}
         </div>
       )}
-      {msg.text && <div className={cn('whitespace-pre-wrap', msg.attachments.length > 0 && 'mt-1.5')}>{msg.text}</div>}
+      {msg.text && <div className={cn('whitespace-pre-wrap', msg.attachments.length > 0 && 'mt-1.5', msg.removal && 'line-through')}>{msg.text}</div>}
       {!msg.text && msg.attachments.length === 0 && <div className="italic opacity-80">Tin nhắn không hiển thị được trong app</div>}
     </>
   )
@@ -463,9 +477,11 @@ function Bubble({ msg, contactName, now }: { msg: MessageDto; contactName: strin
     return (
       <div className="flex justify-start">
         <div className="max-w-[70%]">
-          <div className="rounded-lg rounded-bl-sm bg-slate-100 px-3.5 py-2 text-sm">{content}</div>
+          <div className={cn('rounded-lg rounded-bl-sm bg-slate-100 px-3.5 py-2 text-sm', msg.removal && 'opacity-60')}>{content}</div>
           <div className="mt-1 text-[11px] text-muted-foreground">
-            {contactName} · {time}
+            {senderName} · {time}
+            {msg.editedAt && ' · Đã sửa'}
+            {msg.removal && <span className="font-medium text-foreground"> · {REMOVAL_TEXT[msg.removal]}</span>}
           </div>
         </div>
       </div>
@@ -522,13 +538,13 @@ function Attachment({ att }: { att: AttachmentDto }) {
   )
 }
 
-/** Ô soạn tin (Story 4.7) — tạm thay bằng ghi chú. */
-function ComposerSoon() {
+/** Ô soạn tin (Story 4.7) — tạm thay bằng ghi chú theo kênh. */
+function ComposerSoon({ note }: { note: string }) {
   return (
     <div className="border-t border-border bg-surface px-5 py-3">
       <div className="flex items-center gap-3 rounded-md border border-dashed border-border px-3 py-3 text-[13px] text-muted-foreground">
         <MessageSquareText size={16} className="shrink-0" />
-        <span className="flex-1">Gửi tin và “Gợi ý bằng AI” từ Hộp thư sắp có. Tạm thời trả lời khách trên Messenger/Instagram.</span>
+        <span className="flex-1">{note}</span>
       </div>
     </div>
   )

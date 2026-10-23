@@ -61,3 +61,17 @@ export {
   type DownloadOptions,
   type NormalizedDm,
 } from './webhook-message.ts'
+export {
+  normalizeFeedChange,
+  normalizeInstagramComment,
+  normalizeThreadsReply,
+  parsePlatformTime,
+  type CommentAuthor,
+  type CommentEdit,
+  type CommentPageRef,
+  type CommentRemoval,
+  type CommentSkipReason,
+  type CommentUnhide,
+  type NewComment,
+  type NormalizedComment,
+} from './webhook-comment.ts'

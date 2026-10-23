@@ -1,12 +1,16 @@
 // Story 4.3 — helper thuần của Hộp thư: phạm vi gửi server, tab, nhãn khách, xem trước, lý do hệ thống, thời gian
-// (giờ VN), gộp trang tin, URL đính kèm.
-import { STATE_CHANGE_REASONS, ATTACHMENT_ERRORS, type ConversationPreview } from '@ottm/shared'
+// (giờ VN), gộp trang tin, URL đính kèm. Story 4.4: nhãn kênh bình luận/Threads, dòng bài, nhãn xoá/ẩn, người viết tin,
+// ghi chú ô soạn theo kênh.
+import { STATE_CHANGE_REASONS, ATTACHMENT_ERRORS, MESSAGE_REMOVALS, type ConversationPreview } from '@ottm/shared'
 import { describe, expect, it } from 'vitest'
 import {
   ATTACHMENT_ERROR_TEXT,
   REASON_TEXT,
+  REMOVAL_TEXT,
   attachmentUrl,
   bubbleKind,
+  channelLabel,
+  composerNote,
   contactLabel,
   countNeedsAttention,
   durationLabel,
@@ -14,7 +18,9 @@ import {
   listTimeLabel,
   matchesTab,
   messageTimeLabel,
+  postLine,
   previewText,
+  senderLabel,
   serverScope,
 } from './inbox'
 
@@ -110,5 +116,42 @@ describe('flattenMessages / attachmentUrl', () => {
   })
   it('URL đính kèm dưới /api/v1', () => {
     expect(attachmentUrl('a1')).toBe('/api/v1/attachments/a1')
+  })
+})
+
+describe('Story 4.4: bình luận và trả lời Threads', () => {
+  it('channelLabel: DM theo nền tảng; bình luận FB/IG; Threads', () => {
+    expect(channelLabel('facebook', 'dm')).toBe('Messenger')
+    expect(channelLabel('instagram', 'dm')).toBe('Instagram')
+    expect(channelLabel('facebook', 'comment')).toBe('Bình luận Facebook')
+    expect(channelLabel('instagram', 'comment')).toBe('Bình luận Instagram')
+    expect(channelLabel('threads', 'comment')).toBe('Trả lời Threads')
+  })
+
+  it('postLine: trích caption (gộp khoảng trắng, cắt dài), chưa có caption → câu chung', () => {
+    expect(postLine({ platformPostId: 'P_1', text: 'Áo  thun\ncotton' }, 'facebook')).toBe('Bình luận trên bài: “Áo thun cotton”')
+    expect(postLine({ platformPostId: 'T', text: null }, 'threads')).toBe('Trả lời bài Threads (chưa lấy được nội dung bài)')
+    const long = postLine({ platformPostId: 'P', text: 'a'.repeat(300) }, 'instagram')
+    expect(long.length).toBeLessThan(150)
+    expect(long.endsWith('…”')).toBe(true)
+  })
+
+  it('REMOVAL_TEXT phủ mọi MessageRemoval', () => {
+    for (const r of MESSAGE_REMOVALS) expect(REMOVAL_TEXT[r]).toBeTruthy()
+  })
+
+  it('senderLabel: người khác trong luồng → tên người đó; khách của hội thoại / không có sender → tên khách', () => {
+    const conv = { contact: { id: 'c1', name: 'Nguyễn Thu Hà' } }
+    expect(senderLabel({ sender: { contactId: 'c2', name: 'Trần Văn B' } }, conv, 'facebook')).toBe('Trần Văn B')
+    expect(senderLabel({ sender: { contactId: 'c1', name: 'Nguyễn Thu Hà' } }, conv, 'facebook')).toBe('Nguyễn Thu Hà')
+    expect(senderLabel({ sender: null }, conv, 'facebook')).toBe('Nguyễn Thu Hà')
+    expect(senderLabel({ sender: { contactId: '019a-ffff-abcd', name: null } }, conv, 'threads')).toBe('Khách Threads · ABCD')
+  })
+
+  it('composerNote: bình luận FB/IG có Nhắn riêng; Threads chỉ trả lời công khai; DM như cũ', () => {
+    expect(composerNote('facebook', 'comment')).toContain('Nhắn riêng')
+    expect(composerNote('instagram', 'comment')).toContain('Instagram')
+    expect(composerNote('threads', 'comment')).not.toContain('Nhắn riêng')
+    expect(composerNote('facebook', 'dm')).toContain('Messenger/Instagram')
   })
 })

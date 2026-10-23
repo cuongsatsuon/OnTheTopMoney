@@ -67,3 +67,15 @@
 - source_spec: `spec-4-3-tin-dm-vao-hop-thu.md`
   summary: Dọn file đính kèm trên Cloudinary khi xoá khách/hội thoại (Epic 9) và khi đính kèm tải lên xong nhưng transaction ghi `stored` thất bại.
   evidence: `message_attachments` xoá theo cascade nhưng file `authenticated` ở Cloudinary không bị xoá; `privacy` (Epic 9) cần gọi `PrivateFileStore.delete` theo ref.
+- source_spec: `spec-4-4-binh-luan-vao-hop-thu.md`
+  summary: Sửa/thu hồi tin DM (Messenger `message_edit`, IG `is_deleted`) → `inbox.updateMessageText` / `markMessageRemoved`.
+  evidence: Hàm đã có từ 4.4 nhưng parser 4.1 cho IG `is_deleted` cùng khoá `messages:<mid>` với tin gốc (bị chặn như trùng) và Messenger `message_edit` thành field `messaging`; cần khoá riêng + chuẩn hoá ở `webhook-message.ts`. Hiện vẫn `ignored`.
+- source_spec: `spec-4-4-binh-luan-vao-hop-thu.md`
+  summary: Xác nhận dạng payload webhook Threads `replies` (dạng `values` + `root_post.owner_id`) và bình luận FB thiếu `from` bằng sự kiện thật.
+  evidence: Parser/chuẩn hoá Threads theo tài liệu mẫu [ASSUMPTION AD-4]; bình luận FB không có `from.id` đang bị bỏ qua (`malformed`) — nếu Meta lược `from` thật thì cần định danh dự phòng theo id bình luận.
+- source_spec: `spec-4-4-binh-luan-vao-hop-thu.md`
+  summary: Sửa/xoá/ẩn bình luận tới trước (hoặc chạy song song) lần thêm → `missing` → `ignored`, thay đổi mất; ẩn/bỏ ẩn lệch thứ tự không có mốc để so.
+  evidence: `webhook.route` concurrency 10, FB tự ẩn bình luận theo từ khoá gần như cùng lúc `add`. Cần tombstone theo `(page_id, platform_message_id)` áp khi ingest, hoặc retry `missing` khi mục còn mới (không làm `failed` mục sửa bình luận cũ trước khi kết nối); ẩn/bỏ ẩn cần mốc thời gian (`entry.time`).
+- source_spec: `spec-4-4-binh-luan-vao-hop-thu.md`
+  summary: Trả lời Threads lồng nhiều cấp tới trước tin cha → `thread_key` = id tin cha, tách thành hội thoại riêng.
+  evidence: `ingestComment` tra hội thoại của tin cha ngoài khoá luồng; tin cha chưa ingest thì dùng `parentId`. FB/IG không bị (cha luôn là bình luận gốc). Làm khi xác nhận payload Threads thật (có `root` id của luồng hay không).

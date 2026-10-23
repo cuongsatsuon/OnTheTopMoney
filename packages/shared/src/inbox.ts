@@ -1,6 +1,7 @@
 // Hộp thư (Story 4.3, AD-9, AD-11, AD-18): DTO hội thoại, tin, đính kèm cho REST. Module `inbox` là chủ duy nhất
 // của khách/hội thoại/tin; web chỉ đọc qua các schema này và refetch khi có hint realtime (AD-3).
-// Story 4.3 chỉ có DM (Messenger, Instagram Direct); bình luận/Threads mở rộng ở Story 4.4.
+// Story 4.3: DM (Messenger, Instagram Direct). Story 4.4: bình luận Facebook/Instagram và trả lời Threads (`channel=comment`,
+// bài được bình luận, tin bị sửa/xoá/ẩn, người trả lời khác trong cùng luồng).
 import { z } from 'zod'
 import {
   ContactStage,
@@ -55,6 +56,21 @@ export const AttachmentDto = z.object({
 })
 export type AttachmentDto = z.infer<typeof AttachmentDto>
 
+/**
+ * Tin bị gỡ trên nền tảng (Story 4.4): `deleted` (khách xoá bình luận) · `hidden` (trang ẩn bình luận). Nội dung vẫn
+ * giữ để chủ shop biết khách đã viết gì; FE hiện nhãn.
+ */
+export const MESSAGE_REMOVALS = ['deleted', 'hidden'] as const
+export const MessageRemoval = z.enum(MESSAGE_REMOVALS)
+export type MessageRemoval = z.infer<typeof MessageRemoval>
+
+/** Người viết tin inbound (khách). Trong luồng bình luận, người khác trả lời là một khách khác với khách của hội thoại. */
+export const MessageSender = z.object({
+  contactId: Id,
+  name: z.string().nullable(),
+})
+export type MessageSender = z.infer<typeof MessageSender>
+
 export const MessageDto = z.object({
   id: Id,
   conversationId: Id,
@@ -70,6 +86,12 @@ export const MessageDto = z.object({
   /** Thời điểm theo nền tảng — thứ tự hiển thị (AD-11). Tin hệ thống: lúc chuyển trạng thái. */
   platformTimestamp: IsoDateTime,
   attachments: z.array(AttachmentDto),
+  /** Lần sửa gần nhất trên nền tảng (Story 4.4); `null` khi chưa sửa. */
+  editedAt: IsoDateTime.nullable(),
+  /** Tin đã bị xoá/ẩn trên nền tảng; `null` khi còn hiện. */
+  removal: MessageRemoval.nullable(),
+  /** Khách viết tin (chỉ tin inbound có định danh); `null` với tin outbound/hệ thống. */
+  sender: MessageSender.nullable(),
 })
 export type MessageDto = z.infer<typeof MessageDto>
 
@@ -92,6 +114,14 @@ export const ConversationPreview = z.object({
 })
 export type ConversationPreview = z.infer<typeof ConversationPreview>
 
+/** Bài được bình luận (hội thoại `comment`). `text` = caption lấy một lần lúc ingest; `null` khi chưa/không lấy được. */
+export const ConversationPost = z.object({
+  /** Id bài dạng chuẩn AD-6 (FB `{pageId}_{postId}`, IG/Threads media id). */
+  platformPostId: z.string().min(1),
+  text: z.string().nullable(),
+})
+export type ConversationPost = z.infer<typeof ConversationPost>
+
 export const ConversationDto = z.object({
   id: Id,
   pageId: Id,
@@ -108,6 +138,8 @@ export const ConversationDto = z.object({
   needsAttention: z.boolean(),
   contact: ConversationContact,
   preview: ConversationPreview.nullable(),
+  /** Hội thoại `comment`: bài được bình luận; `null` với DM. */
+  post: ConversationPost.nullable(),
 })
 export type ConversationDto = z.infer<typeof ConversationDto>
 

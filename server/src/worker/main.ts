@@ -18,7 +18,7 @@ import {
   runTokenCheck,
   subscribePage,
 } from '../modules/connections/index.ts'
-import { handleFetchAttachmentJob, handleFetchProfileJob } from '../modules/inbox/index.ts'
+import { handleFetchAttachmentJob, handleFetchPostTextJob, handleFetchProfileJob } from '../modules/inbox/index.ts'
 import { handleEvent } from '../modules/notifications/index.ts'
 import { handleProfilesEvent } from '../modules/profiles/index.ts'
 import { handleRouteJob, markEventFailed, routeWebhookEvent, runHealthCheck } from '../modules/webhooks/index.ts'
@@ -37,7 +37,7 @@ const cipher =
     ? createSecretCipher({ keys: config.APP_ENCRYPTION_KEYS, activeKeyId: config.APP_ENCRYPTION_ACTIVE_KEY })
     : null
 // Client Threads (fake khi `META_FAKE=1`; undefined khi chưa cấu hình app Threads) để làm mới token Threads;
-// client Graph để đăng ký webhook trang (`connections.subscribe_page`, Story 4.2).
+// client Graph để đăng ký webhook trang (`connections.subscribe_page`, Story 4.2); cả hai đọc caption bài (Story 4.4).
 const { graph, threads } = createMetaClients({ config, db: dbHandle.db, log: logger.child({ component: 'meta' }) })
 const jobs = createJobSender(boss)
 // Kho file riêng tư (AD-14) cho đính kèm của khách (Story 4.3); thiếu `CLOUDINARY_URL` → đính kèm `failed`
@@ -104,7 +104,7 @@ try {
         })
         logger.info({ refreshed, expiring }, 'connections: kiểm hạn token xong')
       },
-      // Module `webhooks` (Story 4.1, AD-4): chuẩn hoá + đặt `status` cho một mục; Story 4.3: tin DM → `inbox.ingest`. Logic nhánh catch (lần thử
+      // Module `webhooks` (Story 4.1, AD-4): chuẩn hoá + đặt `status` cho một mục; Story 4.3/4.4: tin DM, bình luận → `inbox`. Logic nhánh catch (lần thử
       // cuối → ghi `failed`) nằm trong `handleRouteJob` (đã unit-test). startWorkers chạy includeMetadata nên
       // job có retryCount/retryLimit lúc chạy.
       'webhook.route': (job) =>
@@ -147,6 +147,14 @@ try {
           job as JobWithMetadata<unknown>,
         )
         logger.debug({ jobId: job.id, result }, 'inbox.fetch_profile')
+      },
+      // Story 4.4: caption bài được bình luận, lấy một lần (không ghi đè).
+      'inbox.fetch_post_text': async (job) => {
+        const result = await handleFetchPostTextJob(
+          { db: dbHandle.db, events, cipher, graph, threads, log: logger.child({ component: 'fetch_post_text' }) },
+          job as JobWithMetadata<unknown>,
+        )
+        logger.debug({ jobId: job.id, result }, 'inbox.fetch_post_text')
       },
       // Story 4.2: sức khoẻ webhook mỗi 5 phút; phát `webhook.stalled|recovered` khi đổi trạng thái.
       'webhooks.health': async () => {

@@ -187,7 +187,8 @@ describe('routeWebhookEvent (job webhook.route)', () => {
     expect((await statusOf(id)).status).toBe('ignored')
   })
 
-  it('trang có + loại nhận diện được (chưa ingest — Story 4.4) → routed, gắn page_id nội bộ', async () => {
+  // Story 4.4: không còn `routed` giả — bình luận thật được phủ ở inbox-comments.test.ts; mục rỗng không ingest được.
+  it('trang có + mục bình luận không chuẩn hoá được → ignored, vẫn gắn page_id nội bộ', async () => {
     const { page } = await upsertFromPlatform(handle.db, {
       platform: 'facebook',
       platformAccountId: 'PAGE_R',
@@ -196,22 +197,22 @@ describe('routeWebhookEvent (job webhook.route)', () => {
       avatarUrl: null,
     })
     const id = await insertEvent({ platformPageId: 'PAGE_R', field: 'comments' })
-    expect(await routeWebhookEvent(routeDeps(), { eventId: id })).toBe('routed')
-    expect(await statusOf(id)).toMatchObject({ status: 'routed', page_id: page.id })
+    expect(await routeWebhookEvent(routeDeps(), { eventId: id })).toBe('ignored')
+    expect(await statusOf(id)).toMatchObject({ status: 'ignored', page_id: page.id })
   })
 
   it('trùng platform_account_id khác nền tảng → chọn đúng trang theo sản phẩm (không route chéo)', async () => {
     const fb = await upsertFromPlatform(handle.db, { platform: 'facebook', platformAccountId: 'SAME_ID', name: 'FB', handle: null, avatarUrl: null })
     const th = await upsertFromPlatform(handle.db, { platform: 'threads', platformAccountId: 'SAME_ID', name: 'TH', handle: null, avatarUrl: null })
     const metaId = await insertEvent({ platformPageId: 'SAME_ID', field: 'comments' })
-    expect(await routeWebhookEvent(routeDeps(), { eventId: metaId })).toBe('routed')
+    expect(await routeWebhookEvent(routeDeps(), { eventId: metaId })).toBe('ignored')
     expect((await statusOf(metaId)).page_id).toBe(fb.page.id)
     // Mục Threads cùng id → khớp trang Threads, không phải trang Facebook.
     const [thRow] = await handle.db
       .insert(webhookEventsTable)
       .values({ product: 'threads', platformPageId: 'SAME_ID', field: 'replies', dedupeKey: `k_${Math.random().toString(36).slice(2)}`, payload: {} })
       .returning({ id: webhookEventsTable.id })
-    expect(await routeWebhookEvent(routeDeps(), { eventId: thRow!.id })).toBe('routed')
+    expect(await routeWebhookEvent(routeDeps(), { eventId: thRow!.id })).toBe('ignored')
     expect((await statusOf(thRow!.id)).page_id).toBe(th.page.id)
   })
 

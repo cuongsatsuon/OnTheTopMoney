@@ -1,14 +1,19 @@
 // Hộp thư phía web (Story 4.3, AD-3, AD-9, AD-18): đọc hội thoại / tin / đính kèm qua REST; realtime chỉ làm cũ cache
 // rồi refetch (`message.*`, `contact.*`, `conversation.*` → khoá gốc `['conversations', …]` và `['messages', …]`,
 // xem `lib/realtime.ts`). Không có nghiệp vụ ở client. Helper thuần (nhãn, thời gian, lý do, tab) tách để test.
+// Story 4.4: hội thoại bình luận (FB/IG) và trả lời Threads — nhãn kênh, dòng bài, nhãn sửa/xoá/ẩn, người viết tin.
 import {
   ListConversationsResponse,
   ConversationDto,
   ListMessagesResponse,
   formatScope,
   type AttachmentError,
+  type ConversationChannel,
+  type ConversationPost,
   type ConversationPreview,
+  type MessageDto,
   type MessageOrigin,
+  type MessageRemoval,
   type Platform,
   type Scope,
   type StateChangeReason,
@@ -103,6 +108,53 @@ export function matchesTab(conv: Pick<ConversationDto, 'state' | 'needsAttention
 }
 
 export const CHANNEL_LABEL: Record<Platform, string> = { facebook: 'Messenger', instagram: 'Instagram', threads: 'Threads' }
+
+/** Nhãn kênh của hội thoại: DM theo nền tảng; bình luận → "Bình luận Facebook/Instagram", Threads → "Trả lời Threads". */
+export function channelLabel(platform: Platform, channel: ConversationChannel): string {
+  if (channel === 'dm') return CHANNEL_LABEL[platform]
+  return platform === 'threads' ? 'Trả lời Threads' : `Bình luận ${platform === 'facebook' ? 'Facebook' : 'Instagram'}`
+}
+
+/** Độ dài tối đa trích caption bài ở đầu khung chat. */
+const POST_EXCERPT_MAX = 120
+
+/** Dòng bài được bình luận ở đầu khung chat; caption chưa có → câu chung. */
+export function postLine(post: ConversationPost, platform: Platform | undefined): string {
+  const prefix = platform === 'threads' ? 'Trả lời bài Threads' : 'Bình luận trên bài'
+  const text = post.text?.replace(/\s+/g, ' ').trim()
+  if (!text) return `${prefix} (chưa lấy được nội dung bài)`
+  return `${prefix}: “${text.length > POST_EXCERPT_MAX ? `${text.slice(0, POST_EXCERPT_MAX - 1).trimEnd()}…` : text}”`
+}
+
+/** Nhãn tin bị gỡ trên nền tảng (nội dung vẫn hiện, mờ). */
+export const REMOVAL_TEXT: Record<MessageRemoval, string> = {
+  deleted: 'Khách đã xoá',
+  hidden: 'Đã ẩn',
+}
+
+/**
+ * Tên người viết tin của khách: luồng bình luận có thể có người khác trả lời (khách khác của hội thoại) → tên của
+ * người đó; còn lại là khách của hội thoại.
+ */
+export function senderLabel(
+  msg: Pick<MessageDto, 'sender'>,
+  conv: { contact: { id: string; name: string | null } },
+  platform: Platform | undefined,
+): string {
+  const sender = msg.sender && msg.sender.contactId !== conv.contact.id ? { id: msg.sender.contactId, name: msg.sender.name } : conv.contact
+  return contactLabel(sender, platform)
+}
+
+/** Ghi chú ở chỗ ô soạn tin (gửi tin là Story 4.7). */
+export function composerNote(platform: Platform | undefined, channel: ConversationChannel): string {
+  if (channel === 'comment') {
+    const where = platform === 'threads' ? 'Threads' : platform === 'instagram' ? 'Instagram' : 'Facebook'
+    return platform === 'threads'
+      ? `Trả lời công khai từ Hộp thư sắp có. Tạm thời trả lời khách trên ${where}.`
+      : `Trả lời công khai và Nhắn riêng từ Hộp thư sắp có. Tạm thời trả lời khách trên ${where}.`
+  }
+  return 'Gửi tin và “Gợi ý bằng AI” từ Hộp thư sắp có. Tạm thời trả lời khách trên Messenger/Instagram.'
+}
 
 /** Tên hiển thị của khách; chưa lấy được tên từ Meta → "Khách Messenger · 3F2A" (4 ký tự cuối id, để phân biệt). */
 export function contactLabel(contact: { id: string; name: string | null }, platform: Platform | undefined): string {

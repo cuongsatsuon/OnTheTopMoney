@@ -3,9 +3,29 @@
 // Gọi: `connections` (token trang), `ai` (Story 4.8), module nền `pages`; được import `adapters/meta`, `adapters/media`.
 // Được gọi bởi: `webhooks` (`ingest`), `autoreply` (bước triage), entrypoint (REST, worker).
 // Story 4.3: ingest DM (Messenger, IG Direct), giải `triage`, đính kèm vào kho riêng tư, tên khách từ Meta, đọc REST.
+// Story 4.4: ingest bình luận FB/IG + trả lời Threads, sửa/xoá/ẩn tin, caption bài được bình luận.
 export const MODULE = 'inbox'
 
-export { ingestDm, threadLockKey, type IngestDeps, type IngestDmInput, type IngestResult } from './ingest.ts'
+export {
+  ingestComment,
+  ingestDm,
+  threadLockKey,
+  type IngestCommentInput,
+  type IngestDeps,
+  type IngestDmInput,
+  type IngestResult,
+} from './ingest.ts'
+export { markMessageRemoved, markMessageUnhidden, updateMessageText, type EditDeps, type EditResult } from './edits.ts'
+export {
+  POST_TEXT_MAX,
+  PostTextRetryableError,
+  fetchPostText,
+  handleFetchPostTextJob,
+  parseFetchPostTextJobData,
+  postTextFromGraph,
+  type FetchPostTextDeps,
+  type FetchPostTextOutcome,
+} from './post-text.ts'
 export {
   applyTriageDecision,
   getTriageState,

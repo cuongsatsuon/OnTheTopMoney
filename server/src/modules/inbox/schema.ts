@@ -2,7 +2,8 @@
 // `messages`, `message_attachments`. Chỉ `inbox` ghi; module khác đọc qua `index.ts`.
 // - Định danh theo trang: `contact_identities(page_id, platform_user_id)` thuộc đúng MỘT contact; định danh mới tạo
 //   contact mới, không tự gộp (gộp bằng tay ở Story 4.9).
-// - Hội thoại duy nhất theo `(page_id, channel, thread_key)`; DM: `thread_key` = PSID/IGSID.
+// - Hội thoại duy nhất theo `(page_id, channel, thread_key)`; DM: `thread_key` = PSID/IGSID; bình luận (Story 4.4):
+//   id bình luận gốc (Threads: id bài trả lời gốc), kèm `platform_post_id` chuẩn của bài và caption lấy một lần.
 // - Tin: UNIQUE(page_id, platform_message_id) khi id khác null; hiển thị theo `platform_timestamp` rồi `id`.
 // Khoá ngoại tới `pages` `on delete cascade`: trang chỉ bị soft-delete (`removed_at`), xoá cứng chỉ xảy ra ở test/xoá
 // dữ liệu (Epic 9).
@@ -15,6 +16,7 @@ import {
   CONVERSATION_STATES,
   MESSAGE_DIRECTIONS,
   MESSAGE_ORIGINS,
+  MESSAGE_REMOVALS,
   MESSAGE_STATUSES,
   STATE_CHANGE_REASONS,
 } from '@ottm/shared'
@@ -87,6 +89,12 @@ export const conversations = pgTable(
     lastCustomerMessageAt: ts('last_customer_message_at'),
     /** Thời điểm tin mới nhất (không tính tin `system`) — sắp xếp danh sách. Chỉ tăng. */
     lastMessageAt: ts('last_message_at').notNull(),
+    /** Hội thoại `comment`: id bài được bình luận, dạng chuẩn AD-6 (`adapters/meta`). `null` với DM. */
+    platformPostId: text('platform_post_id'),
+    /** Caption bài lấy một lần qua job `inbox.fetch_post_text` — prompt autoreply bình luận đọc từ đây (Epic 5). */
+    postTextSnapshot: text('post_text_snapshot'),
+    /** Lần job caption chạy xong (lấy được hay bỏ qua) — `null` khi chưa thử. */
+    postTextFetchedAt: ts('post_text_fetched_at'),
     createdAt: ts('created_at').notNull().defaultNow(),
     updatedAt: ts('updated_at').notNull().defaultNow(),
   },
@@ -95,6 +103,7 @@ export const conversations = pgTable(
     check('conversations_channel_check', sql`${t.channel} in (${list(CONVERSATION_CHANNELS)})`),
     check('conversations_state_check', sql`${t.state} in (${list(CONVERSATION_STATES)})`),
     check('conversations_state_reason_check', sql`${t.stateReason} in (${list(STATE_CHANGE_REASONS)})`),
+    check('conversations_post_check', sql`(${t.channel} = 'comment') = (${t.platformPostId} is not null)`),
     // Danh sách Hộp thư: mới nhất trước, phân trang theo (last_message_at, id).
     index('conversations_last_message_idx').on(t.lastMessageAt, t.id),
     index('conversations_identity_idx').on(t.contactIdentityId),
@@ -122,6 +131,16 @@ export const messages = pgTable(
     text: text('text'),
     /** Tin `system`: lý do chuyển trạng thái. */
     reasonCode: text('reason_code'),
+    /**
+     * Định danh của khách viết tin inbound (Story 4.4). Trong luồng bình luận, người khác trả lời là định danh khác với
+     * định danh của hội thoại. `null` với tin outbound/hệ thống.
+     */
+    senderIdentityId: uuid('sender_identity_id').references(() => contactIdentities.id, { onDelete: 'set null' }),
+    /** Lần sửa gần nhất trên nền tảng (bình luận FB `edited`). */
+    editedAt: ts('edited_at'),
+    /** Bị gỡ trên nền tảng: `deleted` (khách xoá) · `hidden` (trang ẩn). Nội dung vẫn giữ. */
+    removal: text('removal'),
+    removedAt: ts('removed_at'),
     platformTimestamp: ts('platform_timestamp').notNull(),
     createdAt: ts('created_at').notNull().defaultNow(),
   },
@@ -134,6 +153,8 @@ export const messages = pgTable(
     check('messages_origin_check', sql`${t.origin} in (${list(MESSAGE_ORIGINS)})`),
     check('messages_status_check', sql`${t.status} in (${list(MESSAGE_STATUSES)})`),
     check('messages_reason_code_check', sql`${t.reasonCode} in (${list(STATE_CHANGE_REASONS)})`),
+    check('messages_removal_check', sql`${t.removal} in (${list(MESSAGE_REMOVALS)})`),
+    check('messages_removed_at_check', sql`(${t.removal} is null) = (${t.removedAt} is null)`),
     // Khung chat: trang mới nhất trước theo (platform_timestamp, id); xem trước danh sách cũng dùng index này.
     index('messages_conversation_ts_idx').on(t.conversationId, t.platformTimestamp, t.id),
   ],

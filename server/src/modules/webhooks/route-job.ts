@@ -4,16 +4,25 @@
 // - trang không có trong DB / đã gỡ → `ignored` (lưu, không route, không tạo gì trong `inbox`);
 // - Story 4.3: mục `messages` của Fanpage/IG → chuẩn hoá qua `adapters/meta` → `inbox.ingest` → `routed`. Echo
 //   (Story 4.5), tin thu hồi, mục thiếu id, tin do chính trang gửi → `ignored`;
-// - loại sẽ ingest ở story sau (comment/feed/replies — 4.4; echo/postback) → tạm `routed` như 4.1, chưa gọi inbox;
-// - loại khác (reaction, delivery, read, không rõ) → `ignored`.
-// Idempotent theo khoá mục: ingest chống trùng theo `(page_id, mid)`, trạng thái tính lại xác định.
+// - Story 4.4: FB `feed`, IG `comments`, Threads `replies` → chuẩn hoá bình luận → bình luận mới `inbox.ingestComment`;
+//   sửa `inbox.updateMessageText`; xoá/ẩn `inbox.markMessageRemoved`; bỏ ẩn `inbox.markMessageUnhidden`. Không tìm thấy
+//   tin để sửa/xoá, bình luận của chính trang, mục không phải bình luận → `ignored`;
+// - loại khác (echo — Story 4.5, postback, reaction, delivery, read, mentions, không rõ) → `ignored`.
+// Idempotent theo khoá mục: ingest chống trùng theo `(page_id, platform_message_id)`, sửa/xoá lặp lại không đổi gì.
 import type { Platform, WebhookProduct } from '@ottm/shared'
 import { eq } from 'drizzle-orm'
-import { normalizeMessagingItem } from '../../adapters/meta/index.ts'
+import {
+  normalizeFeedChange,
+  normalizeInstagramComment,
+  normalizeMessagingItem,
+  normalizeThreadsReply,
+  type CommentPageRef,
+  type NormalizedComment,
+} from '../../adapters/meta/index.ts'
 import type { Db } from '../../platform/db/index.ts'
 import type { EventPublisher } from '../../platform/events/index.ts'
 import type { JobSender } from '../../platform/jobs/index.ts'
-import { ingestDm } from '../inbox/index.ts'
+import { ingestComment, ingestDm, markMessageRemoved, markMessageUnhidden, updateMessageText } from '../inbox/index.ts'
 import { findPageByPlatformAccountId } from '../pages/index.ts'
 import { webhookEvents } from './schema.ts'
 
@@ -30,18 +39,12 @@ export function parseRouteJobData(data: unknown): RouteJobData {
 /** Mã lỗi chẩn đoán ghi vào `webhook_events.error_code` khi job hết lượt retry. */
 export const WEBHOOK_ROUTE_FAILED = 'WEBHOOK_ROUTE_FAILED'
 
-/**
- * Loại mục sẽ được ingest vào Hộp thư ở story sau (nay tạm `routed`, KHÔNG gọi inbox). `messages` đi nhánh ingest
- * riêng (Story 4.3). Loại ngoài danh sách (reaction, delivery, read, loại không rõ) chỉ lưu (`ignored`).
- */
-const ROUTABLE_FIELDS: ReadonlySet<string> = new Set([
-  'message_echoes',
-  'messaging_postbacks',
-  'comments',
-  'feed',
-  'mentions',
-  'replies',
-])
+/** Bộ chuẩn hoá bình luận theo field (Story 4.4). Field ngoài bảng → `ignored`. */
+type CommentNormalizer = (change: unknown, page: CommentPageRef, fallbackTime: Date) => NormalizedComment
+const COMMENT_FIELDS: Readonly<Record<'meta' | 'threads', Readonly<Record<string, CommentNormalizer>>>> = {
+  meta: { feed: normalizeFeedChange, comments: normalizeInstagramComment },
+  threads: { replies: normalizeThreadsReply },
+}
 
 export type RouteResult = 'missing' | 'ignored_test' | 'ignored_no_page' | 'ignored' | 'routed'
 
@@ -94,7 +97,31 @@ export async function routeWebhookEvent(deps: RouteDeps, data: RouteJobData): Pr
     return status
   }
 
-  const status: RouteResult = ROUTABLE_FIELDS.has(event.field) ? 'routed' : 'ignored'
+  // Story 4.4: bình luận FB/IG, trả lời Threads. Thời điểm dự phòng = lúc nhận webhook (ổn định qua các lần retry).
+  const normalize = COMMENT_FIELDS[event.product as WebhookProduct][event.field]
+  let status: RouteResult = 'ignored'
+  if (normalize && event.platformPageId) {
+    const comment = normalize(event.payload, { platformAccountId: event.platformPageId, handle: page.handle }, event.receivedAt)
+    const inbox = { db: deps.db, events: deps.events, jobs: deps.jobs }
+    const ref = (commentId: string) => ({ pageId: page.id, platformMessageId: commentId })
+    switch (comment.kind) {
+      case 'comment':
+        await ingestComment(inbox, { pageId: page.id, comment })
+        status = 'routed'
+        break
+      case 'edit':
+        if ((await updateMessageText(inbox, { ...ref(comment.commentId), text: comment.text, editedAt: comment.timestamp })) !== 'missing') status = 'routed'
+        break
+      case 'remove':
+        if ((await markMessageRemoved(inbox, { ...ref(comment.commentId), removal: comment.removal, at: comment.timestamp })) !== 'missing') status = 'routed'
+        break
+      case 'unhide':
+        if ((await markMessageUnhidden(inbox, ref(comment.commentId))) !== 'missing') status = 'routed'
+        break
+      case 'skip':
+        break
+    }
+  }
   await setStatus(deps.db, event.id, status, page.id)
   return status
 }
