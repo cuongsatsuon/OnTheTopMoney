@@ -1,5 +1,5 @@
-import type { AutoreplyChannel } from '@ottm/shared'
-import { Bot, BookOpen, FileText, MessageCircleQuestion, Plus, RotateCcw, Send, Sparkles, Trash, TriangleAlert, Upload, X } from 'lucide-react'
+import type { AutoreplyChannel, KnowledgeListResponse } from '@ottm/shared'
+import { Bot, BookOpen, FileText, Loader2, MessageCircleQuestion, Plus, RotateCcw, Send, Sparkles, Trash, TriangleAlert, Upload, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { AiLockHint } from '../components/AiLockHint'
@@ -51,6 +51,20 @@ import {
   type KnowledgeItem,
 } from '../lib/autoreply'
 import { usePages } from '../lib/connections'
+import {
+  KNOWLEDGE_FILE_ACCEPT,
+  KNOWLEDGE_FILE_HINT,
+  KNOWLEDGE_TOO_LARGE_MESSAGE,
+  knowledgeErrorMessage,
+  knowledgeFileIssue,
+  knowledgeItemLine,
+  knowledgeUsage,
+  useAddKnowledgeFaq,
+  useDeleteKnowledgeItem,
+  useKnowledge,
+  useUploadKnowledgeFile,
+  type KnowledgeOwner,
+} from '../lib/knowledge'
 import { errorMessageOf } from '../lib/error-messages'
 import { useGroups } from '../lib/groups'
 import { isRealOwner } from '../lib/profiles'
@@ -299,6 +313,23 @@ function AutoReplyFormInner({ target }: { target: { kind: 'group' | 'page'; id: 
   const dirty = own !== savedOwn || (!inheriting && JSON.stringify(draft) !== JSON.stringify(savedConfig))
   const saving = saveM.isPending || useOwnM.isPending
 
+  // Kho kiến thức (Story 5.2): chủ thật đọc/ghi qua API, áp ngay (không chờ Lưu). Trang đang theo nhóm — hoặc vừa bật
+  // "Dùng cấu hình AI riêng" mà chưa Lưu — xem kho của nhóm, chỉ đọc; Lưu cấu hình riêng sẽ sao chép kho nhóm sang trang.
+  const kbWritable = real && (target.kind === 'group' || !group || (own && savedOwn))
+  const kbOwnerReal: KnowledgeOwner | null = !real
+    ? null
+    : kbWritable
+      ? { ownerType: target.kind, ownerId: target.id }
+      : realGroupId
+        ? { ownerType: 'group', ownerId: realGroupId }
+        : null
+  const kbOwner: KnowledgeOwner = kbOwnerReal ?? { ownerType: 'group', ownerId: '' }
+  const knowledgeQuery = useKnowledge(kbOwner, { enabled: !!kbOwnerReal })
+  const addFaqM = useAddKnowledgeFaq(kbOwner)
+  const uploadM = useUploadKnowledgeFile(kbOwner)
+  const deleteM = useDeleteKnowledgeItem(kbOwner)
+  const kbOver = knowledgeQuery.data ? knowledgeUsage(knowledgeQuery.data).over : false
+
   // Rời trang khi chưa lưu thì hỏi lại.
   useEffect(() => {
     if (!dirty) return
@@ -364,6 +395,11 @@ function AutoReplyFormInner({ target }: { target: { kind: 'group' | 'page'; id: 
         setErrors(issues)
         return
       }
+      // Kho kiến thức vượt giới hạn → server sẽ từ chối lưu ở trạng thái bật (KNOWLEDGE_TOO_LARGE).
+      if (real && kbOver) {
+        setErrors({ knowledge: KNOWLEDGE_TOO_LARGE_MESSAGE })
+        return
+      }
     }
     set({ enabled: v })
   }
@@ -393,7 +429,7 @@ function AutoReplyFormInner({ target }: { target: { kind: 'group' | 'page'; id: 
     } catch (err) {
       const fe = autoReplyFieldErrorsOf(err)
       setErrors(fe)
-      notify(Object.keys(fe).length ? 'Kiểm tra lại các ô được đánh dấu.' : errorMessageOf(err))
+      notify(fe.knowledge ? 'Cần rút gọn kho kiến thức trước khi bật AI.' : Object.keys(fe).length ? 'Kiểm tra lại các ô được đánh dấu.' : errorMessageOf(err))
     }
   }
 
@@ -403,6 +439,11 @@ function AutoReplyFormInner({ target }: { target: { kind: 'group' | 'page'; id: 
       if (Object.keys(issues).length) {
         setErrors(issues)
         notify(issues.script ? 'Viết kịch bản cho AI trước khi lưu.' : 'Kiểm tra lại các ô được đánh dấu.')
+        return
+      }
+      if (real && draft.enabled && kbOver) {
+        setErrors({ knowledge: KNOWLEDGE_TOO_LARGE_MESSAGE })
+        notify('Cần rút gọn kho kiến thức trước khi bật AI.')
         return
       }
     }
@@ -734,15 +775,34 @@ Khi khách muốn mua, xin số điện thoại và địa chỉ nhận hàng.`
                 title="Kho kiến thức"
                 subtitle="Câu hỏi thường gặp, bảng giá, chính sách"
                 action={
-                  <Button size="sm" icon={<Plus size={14} />} onClick={() => setAddOpen(true)} disabled={real}>
+                  <Button size="sm" icon={<Plus size={14} />} onClick={() => setAddOpen(true)} disabled={real && !kbWritable}>
                     Thêm
                   </Button>
                 }
               />
               {real ? (
-                <EmptyState icon={<BookOpen size={20} />} title="Kho kiến thức chưa mở">
-                  Tải bảng giá và thêm câu hỏi thường gặp sẽ có ở bản cập nhật tới. Hiện AI dựa vào kịch bản ở trên.
-                </EmptyState>
+                <RealKnowledge
+                  data={knowledgeQuery.data}
+                  failed={knowledgeQuery.isError && !knowledgeQuery.data}
+                  onRetry={() => void knowledgeQuery.refetch()}
+                  writable={kbWritable}
+                  note={
+                    !kbWritable && own && target.kind === 'page'
+                      ? `Đang hiện kho kiến thức của ${group?.name ?? 'nhóm'}. Lưu cấu hình riêng để sao chép sang trang này rồi sửa.`
+                      : null
+                  }
+                  error={errors.knowledge}
+                  deletingId={deleteM.isPending ? deleteM.variables : undefined}
+                  onDelete={(item) =>
+                    deleteM.mutate(item.id, {
+                      onSuccess: () => {
+                        clearError('knowledge')
+                        notify(`Đã xoá “${item.title}” khỏi kho kiến thức`)
+                      },
+                      onError: (err) => notify(knowledgeErrorMessage(err)),
+                    })
+                  }
+                />
               ) : shown.knowledge.length === 0 ? (
                 <EmptyState icon={<BookOpen size={20} />} title="Kho kiến thức đang trống">
                   Thêm câu hỏi thường gặp hoặc tải bảng giá để AI trả lời đúng hơn.
@@ -861,9 +921,30 @@ Khi khách muốn mua, xin số điện thoại và địa chỉ nhận hàng.`
       <AddKnowledgeModal
         open={addOpen}
         onClose={() => setAddOpen(false)}
-        onAdd={(item) => {
+        onSubmit={async (input) => {
+          if (real) {
+            try {
+              const item =
+                input.kind === 'faq' ? await addFaqM.mutateAsync({ question: input.question, answer: input.answer }) : await uploadM.mutateAsync(input.file)
+              notify(item.kind === 'file' ? `Đã tải “${item.title}” lên — AI đang đọc nội dung` : `Đã thêm “${item.title}” vào kho kiến thức`)
+              return null
+            } catch (err) {
+              return knowledgeErrorMessage(err)
+            }
+          }
+          // --- Kho mẫu (như cũ) ---
+          const item: KnowledgeItem =
+            input.kind === 'faq'
+              ? { id: `k-${Date.now()}`, kind: 'faq', title: input.question, detail: input.answer }
+              : {
+                  id: `k-${Date.now()}`,
+                  kind: 'file',
+                  title: input.file.name,
+                  detail: `${input.file.name.split('.').pop()?.toUpperCase() ?? 'FILE'} · ${input.file.size > 1024 * 1024 ? `${(input.file.size / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(input.file.size / 1024))} KB`} · AI đang đọc nội dung`,
+                }
           set({ knowledge: [...draft.knowledge, item] })
           notify(`Đã thêm “${item.title}” vào kho kiến thức`)
+          return null
         }}
       />
 
@@ -928,34 +1009,142 @@ function GroupMembers({ groupId, store }: { groupId: string; store: StoreState }
   )
 }
 
+/* ---------- Kho kiến thức của chủ thật (Story 5.2) ---------- */
+
+const KB_TONE: Record<ReturnType<typeof knowledgeItemLine>['tone'], string> = {
+  normal: 'text-muted-foreground',
+  busy: 'text-ai',
+  danger: 'text-danger',
+  warning: 'text-amber-800',
+}
+
+/**
+ * Danh sách kho (cũ → mới), mức dùng token và lỗi "cần rút gọn". Dòng đang đọc nội dung tự đổi khi server phát
+ * `knowledge_item.processed`. `writable=false` → chỉ xem (trang đang theo nhóm).
+ */
+function RealKnowledge({
+  data,
+  failed,
+  onRetry,
+  writable,
+  note,
+  error,
+  deletingId,
+  onDelete,
+}: {
+  data: KnowledgeListResponse | undefined
+  failed: boolean
+  onRetry: () => void
+  writable: boolean
+  note: string | null
+  error: string | undefined
+  deletingId: string | undefined
+  onDelete: (item: KnowledgeListResponse['items'][number]) => void
+}) {
+  if (failed)
+    return (
+      <EmptyState icon={<BookOpen size={20} />} title="Chưa tải được kho kiến thức" action={<Button onClick={onRetry}>Thử lại</Button>} />
+    )
+  if (!data)
+    return (
+      <div className="space-y-2 p-4" aria-busy="true" role="status">
+        <span className="sr-only">Đang tải kho kiến thức…</span>
+        <Skeleton className="h-10 rounded-md" />
+        <Skeleton className="h-10 rounded-md" />
+      </div>
+    )
+  const usage = knowledgeUsage(data)
+  return (
+    <div>
+      {note && <p className="border-b border-border px-4 py-2 text-[13px] text-muted-foreground">{note}</p>}
+      {data.items.length === 0 ? (
+        <EmptyState icon={<BookOpen size={20} />} title="Kho kiến thức đang trống">
+          Thêm câu hỏi thường gặp hoặc tải bảng giá, chính sách để AI trả lời đúng hơn.
+        </EmptyState>
+      ) : (
+        <ul className="divide-y divide-border">
+          {data.items.map((k) => {
+            const line = knowledgeItemLine(k)
+            return (
+              <li key={k.id} className="flex items-start gap-3 px-4 py-3">
+                <span className="mt-0.5 rounded-md bg-slate-100 p-1.5 text-muted-foreground">
+                  {k.status === 'processing' ? <Loader2 size={16} className="animate-spin text-ai" /> : k.kind === 'file' ? <FileText size={16} /> : <MessageCircleQuestion size={16} />}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-sm font-medium break-words">{k.title}</span>
+                  <span className={cn('block text-xs break-words', KB_TONE[line.tone])}>{line.text}</span>
+                </span>
+                <Chip tone={k.status === 'failed' ? 'danger' : k.status === 'too_large' ? 'warning' : 'neutral'}>
+                  {k.status === 'failed' ? 'Lỗi' : k.status === 'too_large' ? 'Quá lớn' : k.kind === 'file' ? 'File' : 'Hỏi đáp'}
+                </Chip>
+                {writable && (
+                  <button
+                    type="button"
+                    onClick={() => onDelete(k)}
+                    disabled={deletingId === k.id}
+                    className="rounded-md p-1 text-muted-foreground hover:bg-red-50 hover:text-danger disabled:opacity-50"
+                    aria-label={`Xoá ${k.title}`}
+                  >
+                    <Trash size={15} />
+                  </button>
+                )}
+              </li>
+            )
+          })}
+        </ul>
+      )}
+      <div className="space-y-1 border-t border-border px-4 py-2.5">
+        <div className="flex items-center gap-3 text-xs">
+          <span className={cn('tabular', usage.over ? 'font-medium text-danger' : 'text-muted-foreground')}>{usage.text}</span>
+          <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-100" aria-hidden="true">
+            <span className={cn('block h-full rounded-full', usage.over ? 'bg-danger' : 'bg-ai')} style={{ width: `${Math.round(usage.ratio * 100)}%` }} />
+          </span>
+        </div>
+        {(error || usage.over) && <p className="text-xs text-danger">{error ?? KNOWLEDGE_TOO_LARGE_MESSAGE}</p>}
+      </div>
+    </div>
+  )
+}
+
 /* ---------- Thêm vào kho kiến thức ---------- */
 
-function AddKnowledgeModal({ open, onClose, onAdd }: { open: boolean; onClose: () => void; onAdd: (k: KnowledgeItem) => void }) {
+type KnowledgeInput = { kind: 'faq'; question: string; answer: string } | { kind: 'file'; file: File }
+
+/** `onSubmit` trả câu lỗi (giữ modal mở, hiện dưới form) hoặc `null` khi đã thêm. */
+function AddKnowledgeModal({ open, onClose, onSubmit }: { open: boolean; onClose: () => void; onSubmit: (input: KnowledgeInput) => Promise<string | null> }) {
   const [mode, setMode] = useState<'faq' | 'file'>('faq')
   const [q, setQ] = useState('')
   const [a, setA] = useState('')
-  const [file, setFile] = useState<{ name: string; size: number } | null>(null)
+  const [file, setFile] = useState<File | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [pending, setPending] = useState(false)
 
   const reset = () => {
     setQ('')
     setA('')
     setFile(null)
     setMode('faq')
+    setError(null)
   }
   const close = () => {
+    if (pending) return
     reset()
     onClose()
   }
-  const valid = mode === 'faq' ? !!q.trim() && !!a.trim() : !!file
-  const submit = () => {
-    if (!valid) return
-    if (mode === 'faq') onAdd({ id: `k-${Date.now()}`, kind: 'faq', title: q.trim(), detail: a.trim() })
-    else if (file) {
-      const ext = file.name.split('.').pop()?.toUpperCase() ?? 'FILE'
-      const size = file.size > 1024 * 1024 ? `${(file.size / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(file.size / 1024))} KB`
-      onAdd({ id: `k-${Date.now()}`, kind: 'file', title: file.name, detail: `${ext} · ${size} · AI đang đọc nội dung` })
+  const fileIssue = file ? knowledgeFileIssue(file) : null
+  const valid = mode === 'faq' ? !!q.trim() && !!a.trim() : !!file && !fileIssue
+  const submit = async () => {
+    if (!valid || pending) return
+    setPending(true)
+    setError(null)
+    const err = await onSubmit(mode === 'faq' ? { kind: 'faq', question: q.trim(), answer: a.trim() } : { kind: 'file', file: file! })
+    setPending(false)
+    if (err) {
+      setError(err)
+      return
     }
-    close()
+    reset()
+    onClose()
   }
 
   return (
@@ -965,11 +1154,11 @@ function AddKnowledgeModal({ open, onClose, onAdd }: { open: boolean; onClose: (
       title="Thêm vào kho kiến thức"
       footer={
         <>
-          <Button variant="ghost" onClick={close}>
+          <Button variant="ghost" onClick={close} disabled={pending}>
             Huỷ
           </Button>
-          <Button variant="primary" onClick={submit} disabled={!valid}>
-            Thêm vào kho
+          <Button variant="primary" onClick={() => void submit()} disabled={!valid || pending}>
+            {pending ? (mode === 'file' ? 'Đang tải lên…' : 'Đang thêm…') : 'Thêm vào kho'}
           </Button>
         </>
       }
@@ -977,7 +1166,10 @@ function AddKnowledgeModal({ open, onClose, onAdd }: { open: boolean; onClose: (
       <div className="space-y-4">
         <Segmented
           value={mode}
-          onChange={setMode}
+          onChange={(m) => {
+            setMode(m)
+            setError(null)
+          }}
           options={[
             { id: 'faq', label: 'Câu hỏi thường gặp' },
             { id: 'file', label: 'Tải file lên' },
@@ -986,39 +1178,39 @@ function AddKnowledgeModal({ open, onClose, onAdd }: { open: boolean; onClose: (
         {mode === 'faq' ? (
           <>
             <Field label="Câu hỏi">
-              <Input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Ví dụ: Phí giao hàng?" />
+              <Input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Ví dụ: Phí giao hàng?" maxLength={300} />
             </Field>
             <Field label="Câu trả lời" hint="Viết như bạn trả lời khách. AI sẽ diễn đạt lại theo giọng của trang.">
-              <Textarea rows={4} value={a} onChange={(e) => setA(e.target.value)} placeholder="Ví dụ: Nội thành miễn phí, tỉnh khác 30.000đ." />
+              <Textarea rows={4} value={a} onChange={(e) => setA(e.target.value)} placeholder="Ví dụ: Nội thành miễn phí, tỉnh khác 30.000đ." maxLength={4000} />
             </Field>
           </>
         ) : (
           <label className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-md border-2 border-dashed border-border px-6 py-8 text-center hover:border-primary/50 hover:bg-primary-soft/20">
             <Upload size={22} className="text-muted-foreground" />
             {file ? (
-              <span className="text-sm font-medium">{file.name}</span>
+              <span className="text-sm font-medium break-all">{file.name}</span>
             ) : (
               <>
                 <span className="text-sm font-medium">Chọn file bảng giá, chính sách…</span>
-                <span className="text-xs text-muted-foreground">PDF, DOCX, XLSX, CSV hoặc TXT · tối đa 10 MB</span>
+                <span className="text-xs text-muted-foreground">{KNOWLEDGE_FILE_HINT}</span>
               </>
             )}
             <input
               type="file"
-              accept=".pdf,.docx,.xlsx,.csv,.txt"
+              accept={KNOWLEDGE_FILE_ACCEPT}
               className="sr-only"
               onChange={(e) => {
-                const f = e.target.files?.[0]
-                if (f) setFile({ name: f.name, size: f.size })
+                setFile(e.target.files?.[0] ?? null)
+                setError(null)
               }}
             />
           </label>
         )}
+        {(error ?? (mode === 'file' ? fileIssue : null)) && <p className="text-xs text-danger">{error ?? fileIssue}</p>}
       </div>
     </Modal>
   )
 }
-
 
 /* ---------- Khung "Thử AI" ---------- */
 

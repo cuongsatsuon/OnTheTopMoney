@@ -162,6 +162,13 @@
       "when": 1792777532553,
       "tag": "0022_sad_miss_america",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1792779058285,
+      "tag": "0023_silky_smasher",
+      "breakpoints": true
     }
   ]
 }

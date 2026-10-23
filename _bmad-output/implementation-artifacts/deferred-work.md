@@ -23,9 +23,6 @@
   summary: Test CI "build web lỗi → IMAGE_TAG và container đang chạy giữ nguyên".
   evidence: Bước CI "xuất bản web lỗi → không đổi current" bị bỏ cùng cơ chế WEB_ROOT; cần cách cố ý làm hỏng build `ottm-web` (vd nginx -t lỗi) trong CI.
 - source_spec: `spec-media-cloudinary.md`
-  summary: Ánh xạ lỗi adapter media (`AUTH_FAILED`, `RATE_LIMITED`, `INVALID_REQUEST`, `NOT_FOUND`, `TRANSIENT`) sang `ErrorCode` + câu tiếng Việt (vd "ảnh quá lớn").
-  evidence: Chỉ có `MEDIA_NOT_CONFIGURED`; làm ở story upload đầu tiên (3.1 logo hoặc ảnh bài).
-- source_spec: `spec-media-cloudinary.md`
   summary: Dọn file mồ côi trên Cloudinary (liệt kê `<folder>/private|public/*`, so với tham chiếu trong DB), kể cả sau khi khôi phục backup.
   evidence: Adapter chưa có thao tác liệt kê theo prefix; runbook chỉ nêu chiều ngược lại.
 - source_spec: `spec-media-cloudinary.md`
@@ -118,3 +115,12 @@
 - source_spec: `spec-5-1-cau-hinh-ai-tra-loi.md`
   summary: Kiểm bằng trình duyệt màn `/ai-tra-loi` với nhóm/trang thật: cây "Bật"/"Theo nhóm"/"Riêng · …", lưu nhóm/trang, "Dùng cấu hình AI riêng" (bật sao chép, tắt hỏi lại), "Lấy từ Hồ sơ thương hiệu"/"Mẫu theo ngành", lỗi dưới ô; Bật/Tắt AI hàng loạt có xác nhận ở Trang & Nhóm.
   evidence: Chỉ có test API (Postgres thật) và test helper web (`web/src/lib/autoreply.test.ts`); chưa chạy UI với phiên chủ shop + trang đã kết nối.
+- source_spec: `spec-5-2-kho-kien-thuc.md`
+  summary: Kiểm bằng trình duyệt mục Kho kiến thức ở `/ai-tra-loi` và tab "AI trả lời" (thêm FAQ, tải PDF/DOCX/TXT, dòng "AI đang đọc nội dung…" tự đổi theo realtime, xoá, mức dùng token, lỗi "cần rút gọn" khi bật, trang theo nhóm chỉ xem, bật "Dùng riêng" chưa Lưu).
+  evidence: Chỉ có test API (Postgres thật, Cloudinary giả, thread trích thật) và test helper web; chưa chạy UI với phiên chủ shop + Cloudinary thật + worker.
+- source_spec: `spec-5-2-kho-kien-thuc.md`
+  summary: Quét mục kho kiến thức kẹt `processing` (worker chết giữa lúc trích, hết 3 lượt do `expireInSeconds`) → `failed EXTRACT_TIMEOUT`, như `inbox.send_sweep`.
+  evidence: Thread trích có timeout + giới hạn bộ nhớ nên lỗi thường đã thành `failed`; chỉ khi cả tiến trình worker chết thì mục kẹt "AI đang đọc nội dung…" mãi (chủ shop xoá rồi tải lại được). Cũng gồm cửa sổ hẹp: sao chép kho kế thừa đúng lúc job kết thúc file (bản sao chèn sau `UPDATE … WHERE status='processing'`).
+- source_spec: `spec-5-2-kho-kien-thuc.md`
+  summary: Thử trích văn bản với file thật của chủ shop (PDF tiếng Việt xuất từ Word/Google Docs/Canva — font CID + ToUnicode, DOCX có bảng nhiều cấp) và đo thời gian/bộ nhớ với PDF 10 MB.
+  evidence: Test dựng PDF Helvetica tối giản + docx tự sinh; pdf.js (`unpdf` 1.8.1) xử lý font CID nhưng chưa thử bằng file thật, giới hạn 60 giây / 256 MB heap là [ASSUMPTION].

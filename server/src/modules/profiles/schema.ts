@@ -1,11 +1,21 @@
 // Bảng của module `profiles` (AD-1): `brand_profiles` (Story 3.1) + `page_config_state` (Story 3.2/3.3)
-// + `autoreply_configs` (Story 5.1).
+// + `autoreply_configs` (Story 5.1) + `knowledge_items` (Story 5.2).
 // Một hồ sơ cho mỗi chủ `(owner_type, owner_id)` — group hoặc page (UNIQUE). Không FK đa hình: owner tồn tại
 // được kiểm ở service (gọi `pages.getGroup` / `pages.getPage`). Logo công khai nằm trên Cloudinary → `logo_path`
 // là URL (KHÔNG vào `media_assets` — đó là ảnh bài).
-import { AUTOREPLY_CHANNELS, AUTOREPLY_SCHEDULES, BRAND_EMOJI_LEVELS, CONFIG_KINDS, CONFIG_OWNER_TYPES } from '@ottm/shared'
+import {
+  AUTOREPLY_CHANNELS,
+  AUTOREPLY_SCHEDULES,
+  BRAND_EMOJI_LEVELS,
+  CONFIG_KINDS,
+  CONFIG_OWNER_TYPES,
+  KNOWLEDGE_ERRORS,
+  KNOWLEDGE_FILE_MIMES,
+  KNOWLEDGE_KINDS,
+  KNOWLEDGE_STATUSES,
+} from '@ottm/shared'
 import { sql } from 'drizzle-orm'
-import { boolean, check, integer, jsonb, pgTable, text, timestamp, unique, uuid } from 'drizzle-orm/pg-core'
+import { boolean, check, index, integer, jsonb, pgTable, text, timestamp, unique, uuid } from 'drizzle-orm/pg-core'
 import { pagesTable } from '../pages/index.ts'
 
 const OWNER_TYPE_LIST = sql.raw(CONFIG_OWNER_TYPES.map((s) => `'${s}'`).join(', '))
@@ -13,6 +23,7 @@ const EMOJI_LIST = sql.raw(BRAND_EMOJI_LEVELS.map((s) => `'${s}'`).join(', '))
 const KIND_LIST = sql.raw(CONFIG_KINDS.map((s) => `'${s}'`).join(', '))
 const SCHEDULE_LIST = sql.raw(AUTOREPLY_SCHEDULES.map((s) => `'${s}'`).join(', '))
 const CHANNEL_ARRAY = sql.raw(`array[${AUTOREPLY_CHANNELS.map((s) => `'${s}'`).join(', ')}]::text[]`)
+const inList = (xs: readonly string[]) => sql.raw(xs.map((s) => `'${s}'`).join(', '))
 
 export const brandProfiles = pgTable(
   'brand_profiles',
@@ -113,5 +124,54 @@ export const autoreplyConfigs = pgTable(
     check('autoreply_configs_owner_type_check', sql`${t.ownerType} in (${OWNER_TYPE_LIST})`),
     check('autoreply_configs_schedule_check', sql`${t.schedule} in (${SCHEDULE_LIST})`),
     check('autoreply_configs_channels_check', sql`${t.channels} <@ ${CHANNEL_ARRAY}`),
+  ],
+)
+
+/**
+ * Kho kiến thức (Story 5.2, AD-14, AD-16): mục FAQ hoặc file của một chủ `(owner_type, owner_id)` — cùng chủ với
+ * `autoreply_configs` và đi cùng nó trong registry kế thừa (sao chép/xoá cùng cấu hình). Không FK tới
+ * `autoreply_configs`: kho thêm được trước lần "Lưu cấu hình" đầu tiên (F6 bước 3).
+ * File: lưu `PrivateFileStore` (Cloudinary `authenticated`) tới khi job trích xong rồi bị xoá — văn bản đã trích ở
+ * `text`. Nhiều mục có thể trỏ cùng một file (bản sao kế thừa khi file đang `processing`); job xử lý theo file.
+ */
+export const knowledgeItems = pgTable(
+  'knowledge_items',
+  {
+    id: uuid('id').primaryKey().default(sql`uuidv7()`),
+    /** `group` | `page` (CONFIG_OWNER_TYPES). */
+    ownerType: text('owner_type').notNull(),
+    /** id nhóm hoặc trang — không FK (đa hình), service kiểm tồn tại. */
+    ownerId: uuid('owner_id').notNull(),
+    /** `faq` | `file`. */
+    kind: text('kind').notNull(),
+    /** Câu hỏi (FAQ) hoặc tên file — không log. */
+    title: text('title').notNull(),
+    /** Câu trả lời (FAQ) hoặc văn bản đã trích (file `ready`); `null` khi chưa/không dùng được. Không log. */
+    text: text('text'),
+    /** `processing` | `ready` | `failed` | `too_large` (KNOWLEDGE_STATUSES). FAQ luôn `ready`. */
+    status: text('status').notNull(),
+    /** Token ước tính (ký tự ÷ 2 như AI gateway); có ở `ready` và `too_large`. */
+    tokenCount: integer('token_count'),
+    /** Lý do `failed`/`too_large` (KNOWLEDGE_ERRORS). */
+    errorCode: text('error_code'),
+    /** Ref `PrivateFileStore` khi file còn trên kho (tới lúc trích xong). */
+    filePublicId: text('file_public_id'),
+    fileResourceType: text('file_resource_type'),
+    fileFormat: text('file_format'),
+    /** MIME đã xác nhận bằng magic bytes + kích thước gốc (giữ sau khi xoá file để hiển thị). */
+    fileMime: text('file_mime'),
+    fileBytes: integer('file_bytes'),
+    processedAt: timestamp('processed_at', { withTimezone: true, precision: 3 }),
+    createdAt: timestamp('created_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('knowledge_items_owner_idx').on(t.ownerType, t.ownerId),
+    index('knowledge_items_file_idx').on(t.filePublicId),
+    check('knowledge_items_owner_type_check', sql`${t.ownerType} in (${OWNER_TYPE_LIST})`),
+    check('knowledge_items_kind_check', sql`${t.kind} in (${inList(KNOWLEDGE_KINDS)})`),
+    check('knowledge_items_status_check', sql`${t.status} in (${inList(KNOWLEDGE_STATUSES)})`),
+    check('knowledge_items_error_code_check', sql`${t.errorCode} is null or ${t.errorCode} in (${inList(KNOWLEDGE_ERRORS)})`),
+    check('knowledge_items_file_mime_check', sql`${t.fileMime} is null or ${t.fileMime} in (${inList(KNOWLEDGE_FILE_MIMES)})`),
   ],
 )

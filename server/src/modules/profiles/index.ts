@@ -1,6 +1,7 @@
-// Module `profiles` (AD-1, Story 3.1): sở hữu `brand_profiles`, `page_config_state`, `autoreply_configs` (Story 5.1).
+// Module `profiles` (AD-1, Story 3.1): sở hữu `brand_profiles`, `page_config_state`, `autoreply_configs` (Story 5.1),
+// `knowledge_items` (Story 5.2).
 // Public API chỉ export từ file này.
-// Được gọi `pages` (base) + `adapters/media`; tự nó được `autoreply`, `campaigns`, `content` gọi (bảng mũi tên AD-1).
+// Gọi `pages` (base), `ai` (ước tính token kho kiến thức) + `adapters/media`; tự nó được `autoreply`, `campaigns`, `content` gọi (bảng mũi tên AD-1).
 export const MODULE = 'profiles'
 
 export {
@@ -40,3 +41,21 @@ export {
   setAutoreplyUseOwn,
 } from './autoreply.ts'
 export { scriptForIndustry, scriptFromBrand } from './autoreply-template.ts'
+
+// Kho kiến thức (Story 5.2, AD-14, AD-16): FAQ + file (trích văn bản bằng job `profiles.knowledge.extract`).
+export {
+  KNOWLEDGE_FILE_VALIDATION,
+  KnowledgeRetryableError,
+  addKnowledgeFaq,
+  assertCanAddKnowledge,
+  deleteKnowledgeItem,
+  handleKnowledgeExtractJob,
+  listKnowledge,
+  processKnowledgeFile,
+  recordKnowledgeFile,
+  validateKnowledgeFile,
+  type KnowledgeExtractDeps,
+  type KnowledgeExtractOutcome,
+} from './knowledge.ts'
+export { EXTRACT_TIMEOUT_MS, runExtraction } from './knowledge-extract-thread.ts'
+export { detectKnowledgeMime, extractKnowledgeText, type ExtractResult } from './knowledge-files.ts'

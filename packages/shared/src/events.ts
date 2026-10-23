@@ -4,8 +4,10 @@
 import { z } from 'zod'
 import { ErrorCode } from './errors.ts'
 import {
+  ConfigOwnerType,
   ConversationState,
   DeletionScope,
+  KnowledgeStatus,
   PauseReason,
   StateChangeReason,
   WebhookProduct,
@@ -63,7 +65,8 @@ export const EVENTS = {
   // Story 2.5: `id` = groupId đã xoá; `memberPageIds` = các trang vừa bị gỡ khỏi nhóm (Epic 3 giữ cấu hình).
   'group.deleted': event(true, { groupId: Id, memberPageIds: z.array(Id) }),
   'media_asset.created': event(true, {}),
-  'knowledge_item.processed': event(true, {}),
+  // Story 5.2: job trích văn bản kết thúc một mục kho kiến thức. `pageId` có khi chủ là trang.
+  'knowledge_item.processed': event(true, { ownerType: ConfigOwnerType, ownerId: Id, status: KnowledgeStatus }),
   'ai_budget.threshold_reached': event(true, { level: z.union([z.literal(80), z.literal(100)]) }),
   'ai_budget.restored': event(true, {}),
   'openai_key.invalidated': event(true, {}),

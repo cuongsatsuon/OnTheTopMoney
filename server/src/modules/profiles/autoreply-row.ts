@@ -5,6 +5,7 @@ import { AutoreplyChannel, AutoreplyDayHours, AutoreplySchedule } from '@ottm/sh
 import { and, eq, sql } from 'drizzle-orm'
 import { z } from 'zod'
 import type { DbExecutor } from '../../platform/db/index.ts'
+import { copyKnowledge, removeKnowledgeOf } from './knowledge-row.ts'
 import type { ProfileOwner } from './row.ts'
 import { autoreplyConfigs } from './schema.ts'
 
@@ -68,7 +69,10 @@ export async function getAutoreplyRow(db: DbExecutor, owner: ProfileOwner): Prom
   return row ? toAutoreplyDto(row) : null
 }
 
-/** Ops registry kế thừa (AD-8) cho loại `autoreply` — cùng hợp đồng với brand ở `inheritance.ts`. */
+/**
+ * Ops registry kế thừa (AD-8) cho loại `autoreply` — cùng hợp đồng với brand ở `inheritance.ts`. Kho kiến thức
+ * (Story 5.2) là một phần của cấu hình AI: sao chép/xoá cấu hình kéo theo kho của cùng chủ.
+ */
 export const autoreplyOps = {
   async exists(db: DbExecutor, owner: ProfileOwner): Promise<boolean> {
     const [row] = await db.select({ id: autoreplyConfigs.id }).from(autoreplyConfigs).where(autoreplyOwnerWhere(owner))
@@ -79,8 +83,10 @@ export const autoreplyOps = {
     const src = await getAutoreplyRow(tx, from)
     if (!src) return
     await upsertAutoreplyRow(tx, autoreplyValues(to, src))
+    await copyKnowledge(tx, from, to)
   },
   async remove(tx: DbExecutor, owner: ProfileOwner): Promise<void> {
     await tx.delete(autoreplyConfigs).where(autoreplyOwnerWhere(owner))
+    await removeKnowledgeOf(tx, owner)
   },
 }

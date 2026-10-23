@@ -50,6 +50,8 @@ export const ERROR_CODES = [
   'IMAGE_FAILED',
   /** Máy chủ chưa cấu hình kho ảnh/file Cloudinary (`CLOUDINARY_URL`). */
   'MEDIA_NOT_CONFIGURED',
+  /** Kho file (Cloudinary) lỗi khi tải file lên (Story 5.2: file kho kiến thức). */
+  'UPLOAD_FAILED',
   // AI (AD-7, AD-8, AD-16, AD-21)
   'OPENAI_KEY_MISSING',
   'OPENAI_KEY_INVALID',

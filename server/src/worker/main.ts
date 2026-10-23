@@ -28,7 +28,7 @@ import {
   sweepStuckSending,
 } from '../modules/inbox/index.ts'
 import { handleEvent } from '../modules/notifications/index.ts'
-import { handleProfilesEvent } from '../modules/profiles/index.ts'
+import { handleKnowledgeExtractJob, handleProfilesEvent } from '../modules/profiles/index.ts'
 import { handleRouteJob, markEventFailed, routeWebhookEvent, runHealthCheck } from '../modules/webhooks/index.ts'
 import { HEARTBEAT_INTERVAL_MS, writeHeartbeat } from './heartbeat.ts'
 
@@ -49,8 +49,8 @@ const cipher =
 // và gửi tin từ Hộp thư (`inbox.send`, Story 4.7).
 const { graph, threads } = createMetaClients({ config, db: dbHandle.db, log: logger.child({ component: 'meta' }) })
 const jobs = createJobSender(boss)
-// Kho file riêng tư (AD-14) cho đính kèm của khách (Story 4.3); thiếu `CLOUDINARY_URL` → đính kèm `failed`
-// `MEDIA_NOT_CONFIGURED`, tin vẫn vào Hộp thư.
+// Kho file riêng tư (AD-14) cho đính kèm của khách (Story 4.3) và file kho kiến thức (Story 5.2); thiếu
+// `CLOUDINARY_URL` → đính kèm `failed` `MEDIA_NOT_CONFIGURED`, tin vẫn vào Hộp thư.
 const media = createMediaStores({ CLOUDINARY_URL: config.CLOUDINARY_URL, CLOUDINARY_FOLDER: config.CLOUDINARY_FOLDER })
 // Story 4.5: id app của chính máy chủ — echo có `app_id` khác là chủ shop trả lời ngoài app (Business Suite…).
 const appIds = [config.META_APP_ID, config.THREADS_APP_ID].filter((id): id is string => typeof id === 'string' && id !== '')
@@ -187,6 +187,11 @@ try {
           job as JobWithMetadata<unknown>,
         )
         logger.debug({ jobId: job.id, result }, 'inbox.contact_summary')
+      },
+      // Story 5.2: trích văn bản file kho kiến thức (thread có timeout). Lỗi tải tạm ném lại; lần cuối ghi `failed`.
+      'profiles.knowledge.extract': async (job) => {
+        const result = await handleKnowledgeExtractJob({ db: dbHandle.db, events, media }, job as JobWithMetadata<unknown>)
+        logger.debug({ jobId: job.id, result }, 'profiles.knowledge.extract')
       },
       // Story 4.7: tin kẹt `sending` quá 15 phút → `failed` `SEND_UNKNOWN`.
       'inbox.send_sweep': async () => {

@@ -2,6 +2,7 @@
 // thừa (`inheritance.ts`): giải hiệu lực chỉ qua `resolveEffective`, bật/tắt dùng riêng qua `setUseOwn`, đổi nhóm do
 // consumer `events.profiles` lo (Story 3.3) — file này không lặp lại luật nào trong số đó.
 // Luật hợp lệ (bật cần kịch bản + kênh…) lấy từ shared (`SaveAutoreplyConfigRequest`, `autoreplyEnableIssues`).
+// Story 5.2: lưu ở trạng thái bật (kể cả hàng loạt) khi kho kiến thức vượt giới hạn token → `KNOWLEDGE_TOO_LARGE`.
 import type {
   AutoreplyConfigDto,
   AutoreplyOverviewResponse,
@@ -20,6 +21,7 @@ import { getGroup, getPage, listGroups, listPages } from '../pages/index.ts'
 import { autoreplyValues, getAutoreplyRow, upsertAutoreplyRow } from './autoreply-row.ts'
 import { scriptForIndustry, scriptFromBrand } from './autoreply-template.ts'
 import { getPageConfigState, onGroupProfileSaved, resolveEffective, setUseOwn } from './inheritance.ts'
+import { assertKnowledgeFits } from './knowledge.ts'
 import type { ProfileOwner } from './row.ts'
 import { assertOwnerExists, getProfile } from './service.ts'
 
@@ -35,6 +37,7 @@ export function getAutoreplyConfig(db: DbExecutor, owner: ProfileOwner): Promise
  * - Trang đang theo nhóm: `setUseOwn(true)` trước (sao chép cấu hình nhóm làm điểm xuất phát, `use_own=true`) rồi
  *   ghi đè bằng body — "bật Dùng cấu hình AI riêng + Lưu" là một request.
  * - Nhóm: sau khi lưu, các trang đang chờ nhóm (`awaiting_group_default`) chuyển về "Theo nhóm".
+ * - Lưu ở trạng thái bật: kho kiến thức của chủ (đã sao chép nếu trang vừa chuyển sang riêng) phải vừa giới hạn.
  */
 export async function saveAutoreplyConfig(db: Db, owner: ProfileOwner, input: ParsedAutoreplyConfig): Promise<AutoreplyConfigDto> {
   return db.transaction(async (tx) => {
@@ -44,6 +47,7 @@ export async function saveAutoreplyConfig(db: Db, owner: ProfileOwner, input: Pa
       const state = await getPageConfigState(tx, owner.ownerId, 'autoreply')
       if (page?.groupId && !state.useOwn) await setUseOwn(tx, owner.ownerId, 'autoreply', true)
     }
+    if (input.enabled) await assertKnowledgeFits(tx, owner)
     const dto = await upsertAutoreplyRow(tx, autoreplyValues(owner, input))
     if (owner.ownerType === 'group') await onGroupProfileSaved(tx, owner.ownerId, 'autoreply')
     return dto
@@ -135,6 +139,7 @@ type BulkOutcome = 'updated' | 'unchanged'
  * - Trang theo nhóm cần đổi → `setUseOwn(true)` (sao chép cấu hình nhóm) rồi đổi `enabled` trên bản riêng.
  * - Bật mà không có cấu hình hiệu lực → `CONFIG_MISSING`; cấu hình không đủ điều kiện bật → `VALIDATION_FAILED`
  *   (rollback: trang không bị chuyển sang riêng). Tắt trang chưa có cấu hình = đã tắt → `unchanged`.
+ * - Bật mà kho kiến thức của cấu hình hiệu lực vượt giới hạn → `KNOWLEDGE_TOO_LARGE` (Story 5.2).
  */
 export async function bulkSetAutoreplyEnabled(db: Db, pageIds: readonly string[], enabled: boolean): Promise<BulkSetAutoreplyResponse> {
   const result: BulkSetAutoreplyResponse = { updated: [], unchanged: [], failed: [] }
@@ -150,6 +155,7 @@ export async function bulkSetAutoreplyEnabled(db: Db, pageIds: readonly string[]
         const next = { ...effective.config, enabled }
         const issues = autoreplyEnableIssues(next)
         if (issues.length > 0) throw new AppError('VALIDATION_FAILED', 400, { details: issues.map((i) => ({ path: [i.path], message: i.message })) })
+        if (enabled) await assertKnowledgeFits(tx, { ownerType: effective.source.ownerType, ownerId: effective.source.ownerId })
         if (effective.source.ownerType === 'group') await setUseOwn(tx, pageId, 'autoreply', true)
         await upsertAutoreplyRow(tx, autoreplyValues(pageOwner(pageId), next))
         return 'updated'

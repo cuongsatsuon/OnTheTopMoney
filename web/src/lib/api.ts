@@ -41,6 +41,11 @@ export function isApiError(err: unknown): err is ApiError {
 export interface ApiFetchOptions<T> {
   method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
   body?: unknown
+  /**
+   * Gửi NGUYÊN bytes thay cho JSON (Story 5.2: tải file kho kiến thức) — `contentType` là MIME của file, `headers`
+   * thêm (vd `X-File-Name`). Không dùng cùng `body`.
+   */
+  raw?: { data: Blob; contentType: string; headers?: Record<string, string> }
   /** Schema zod (từ `@ottm/shared`) để kiểm body phản hồi. */
   schema?: { parse(data: unknown): T }
   signal?: AbortSignal
@@ -52,9 +57,11 @@ export interface ApiFetchOptions<T> {
  * 204 → `undefined`.
  */
 export async function apiFetch<T = void>(path: string, options: ApiFetchOptions<T> = {}): Promise<T> {
-  const { method = 'GET', body, schema, signal } = options
-  const headers: Record<string, string> = { Accept: 'application/json' }
-  if (body !== undefined) headers['Content-Type'] = 'application/json'
+  const { method = 'GET', body, raw, schema, signal } = options
+  const headers: Record<string, string> = { Accept: 'application/json', ...raw?.headers }
+  if (raw) headers['Content-Type'] = raw.contentType
+  else if (body !== undefined) headers['Content-Type'] = 'application/json'
+  const payload = raw ? raw.data : body !== undefined ? JSON.stringify(body) : undefined
 
   let res: Response
   try {
@@ -62,7 +69,7 @@ export async function apiFetch<T = void>(path: string, options: ApiFetchOptions<
       method,
       headers,
       credentials: 'include',
-      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+      ...(payload !== undefined ? { body: payload } : {}),
       ...(signal ? { signal } : {}),
     })
   } catch (err) {

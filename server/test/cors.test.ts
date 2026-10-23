@@ -71,7 +71,7 @@ describe('CORS /api/v1/*', () => {
     expectCors(res.headers, WEB)
     expect(res.headers['access-control-allow-methods']).toBe(CORS_ALLOW_METHODS)
     expect(res.headers['access-control-allow-headers']).toBe(CORS_ALLOW_HEADERS)
-    expect(res.headers['access-control-allow-headers']).toBe('Content-Type, Accept')
+    expect(res.headers['access-control-allow-headers']).toBe('Content-Type, Accept, X-File-Name')
     expect(res.headers['access-control-max-age']).toBe(String(CORS_MAX_AGE_SECONDS))
     expect(res.headers['access-control-max-age']).toBe('600')
     expect(res.body).toBe('')

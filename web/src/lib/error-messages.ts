@@ -46,6 +46,7 @@ export const ERROR_MESSAGES: Record<ErrorCode, string> = {
   IMAGE_REJECTED: 'Ảnh bị từ chối. Thử ảnh khác.',
   IMAGE_FAILED: 'Tạo ảnh chưa được. Thử lại.',
   MEDIA_NOT_CONFIGURED: 'Chưa cấu hình kho ảnh (Cloudinary) nên chưa lưu được ảnh/file. Xem hướng dẫn cài đặt.',
+  UPLOAD_FAILED: 'Tải file lên chưa được. Thử lại sau ít phút.',
   // AI
   OPENAI_KEY_MISSING: 'Thêm khoá OpenAI ở Cài đặt để dùng AI.',
   OPENAI_KEY_INVALID: 'Khoá OpenAI không hợp lệ. Cập nhật khoá ở Cài đặt.',
@@ -55,7 +56,7 @@ export const ERROR_MESSAGES: Record<ErrorCode, string> = {
   AI_PROVIDER_ERROR: 'AI đang gặp sự cố. Thử lại sau ít phút.',
   AI_POLICY_BLOCKED: 'AI không tạo được nội dung này. Thử diễn đạt khác.',
   CONFIG_MISSING: 'Còn thiếu cấu hình. Hoàn tất cài đặt rồi thử lại.',
-  KNOWLEDGE_TOO_LARGE: 'Tài liệu quá lớn. Chia nhỏ rồi tải lên lại.',
+  KNOWLEDGE_TOO_LARGE: 'Kho kiến thức vượt giới hạn. Xoá bớt mục hoặc rút gọn tài liệu rồi thử lại.',
 }
 
 const FALLBACK = ERROR_MESSAGES.INTERNAL

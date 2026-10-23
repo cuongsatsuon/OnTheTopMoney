@@ -61,6 +61,8 @@ export interface QueuePayloads {
   'inbox.send': { messageId: string }
   'inbox.send_sweep': Record<string, never>
   'inbox.contact_summary': { contactId: string }
+  /** Story 5.2: trích văn bản một file kho kiến thức — xử lý theo file (mọi mục `processing` trỏ cùng file). */
+  'profiles.knowledge.extract': { knowledgeItemId: string; filePublicId: string }
   /** Story 4.5: tin của chính trang chưa khớp tin nào của app — bản chuẩn hoá (dạng JSON) để thử khớp lại. */
   'inbox.echo_match': {
     pageId: string
@@ -284,6 +286,20 @@ export const QUEUES = {
     retryDelay: 10,
     retryBackoff: true,
     concurrency: 2,
+    expireInSeconds: 180,
+    pollingIntervalSeconds: 0.5,
+  },
+  // Module `profiles` (Story 5.2, AD-16, AD-24): trích văn bản file kho kiến thức. Chống trùng bằng
+  // `UPDATE … WHERE status='processing'` (không singletonKey). Trích chạy trong thread có timeout 60 giây (huỷ cứng);
+  // lỗi trích không retry. Chỉ lỗi tạm khi tải file từ kho (5xx, chặn tần suất) ném để retry; lần cuối ghi `failed`.
+  // Retry 2 backoff, concurrency 1 (pdf.js tốn CPU/bộ nhớ). Hạn 180 giây > tải file (30 giây) + trích (60 giây).
+  // Hỏi job 0,5 giây để dòng trên FE đổi trạng thái sớm.
+  'profiles.knowledge.extract': {
+    policy: 'standard',
+    retryLimit: 2,
+    retryDelay: 10,
+    retryBackoff: true,
+    concurrency: 1,
     expireInSeconds: 180,
     pollingIntervalSeconds: 0.5,
   },

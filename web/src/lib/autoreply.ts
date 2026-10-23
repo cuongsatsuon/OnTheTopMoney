@@ -27,6 +27,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { groups as mockGroups, pages as mockPages, type Group, type Page } from '../data/mock'
 import { apiFetch, isApiError } from './api'
 import { errorMessageOf } from './error-messages'
+import { KNOWLEDGE_KEY, KNOWLEDGE_TOO_LARGE_MESSAGE } from './knowledge'
 
 /* ---------- Dạng form (giữ nguyên UX của AutoReplyForm) ---------- */
 
@@ -39,7 +40,7 @@ export interface DayRange {
   to: string
 }
 
-/** Mục kho kiến thức — chỉ dữ liệu mẫu cho tới Story 5.2 (chủ thật chưa lưu mục nào). */
+/** Mục kho kiến thức của KHO MẪU (id mẫu). Chủ thật đọc/ghi kho qua API — `lib/knowledge.ts` (Story 5.2). */
 export interface KnowledgeItem {
   id: string
   kind: 'faq' | 'file'
@@ -114,7 +115,7 @@ export function toSaveAutoreplyRequest(form: AutoReplyConfig): SaveAutoreplyConf
   }
 }
 
-export type AutoReplyField = AutoreplyEnableIssue['path'] | 'handoffMessage'
+export type AutoReplyField = AutoreplyEnableIssue['path'] | 'handoffMessage' | 'knowledge'
 export type AutoReplyFieldErrors = Partial<Record<AutoReplyField, string>>
 
 /** Kiểm sớm phía web bằng CÙNG luật bật của server (`autoreplyEnableIssues`) + câu chuyển tiếp bắt buộc. */
@@ -128,8 +129,12 @@ export function autoReplyIssuesOf(form: AutoReplyConfig): AutoReplyFieldErrors {
 
 const FIELDS: readonly AutoReplyField[] = ['script', 'channels', 'hours', 'handoffMessage']
 
-/** Lỗi từ server (`VALIDATION_FAILED` details theo field) → lỗi dưới ô. Mã khác → `{}` (toast chung). */
+/**
+ * Lỗi từ server → lỗi dưới ô: `VALIDATION_FAILED` theo field; `KNOWLEDGE_TOO_LARGE` (lưu bật khi kho vượt giới hạn,
+ * Story 5.2) dưới mục Kho kiến thức. Mã khác → `{}` (toast chung).
+ */
 export function autoReplyFieldErrorsOf(err: unknown): AutoReplyFieldErrors {
+  if (isApiError(err) && err.code === 'KNOWLEDGE_TOO_LARGE') return { knowledge: KNOWLEDGE_TOO_LARGE_MESSAGE }
   if (!isApiError(err) || err.code !== 'VALIDATION_FAILED' || !Array.isArray(err.details)) return {}
   const out: AutoReplyFieldErrors = {}
   for (const d of err.details as unknown[]) {
@@ -194,6 +199,7 @@ export function bulkConfirmText(pages: readonly BulkPage[], on: boolean): { titl
 const FAIL_REASONS: Partial<Record<string, string>> = {
   CONFIG_MISSING: 'chưa có cấu hình AI',
   VALIDATION_FAILED: 'cấu hình chưa đủ (kịch bản hoặc kênh)',
+  KNOWLEDGE_TOO_LARGE: 'kho kiến thức vượt giới hạn',
   NOT_FOUND: 'trang không còn',
 }
 
@@ -270,12 +276,16 @@ export function useEffectiveAutoreply(pageId: string, options: { enabled?: boole
   })
 }
 
+/** Làm mới mọi khoá AI + kho kiến thức (chuyển sang/bỏ cấu hình riêng sao chép/xoá kho — Story 5.2). */
+const invalidateAutoreply = (qc: ReturnType<typeof useQueryClient>) =>
+  Promise.all([qc.invalidateQueries({ queryKey: AUTOREPLY_KEY }), qc.invalidateQueries({ queryKey: KNOWLEDGE_KEY })])
+
 /** Lưu cấu hình (trang đang theo nhóm → server chuyển sang riêng trong cùng request). Làm mới mọi khoá AI. */
 export function useSaveAutoreplyConfig(owner: AutoreplyOwner) {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (body: SaveAutoreplyConfigRequest) => apiFetch(configPath(owner), { method: 'PUT', body, schema: AutoreplyConfigDto }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: AUTOREPLY_KEY }),
+    onSuccess: () => invalidateAutoreply(qc),
   })
 }
 
@@ -285,7 +295,7 @@ export function useSetAutoreplyUseOwn(pageId: string) {
   return useMutation({
     mutationFn: (useOwn: boolean) =>
       apiFetch(`/autoreply-configs/use-own/page/${pageId}`, { method: 'PUT', body: { useOwn }, schema: EffectiveAutoreplyConfigResponse }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: AUTOREPLY_KEY }),
+    onSuccess: () => invalidateAutoreply(qc),
   })
 }
 
@@ -303,6 +313,6 @@ export function useBulkSetAutoreply() {
   return useMutation({
     mutationFn: (body: { pageIds: string[]; enabled: boolean }) =>
       apiFetch('/autoreply-configs/bulk-enabled', { method: 'POST', body, schema: BulkSetAutoreplyResponse }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: AUTOREPLY_KEY }),
+    onSuccess: () => invalidateAutoreply(qc),
   })
 }

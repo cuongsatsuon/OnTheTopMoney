@@ -24,6 +24,7 @@ import { registerGroups } from './groups.ts'
 import { registerHealthz, type HealthOptions } from './healthz.ts'
 import { registerInbox } from './inbox.ts'
 import { registerInboxSuggest } from './inbox-suggest.ts'
+import { registerKnowledgeItems } from './knowledge-items.ts'
 import { registerNotifications } from './notifications.ts'
 import { registerOAuth } from './oauth.ts'
 import { registerOpenAiSettings } from './openai-settings.ts'
@@ -74,8 +75,9 @@ export interface AppDeps {
    */
   connections?: Omit<ConnectionsDeps, 'db' | 'events' | 'log'>
   /**
-   * Kho ảnh/file Cloudinary (AD-14) cho logo hồ sơ thương hiệu (Story 3.1) và đính kèm của khách (Story 4.3). Không
-   * truyền → kho "chưa cấu hình": lưu logo trả `MEDIA_NOT_CONFIGURED`, phần chữ của hồ sơ vẫn lưu được.
+   * Kho ảnh/file Cloudinary (AD-14) cho logo hồ sơ thương hiệu (Story 3.1), đính kèm của khách (Story 4.3) và file
+   * kho kiến thức (Story 5.2). Không truyền → kho "chưa cấu hình": lưu logo / tải file trả `MEDIA_NOT_CONFIGURED`,
+   * phần chữ của hồ sơ vẫn lưu được.
    */
   media?: MediaStores
   /**
@@ -143,6 +145,8 @@ export function buildApp({ sql, db, logger, http = {}, loginLimiter, health, eve
   registerBrandProfiles(app, { db, media: mediaStores })
   // Cấu hình AI trả lời tự động (Story 5.1): kế thừa Nhóm→Trang qua `profiles`, không cần `events`.
   registerAutoreplyConfigs(app, { db })
+  // Kho kiến thức (Story 5.2): FAQ + file lưu kho riêng tư; tải file cần `jobs` (enqueue `profiles.knowledge.extract`).
+  registerKnowledgeItems(app, { db, media: mediaStores, jobs })
   // Hộp thư (Story 4.3): hội thoại, tin, đính kèm (đọc từ kho riêng tư); Story 4.7: gửi tin (cần `events` + `jobs`).
   registerInbox(app, { db, media: mediaStores, events, jobs })
   // Khách hàng (Story 4.9): danh sách, hồ sơ, lịch sử, gộp (cần `events`), tóm tắt AI (cần `events` + `jobs`).

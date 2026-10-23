@@ -162,6 +162,13 @@ server {
         proxy_pass http://ottm_api;
     }
 
+    # Tải file lên (Story 5.2 file kho kiến thức ≤10 MB gửi nguyên bytes; Story 3.1 logo base64 ~2,8 MB): body lớn
+    # hơn mức chung 2 MB. api tự giới hạn theo từng route. Đặt TRƯỚC location `/api` (regex khớp theo thứ tự).
+    location ~ ^/api/v1/(knowledge-items/(group|page)/[0-9a-f-]+/files|brand-profiles/(group|page)/[0-9a-f-]+/logo)$ {
+        client_max_body_size 11m;
+        proxy_pass http://ottm_api;
+    }
+
     location ~ ^/(api|privacy)(/|$) {
         proxy_pass http://ottm_api;
     }

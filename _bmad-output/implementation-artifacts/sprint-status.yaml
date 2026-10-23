@@ -76,8 +76,8 @@ development_status:
 
   epic-5: in-progress
   5-1-cấu-hình-ai-trả-lời-theo-nhóm-và-trang: review
-  5-2-kho-kiến-thức: in-progress
-  5-3-thử-ai-trước-khi-bật: backlog
+  5-2-kho-kiến-thức: review
+  5-3-thử-ai-trước-khi-bật: in-progress
   5-4-ai-tự-trả-lời-tin-nhắn-và-chuyển-cho-bạn: backlog
   5-5-ai-trả-lời-bình-luận-công-khai-và-nhắn-riêng: backlog
   5-6-ai-dừng-và-chạy-lại-đúng-lúc-khi-hết-hạn-mức-hoặc-khoá-lỗi: backlog

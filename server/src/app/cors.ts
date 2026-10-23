@@ -9,7 +9,8 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 
 export const CORS_ALLOW_METHODS = 'GET, POST, PUT, PATCH, DELETE'
-export const CORS_ALLOW_HEADERS = 'Content-Type, Accept'
+/** `X-File-Name`: tên file khi tải file kho kiến thức lên (Story 5.2 — body là bytes của file). */
+export const CORS_ALLOW_HEADERS = 'Content-Type, Accept, X-File-Name'
 export const CORS_MAX_AGE_SECONDS = 600
 
 const API_PREFIX = '/api/v1/'

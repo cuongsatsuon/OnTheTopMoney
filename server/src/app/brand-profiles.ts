@@ -16,7 +16,6 @@ import { ConfigOwnerType } from '@ottm/shared'
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import type { MediaStores } from '../adapters/media/index.ts'
-import type { MediaErrorKind } from '../adapters/media/index.ts'
 import {
   clearLogo,
   getProfile,
@@ -29,6 +28,7 @@ import {
 } from '../modules/profiles/index.ts'
 import type { Db } from '../platform/db/index.ts'
 import { AppError } from '../platform/errors/index.ts'
+import { mediaAppError } from './media-errors.ts'
 
 const OwnerParams = z.object({ ownerType: ConfigOwnerType, ownerId: z.uuid() })
 const PageIdParams = z.object({ id: z.uuid() })
@@ -56,19 +56,7 @@ function logoValidationError(message: string): AppError {
   return new AppError('VALIDATION_FAILED', 400, { details: [{ path: ['logo'], message }] })
 }
 
-/** MediaErrorKind → AppError. Convention repo: "chưa cấu hình" là 500 (như META/ENCRYPTION_NOT_CONFIGURED). */
-function mediaError(kind: MediaErrorKind): AppError {
-  switch (kind) {
-    case 'MEDIA_NOT_CONFIGURED':
-      return new AppError('MEDIA_NOT_CONFIGURED', 500, { message: 'CLOUDINARY_URL chưa đặt' })
-    case 'INVALID_REQUEST':
-      return logoValidationError('Ảnh không hợp lệ')
-    case 'RATE_LIMITED':
-      return new AppError('RATE_LIMITED', 429, { message: 'Cloudinary giới hạn tần suất' })
-    default:
-      return new AppError('IMAGE_FAILED', 502, { message: 'Không tải được logo lên Cloudinary' })
-  }
-}
+const LOGO_MEDIA_ERRORS = { field: 'logo', invalidMessage: 'Ảnh không hợp lệ', failCode: 'IMAGE_FAILED' } as const
 
 export function registerBrandProfiles(app: FastifyInstance, deps: BrandProfilesDeps): void {
   const { db, media } = deps
@@ -96,10 +84,10 @@ export function registerBrandProfiles(app: FastifyInstance, deps: BrandProfilesD
       if (!checked.ok) throw logoValidationError(checked.message)
       // Hồ sơ phải tồn tại TRƯỚC khi upload (404 nếu chưa lưu chữ) — tránh bỏ lại asset Cloudinary mồ côi/tốn phí.
       if (!(await getProfile(db, owner))) throw new AppError('NOT_FOUND', 404, { message: 'Chưa có hồ sơ để gắn logo — lưu hồ sơ trước' })
-      if (!media.configured) throw mediaError('MEDIA_NOT_CONFIGURED')
+      if (!media.configured) throw mediaAppError('MEDIA_NOT_CONFIGURED', LOGO_MEDIA_ERRORS)
       // stripMetadata: loại EXIF/metadata tường minh khi lưu (không dựa mặc định của Cloudinary).
       const result = await media.publicStore.put({ data: bytes, mime: checked.mime, stripMetadata: true })
-      if (!result.ok) throw mediaError(result.kind)
+      if (!result.ok) throw mediaAppError(result.kind, LOGO_MEDIA_ERRORS)
       return setLogo(db, owner, result.url)
     },
   )
