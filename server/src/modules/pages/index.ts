@@ -30,5 +30,8 @@ export {
   type GroupChange,
 } from './groups.ts'
 
+// Tìm trang/nhóm không dấu cho ⌘K (Story 4.10, AD-18); `/api/v1/search` ghép ở `app/read-models/search.ts`.
+export { search, type PagesSearchResult } from './search.ts'
+
 /** Chỉ để `connections` khai khoá ngoại tới `pages.id` (Drizzle cần đối tượng bảng); không truy vấn trực tiếp. */
 export { pages as pagesTable } from './schema.ts'

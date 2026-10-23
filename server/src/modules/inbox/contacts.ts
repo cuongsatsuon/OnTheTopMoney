@@ -6,6 +6,9 @@
 //   read-model `app/read-models/contacts.ts` ghép (AD-1). `inbox` không đọc bảng `pages`.
 // - Gộp khách chỉ bằng tay (`mergeContacts`): chuyển định danh (hội thoại đi theo định danh), hợp thẻ, xoá khách nguồn.
 //   Nhắn riêng trả `recipient_id` đã thuộc khách khác → chỉ ghi gợi ý gộp (`suggestMerge`).
+// - Tìm không dấu (Story 4.10): `q` của danh sách và `searchContacts` (⌘K) dùng helper `platform/db/search.ts` — mỗi từ
+//   là chuỗi con của `search_norm(tên)` (danh sách: hoặc của một thẻ), hoặc SĐT chứa chữ số của truy vấn (`search_phone`).
+//   Chỉ ⌘K có khớp gần đúng (chịu lỗi gõ) — lọc danh sách giữ đúng chữ.
 // Không log SĐT, ghi chú, thẻ hay nội dung tin.
 import {
   dedupeTags,
@@ -19,6 +22,7 @@ import {
 } from '@ottm/shared'
 import { and, desc, eq, inArray, lt, ne, or, sql, type SQL } from 'drizzle-orm'
 import type { Db, DbExecutor } from '../../platform/db/index.ts'
+import { phoneMatch, searchTerms, textMatch, textRank } from '../../platform/db/search.ts'
 import { AppError } from '../../platform/errors/index.ts'
 import type { EventPublisher } from '../../platform/events/index.ts'
 import { decodeCursor, encodeCursor, previewsOf, toMessageDtos, type PageQuery, type Paged } from './queries.ts'
@@ -62,22 +66,18 @@ const activityIn = (pageIds: readonly string[]) => sql<Date>`coalesce((
 const lowerVi = (x: SQL | string) => sql`lower(${x} collate pg_c_utf8)`
 const tagIn = (tag: string) => sql`exists (select 1 from unnest(${contacts.tags}) as t(v) where ${lowerVi(sql`t.v`)} = ${lowerVi(tag)})`
 
-/** Thoát ký tự đại diện của LIKE. */
-const likeEscape = (s: string) => s.replace(/[\\%_]/g, (c) => `\\${c}`)
-
-/** Điều kiện lọc giai đoạn / thẻ (không phân biệt hoa thường) / chữ (tên, SĐT theo chữ số, thẻ). */
+/** Điều kiện lọc giai đoạn / thẻ (không phân biệt hoa thường) / chữ (không dấu: tên, thẻ; SĐT theo chữ số). */
 function filterCondition(query: Pick<ContactListQuery, 'stage' | 'tag' | 'q'>): SQL | undefined {
   const parts: SQL[] = []
   if (query.stage) parts.push(eq(contacts.stage, query.stage))
   if (query.tag) parts.push(tagIn(query.tag))
-  if (query.q) {
-    const like = `%${likeEscape(query.q)}%`
-    const digits = query.q.replace(/\D/g, '')
-    const any: SQL[] = [
-      sql`${contacts.name} collate pg_c_utf8 ilike ${like}`,
-      sql`exists (select 1 from unnest(${contacts.tags}) as t(v) where t.v collate pg_c_utf8 ilike ${like})`,
-    ]
-    if (digits.length >= 3) any.push(sql`regexp_replace(coalesce(${contacts.phone}, ''), '[^0-9]', '', 'g') like ${`%${digits}%`}`)
+  const terms = query.q ? searchTerms(query.q) : null
+  if (terms) {
+    const any = [
+      textMatch(contacts.name, terms),
+      sql`exists (select 1 from unnest(${contacts.tags}) as t(v) where ${textMatch(sql`t.v`, terms)})`,
+      phoneMatch(contacts.phone, terms),
+    ].filter((c): c is SQL => c !== undefined)
     parts.push(sql`(${sql.join(any, sql` or `)})`)
   }
   return parts.length ? and(...parts) : undefined
@@ -107,6 +107,49 @@ export async function listContacts(db: DbExecutor, pageIds: readonly string[], q
     items: page.map((r) => toRecord(r.contact)),
     nextCursor: rows.length > query.limit && last ? encodeCursor(last.activity, last.contact.id) : null,
   }
+}
+
+/** Khách khớp tìm nhanh: `pageIds` = trang có định danh của khách, trong tập trang bên gọi truyền (thứ tự định danh). */
+export interface ContactSearchHit {
+  id: string
+  name: string | null
+  phone: string | null
+  stage: ContactStage
+  pageIds: string[]
+}
+
+/**
+ * Tìm khách cho ⌘K (AD-18): khách có định danh trên một trang của `pageIds` (bên gọi truyền trang chưa gỡ) mà tên khớp
+ * không dấu (kể cả gần đúng) hoặc SĐT chứa chữ số của truy vấn. Xếp khớp tên tốt nhất trước (khớp chỉ theo SĐT xếp
+ * sau), rồi mới hoạt động nhất; tối đa `limit`.
+ */
+export async function searchContacts(db: DbExecutor, q: string, pageIds: readonly string[], limit: number): Promise<ContactSearchHit[]> {
+  const terms = searchTerms(q)
+  if (!terms || pageIds.length === 0) return []
+  const match = [textMatch(contacts.name, terms, { fuzzy: true }), phoneMatch(contacts.phone, terms)].filter((c): c is SQL => c !== undefined)
+  const rows = await db
+    .select({ id: contacts.id, name: contacts.name, phone: contacts.phone, stage: contacts.stage })
+    .from(contacts)
+    .where(and(hasIdentityIn(pageIds), sql`(${sql.join(match, sql` or `)})`))
+    .orderBy(
+      sql`case when ${contacts.name} is null or not ${textMatch(contacts.name, terms, { fuzzy: true })} then 1 else 0 end`,
+      ...textRank(contacts.name, terms),
+      desc(activityIn(pageIds)),
+      desc(contacts.id),
+    )
+    .limit(limit)
+  if (rows.length === 0) return []
+  const identities = await db
+    .select({ contactId: contactIdentities.contactId, pageId: contactIdentities.pageId })
+    .from(contactIdentities)
+    .where(and(inArray(contactIdentities.contactId, rows.map((r) => r.id)), inArray(contactIdentities.pageId, [...pageIds])))
+    .orderBy(contactIdentities.createdAt, contactIdentities.id)
+  const pagesOf = new Map<string, string[]>(rows.map((r) => [r.id, []]))
+  for (const i of identities) {
+    const list = pagesOf.get(i.contactId)!
+    if (!list.includes(i.pageId)) list.push(i.pageId)
+  }
+  return rows.map((r) => ({ ...r, stage: r.stage as ContactStage, pageIds: pagesOf.get(r.id)! }))
 }
 
 export interface ContactFacets {

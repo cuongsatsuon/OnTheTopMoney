@@ -12,6 +12,7 @@
 // Story 4.9: khách hàng — danh sách theo phạm vi, hồ sơ (thẻ, giai đoạn, ghi chú, SĐT), lịch sử nhiều trang, gộp khách
 // bằng tay + gợi ý gộp từ nhắn riêng, tóm tắt AI bằng job `inbox.contact_summary`. Trường dẫn xuất (`pageIds`,
 // `handledBy`) ghép ở `app/read-models/contacts.ts`.
+// Story 4.10: `searchContacts` — tìm khách không dấu / theo SĐT cho ⌘K; `/api/v1/search` ghép ở `app/read-models/search.ts`.
 export const MODULE = 'inbox'
 
 export {
@@ -23,6 +24,7 @@ export {
   listContacts,
   listMergeSuggestions,
   mergeContacts,
+  searchContacts,
   suggestMerge,
   updateContact,
   type BulkContactOp,
@@ -31,6 +33,7 @@ export {
   type ContactListQuery,
   type ContactPatch,
   type ContactRecord,
+  type ContactSearchHit,
   type ContactsDeps,
   type MergeResult,
 } from './contacts.ts'

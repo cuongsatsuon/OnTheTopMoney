@@ -4,7 +4,7 @@ import { ZodError } from 'zod'
 import type { ErrorCode, ErrorResponse } from '@ottm/shared'
 import type { AiDeps } from '../modules/ai/index.ts'
 import type { ConnectionsDeps } from '../modules/connections/index.ts'
-import type { Logger } from '../platform/log/index.ts'
+import { loggableError, type Logger } from '../platform/log/index.ts'
 import type { Db, Sql } from '../platform/db/index.ts'
 import { DEV_ALLOWED_ORIGINS } from '../platform/config/index.ts'
 import { AppError } from '../platform/errors/index.ts'
@@ -27,6 +27,7 @@ import { registerNotifications } from './notifications.ts'
 import { registerOAuth } from './oauth.ts'
 import { registerOpenAiSettings } from './openai-settings.ts'
 import { registerPages } from './pages.ts'
+import { registerSearch } from './search.ts'
 import { registerStream } from './stream.ts'
 import { registerWebhooks, type WebhooksDeps } from './webhooks.ts'
 
@@ -102,7 +103,8 @@ export function buildApp({ sql, db, logger, http = {}, loginLimiter, health, eve
     const isApp = err instanceof AppError
     const given = err.statusCode
     const status = isZod ? 400 : given && given >= 400 && given < 600 ? given : 500
-    if (status >= 500) req.log.error({ err }, 'lỗi không xử lý')
+    // `loggableError`: lỗi truy vấn Drizzle mang tham số (vd từ khoá tìm ⌘K có thể là SĐT) — không log tham số.
+    if (status >= 500) req.log.error({ err: loggableError(err) }, 'lỗi không xử lý')
     const code: ErrorCode = isApp
       ? err.code
       : isZod || err.validation || VALIDATION_STATUSES.has(status)
@@ -142,6 +144,8 @@ export function buildApp({ sql, db, logger, http = {}, loginLimiter, health, eve
   registerInbox(app, { db, media: mediaStores, events, jobs })
   // Khách hàng (Story 4.9): danh sách, hồ sơ, lịch sử, gộp (cần `events`), tóm tắt AI (cần `events` + `jobs`).
   registerContacts(app, { db, events, jobs, ...(clock ? { now: clock } : {}) })
+  // Tìm nhanh ⌘K (Story 4.10): trang, nhóm, khách không dấu — ghép `pages.search` + `inbox.searchContacts`.
+  registerSearch(app, { db })
   // Viết thử bằng AI (Story 3.4) + Gợi ý bằng AI ở Hộp thư (Story 4.8): cần `events` (reserve/settle hạn mức của AI
   // gateway, AD-7).
   if (events) {

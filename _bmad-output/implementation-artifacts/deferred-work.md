@@ -110,8 +110,8 @@
   summary: "Bỏ qua" gợi ý gộp khách (chủ shop không muốn gộp) — hiện gợi ý chỉ mất khi gộp.
   evidence: `contact_merge_suggestions` không có cờ bỏ qua; gợi ý chỉ sinh khi Meta xác nhận cùng người (nhắn riêng) nên hiếm khi sai. Thêm `DELETE /api/v1/contacts/:id/merge-suggestions/:otherId` nếu chủ shop phản ánh.
 - source_spec: `spec-4-9-khach-hang.md`
-  summary: Tìm khách không dấu (`unaccent` + `pg_trgm`) thay cho `q` ILIKE đơn giản của danh sách Khách hàng và hộp chọn "Gộp khách".
-  evidence: `listContacts` (server/src/modules/inbox/contacts.ts) lọc `q` bằng `ILIKE` (collation `pg_c_utf8`) trên tên/thẻ + chữ số SĐT — gõ "nguyen thu ha" không khớp "Nguyễn Thu Hà". Story 4.10 (`inbox.searchContacts`) nên dùng lại cho `q`.
-- source_spec: `spec-4-9-khach-hang.md`
   summary: Đua giữa gộp khách và nhắn riêng thành công — `linkRecipient` có thể ghi định danh / gợi ý gộp trỏ tới khách nguồn vừa bị gộp (xoá).
   evidence: `linkRecipient` (server/src/modules/inbox/send.ts) đọc `contact_id` của hội thoại rồi mới `insert contact_identities` / `suggestMerge`, không khoá dòng `contacts`; `mergeContacts` (server/src/modules/inbox/contacts.ts) commit xen giữa → lỗi khoá ngoại 23503, transaction giao tin rollback sau khi Meta đã nhận tin (retry có thể gửi trùng). Hiếm (gộp đúng lúc job gửi nhắn riêng); sửa bằng `select … for key share` dòng khách trong `linkRecipient` hoặc đọc lại `contact_id` khi gặp 23503.
+- source_spec: `spec-4-10-tim-nhanh.md`
+  summary: Kiểm bằng trình duyệt bảng lệnh ⌘K/Ctrl+K (mở/đóng, ↑/↓/↵/Esc, Esc không đóng ngăn kéo bên dưới, "Đổi phạm vi" mở bộ chọn, mở khách vào ngăn kéo Khách hàng) với trang/khách thật.
+  evidence: Chỉ có test API (Postgres thật) và test helper web (`web/src/lib/search.test.ts`); chưa chạy UI với phiên chủ shop + dữ liệu thật.

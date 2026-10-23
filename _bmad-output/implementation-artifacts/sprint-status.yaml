@@ -61,7 +61,7 @@ development_status:
   3-4-viết-thử-bằng-ai-theo-hồ-sơ: review
   epic-3-retrospective: optional
 
-  epic-4: in-progress
+  epic-4: review
   4-1-cổng-nhận-webhook-meta-và-threads: review
   4-2-tự-đăng-ký-webhook-trang-và-theo-dõi-sức-khoẻ-webhook: review
   4-3-tin-messenger-và-instagram-direct-vào-hộp-thư: review
@@ -71,7 +71,7 @@ development_status:
   4-7-gửi-tin-từ-hộp-thư-đúng-luật-24-giờ: review
   4-8-gợi-ý-bằng-ai-khi-trả-lời: review
   4-9-khách-hàng-danh-sách-thẻ-giai-đoạn-lịch-sử: review
-  4-10-tìm-nhanh-bằng-k: in-progress
+  4-10-tìm-nhanh-bằng-k: review
   epic-4-retrospective: optional
 
   epic-5: backlog

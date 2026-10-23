@@ -1,8 +1,9 @@
 import { Writable } from 'node:stream'
+import { DrizzleQueryError } from 'drizzle-orm'
 import { describe, expect, it } from 'vitest'
 import { buildApp } from '../src/app/app.ts'
 import type { Db, Sql } from '../src/platform/db/index.ts'
-import { createLogger, redactUrl } from '../src/platform/log/index.ts'
+import { createLogger, loggableError, redactUrl } from '../src/platform/log/index.ts'
 
 function capture() {
   const lines: string[] = []
@@ -56,6 +57,7 @@ describe('platform/log — redact theo AD-12', () => {
     )
     // Chữ ký / secret của Cloudinary (adapters/media) trong query.
     expect(redactUrl('/x?signature=s&api_secret=a&public_id=p')).toBe('/x?signature=REDACTED&api_secret=REDACTED&public_id=p')
+    expect(redactUrl('/api/v1/search?q=0912%20345')).toBe('/api/v1/search?q=REDACTED') // Story 4.10: từ khoá tìm (PII)
     expect(redactUrl('/healthz')).toBe('/healthz')
   })
 
@@ -70,5 +72,19 @@ describe('platform/log — redact theo AD-12', () => {
     const out = text()
     expect(out).toContain('/oauth/meta/callback?code=REDACTED')
     expect(out).not.toMatch(/secret/)
+  })
+
+  it('lỗi truy vấn Drizzle: log câu SQL và lỗi gốc, không log tham số (từ khoá tìm / SĐT)', () => {
+    const { sink, text } = capture()
+    const log = createLogger({ level: 'info' }, sink)
+    const err = new DrizzleQueryError('select id from contacts where search_phone(phone) like $1', ['%0912345678%'], new Error('canceling statement'))
+    log.error({ err: loggableError(err) }, 'lỗi không xử lý')
+    const out = text()
+    expect(out).toContain('Failed query: select id from contacts where search_phone(phone) like $1')
+    expect(out).toContain('canceling statement')
+    expect(out).toContain('log.test.ts') // còn khung gọi của lỗi gốc
+    expect(out).not.toContain('0912345678')
+    const other = new Error('khác')
+    expect(loggableError(other)).toBe(other)
   })
 })

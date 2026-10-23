@@ -29,6 +29,8 @@ import { errorMessageOf } from '../lib/error-messages'
 import { useNeedsHumanCount } from '../lib/inbox'
 import { useNotificationToasts, useNotifications } from '../lib/notifications'
 import { useRealtimeStatus } from '../lib/realtime'
+import { isPaletteShortcut, shortcutLabel } from '../lib/search'
+import { CommandPalette } from './CommandPalette'
 import { NotificationsDrawer } from './NotificationsDrawer'
 import { Avatar, Button, PageAvatar, cn } from './ui'
 
@@ -158,9 +160,9 @@ function AiBudgetChip() {
   )
 }
 
-function ScopeSwitcher() {
+/** Bộ chọn phạm vi; `open` do thanh trên giữ để lệnh "Đổi phạm vi" của bảng lệnh ⌘K mở được nó. */
+function ScopeSwitcher({ open, setOpen }: { open: boolean; setOpen: (open: boolean | ((o: boolean) => boolean)) => void }) {
   const { scope, setScope, scopeLabel } = useApp()
-  const [open, setOpen] = useState(false)
   const [q, setQ] = useState('')
   const ref = useRef<HTMLDivElement>(null)
 
@@ -168,7 +170,7 @@ function ScopeSwitcher() {
     const onClick = (e: MouseEvent) => ref.current && !ref.current.contains(e.target as Node) && setOpen(false)
     document.addEventListener('mousedown', onClick)
     return () => document.removeEventListener('mousedown', onClick)
-  }, [])
+  }, [setOpen])
 
   const choose = (s: Scope) => {
     setScope(s)
@@ -286,19 +288,38 @@ function AiBudgetBanner() {
   )
 }
 
+/** Nhãn phím tắt theo hệ điều hành (⌘K trên Mac, Ctrl K nơi khác). */
+const SHORTCUT = shortcutLabel(typeof navigator === 'undefined' ? '' : `${navigator.platform} ${navigator.userAgent}`)
+
 function Topbar() {
   const navigate = useNavigate()
+  const [paletteOpen, setPaletteOpen] = useState(false)
+  const [scopeOpen, setScopeOpen] = useState(false)
+  // ⌘K / Ctrl+K ở mọi màn (bắt ở pha capture để ô nhập đang focus không nuốt mất), bấm lại thì đóng.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!isPaletteShortcut(e)) return
+      e.preventDefault()
+      setPaletteOpen((o) => !o)
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [])
   return (
     <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border bg-surface px-6">
-      <ScopeSwitcher />
-      <div className="relative ml-2 max-w-md flex-1">
-        <Search size={16} className="absolute top-1/2 left-3 -translate-y-1/2 text-muted-foreground" />
-        <input
-          placeholder="Tìm khách hàng, bài viết, trang…"
-          className="h-9 w-full rounded-md border border-border bg-background pr-14 pl-9 text-sm focus:border-primary focus:outline-none"
-        />
-        <kbd className="absolute top-1/2 right-2.5 -translate-y-1/2 rounded border border-border bg-surface px-1.5 text-[11px] text-muted-foreground">⌘K</kbd>
-      </div>
+      <ScopeSwitcher open={scopeOpen} setOpen={setScopeOpen} />
+      <button
+        type="button"
+        onClick={() => setPaletteOpen(true)}
+        className="relative ml-2 flex h-9 max-w-md flex-1 items-center rounded-md border border-border bg-background pr-14 pl-9 text-left text-sm text-muted-foreground hover:border-slate-300 focus-visible:border-primary focus-visible:outline-none"
+        aria-haspopup="dialog"
+        aria-expanded={paletteOpen}
+        aria-keyshortcuts="Meta+K Control+K"
+      >
+        <Search size={16} className="absolute top-1/2 left-3 -translate-y-1/2" aria-hidden />
+        Tìm trang, nhóm, khách hàng…
+        <kbd className="absolute top-1/2 right-2.5 -translate-y-1/2 rounded border border-border bg-surface px-1.5 text-[11px]">{SHORTCUT}</kbd>
+      </button>
       <div className="ml-auto flex items-center gap-2">
         <Button variant="primary" icon={<Plus size={16} />} onClick={() => navigate('/soan-bai')}>
           Tạo bài viết
@@ -306,6 +327,7 @@ function Topbar() {
         <NotificationBell />
         <Avatar name="Chủ shop" color="#99F6E4" size={32} />
       </div>
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} onChangeScope={() => setScopeOpen(true)} />
     </header>
   )
 }

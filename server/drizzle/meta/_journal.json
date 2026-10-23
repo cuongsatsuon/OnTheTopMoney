@@ -148,6 +148,13 @@
       "when": 1792774603544,
       "tag": "0020_curved_venom",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1792776229802,
+      "tag": "0021_daffy_sunspot",
+      "breakpoints": true
     }
   ]
 }

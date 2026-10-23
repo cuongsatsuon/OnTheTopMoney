@@ -40,12 +40,15 @@ export function entityMatches(root: unknown, entity: string): boolean {
  *   chuyển trạng thái được ghi cùng lúc).
  * - Story 4.9: `message`, `conversation` → khách `['contacts', …]` (tin mới nhất, "Xử lý bởi", lịch sử); `contact`
  *   (sửa hồ sơ, gộp khách `contact.merged`) → cả tin `['messages', …]` (tên người viết trong luồng bình luận).
+ * - Story 4.10: `page` (kết nối lại đổi tên, gỡ), `group` (xoá nhóm), `contact` → kết quả ⌘K `['search', …]`.
  */
 export const ENTITY_ALSO_INVALIDATES: Readonly<Record<string, readonly string[]>> = {
   openai_key: ['settings'],
   settings: ['ai_budget'],
   message: ['conversation', 'contact'],
-  contact: ['conversation', 'message'],
+  contact: ['conversation', 'message', 'search'],
+  page: ['search'],
+  group: ['search'],
   conversation: ['message', 'contact'],
 }
 

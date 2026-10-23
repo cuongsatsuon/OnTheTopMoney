@@ -61,6 +61,9 @@ export const contacts = pgTable(
   },
   (t) => [
     check('contacts_stage_check', sql`${t.stage} in (${list(CONTACT_STAGES)})`),
+    // Tìm không dấu / theo SĐT (Story 4.10): biểu thức phải trùng `searchNorm` / `searchPhone` của `platform/db/search.ts`.
+    index('contacts_name_search_idx').using('gin', sql`search_norm(${t.name}) gin_trgm_ops`),
+    index('contacts_phone_search_idx').using('gin', sql`search_phone(${t.phone}) gin_trgm_ops`),
   ],
 )
 

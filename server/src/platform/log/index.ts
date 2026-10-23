@@ -1,4 +1,5 @@
 // pino JSON, redact theo AD-12: không bao giờ ghi token, khoá, cookie, mật khẩu.
+import { DrizzleQueryError } from 'drizzle-orm'
 import { pino, type Logger, type LoggerOptions } from 'pino'
 
 const SECRET_KEYS = [
@@ -43,7 +44,10 @@ export const REDACT_PATHS = [
   'req.body.password',
 ]
 
-/** Tham số query chứa bí mật (OAuth, webhook verify, token Graph) — thay giá trị khi log URL. */
+/**
+ * Tham số query chứa bí mật (OAuth, webhook verify, token Graph) hoặc PII — thay giá trị khi log URL. `q`: từ khoá tìm
+ * (⌘K `/api/v1/search`, lọc Khách hàng — Story 4.10) có thể là SĐT hay tên khách.
+ */
 export const SECRET_QUERY_PARAMS = new Set([
   'access_token',
   'refresh_token',
@@ -57,6 +61,7 @@ export const SECRET_QUERY_PARAMS = new Set([
   'signed_request',
   'signature',
   'api_secret',
+  'q',
 ])
 
 export function redactUrl(url: string | undefined): string | undefined {
@@ -73,6 +78,20 @@ export function redactUrl(url: string | undefined): string | undefined {
     parts.push(`${encodeURIComponent(key)}=${SECRET_QUERY_PARAMS.has(key.toLowerCase()) ? 'REDACTED' : encodeURIComponent(value)}`)
   }
   return `${url.slice(0, qIndex)}?${parts.join('&')}`
+}
+
+/**
+ * Lỗi đem log: `DrizzleQueryError` chép tham số truy vấn (từ khoá tìm, SĐT, nội dung tin…) vào `message`, `stack` và
+ * `params` → thay bằng lỗi chỉ còn câu SQL (tham số dạng `$n`) + lỗi gốc `cause`. Lỗi khác giữ nguyên.
+ */
+export function loggableError(err: unknown): unknown {
+  if (!(err instanceof DrizzleQueryError)) return err
+  const safe = new Error(`Failed query: ${err.query}`, { cause: err.cause })
+  safe.name = 'DrizzleQueryError'
+  // Giữ khung gọi của lỗi gốc, bỏ dòng đầu (chứa `params`).
+  const frames = err.stack?.indexOf('\n    at ') ?? -1
+  safe.stack = `${safe.name}: ${safe.message}${frames >= 0 ? err.stack!.slice(frames) : ''}`
+  return safe
 }
 
 interface ReqLike {

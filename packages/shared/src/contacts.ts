@@ -123,7 +123,7 @@ export const ContactsQuery = z.object({
   stage: ContactStage.optional(),
   /** Khớp thẻ không phân biệt hoa thường. */
   tag: ContactTag.optional(),
-  /** Tìm đơn giản theo tên, SĐT (chỉ chữ số), thẻ. Tìm không dấu ở Story 4.10. */
+  /** Tìm không dấu (Story 4.10): mỗi từ là chuỗi con của tên hoặc một thẻ; hoặc SĐT theo chữ số (≥3). */
   q: z.string().trim().min(1).max(100).optional(),
   cursor: z.string().min(1).max(200).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(INBOX_PAGE_SIZE),

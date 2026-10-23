@@ -20,7 +20,11 @@ export const groups = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
   },
-  (t) => [check('groups_color_check', sql`${t.color} in (${GROUP_COLOR_LIST})`)],
+  (t) => [
+    check('groups_color_check', sql`${t.color} in (${GROUP_COLOR_LIST})`),
+    // Tìm không dấu (Story 4.10): biểu thức phải trùng `searchNorm` của `platform/db/search.ts`.
+    index('groups_name_search_idx').using('gin', sql`search_norm(${t.name}) gin_trgm_ops`),
+  ],
 )
 
 /**
@@ -53,5 +57,8 @@ export const pages = pgTable(
     check('pages_connection_status_check', sql`${t.connectionStatus} in (${STATUS_LIST})`),
     index('pages_active_idx').on(t.connectedAt).where(sql`${t.removedAt} is null`),
     index('pages_group_idx').on(t.groupId).where(sql`${t.groupId} is not null`),
+    // Tìm không dấu (Story 4.10): biểu thức phải trùng `searchNorm` của `platform/db/search.ts`.
+    index('pages_name_search_idx').using('gin', sql`search_norm(${t.name}) gin_trgm_ops`),
+    index('pages_handle_search_idx').using('gin', sql`search_norm(${t.handle}) gin_trgm_ops`),
   ],
 )
