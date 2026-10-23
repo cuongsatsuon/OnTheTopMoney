@@ -26,7 +26,7 @@ import { matchesQuery } from '../lib/scope'
 import { usePages } from '../lib/connections'
 import { useLogout } from '../lib/session'
 import { errorMessageOf } from '../lib/error-messages'
-import { useNeedsAttentionCount } from '../lib/inbox'
+import { useNeedsHumanCount } from '../lib/inbox'
 import { useNotificationToasts, useNotifications } from '../lib/notifications'
 import { useRealtimeStatus } from '../lib/realtime'
 import { NotificationsDrawer } from './NotificationsDrawer'
@@ -64,7 +64,7 @@ function LogoutButton() {
 
 function Sidebar() {
   const { scope } = useApp()
-  const needsYou = useNeedsAttentionCount(scope)
+  const needsYou = useNeedsHumanCount(scope)
   return (
     <aside className="flex w-60 shrink-0 flex-col bg-sidebar text-sidebar-foreground">
       <div className="flex h-14 items-center gap-2.5 px-5">

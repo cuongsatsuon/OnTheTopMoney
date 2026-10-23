@@ -4,6 +4,9 @@
 // - Tin: trang MỚI NHẤT theo `(platform_timestamp, id)`, trả theo thứ tự hiển thị (cũ → mới); cursor lùi về tin cũ.
 // - Story 4.4: hội thoại `comment` kèm bài được bình luận; tin kèm sửa/xoá/ẩn và khách viết tin (luồng bình luận có
 //   thể có nhiều người).
+// - Story 4.6: lọc + đếm theo tab ở server (AD-9) bằng MỘT điều kiện `tabCondition` dùng chung cho danh sách, số đếm
+//   và badge. "Cần xử lý" sắp chờ lâu nhất trước theo `coalesce(waiting_since, last_customer_message_at,
+//   last_message_at)` — phòng hờ hội thoại `human` chưa có mốc chờ (dữ liệu trước 4.6) vẫn có chỗ đứng.
 // Trang đã gỡ → hội thoại không còn hiện (danh sách lọc theo trang chưa gỡ; `getConversation` kiểm `getPage`).
 import type {
   AttachmentDto,
@@ -22,8 +25,9 @@ import type {
   AttachmentError,
   AttachmentKind,
   AttachmentStatus,
+  InboxTab,
 } from '@ottm/shared'
-import { and, asc, count, desc, eq, inArray, lt, ne, or } from 'drizzle-orm'
+import { and, asc, count, desc, eq, inArray, lt, ne, or, sql, type SQL } from 'drizzle-orm'
 import type { DbExecutor } from '../../platform/db/index.ts'
 import { AppError } from '../../platform/errors/index.ts'
 import { getPage } from '../pages/index.ts'
@@ -32,6 +36,11 @@ import { contactIdentities, contacts, conversations, messageAttachments, message
 export interface PageQuery {
   cursor?: string | undefined
   limit: number
+}
+
+export interface ConversationPageQuery extends PageQuery {
+  /** Mặc định `all`. */
+  tab?: InboxTab | undefined
 }
 
 export interface Paged<T> {
@@ -75,32 +84,73 @@ const conversationColumns = {
   contactStage: contacts.stage,
 }
 
-/** Danh sách hội thoại của các trang `pageIds` (đã giải phạm vi, chỉ trang chưa gỡ). */
-export async function listConversations(db: DbExecutor, pageIds: readonly string[], query: PageQuery): Promise<Paged<ConversationDto>> {
+/**
+ * Gốc của tin không phải `system` mới nhất trong hội thoại (subquery tương quan, chạy trên index
+ * `(conversation_id, platform_timestamp, id)`) — cùng định nghĩa với `preview` của DTO.
+ */
+const lastNonSystemOrigin = sql`(
+  select m.origin from ${messages} m
+  where m.conversation_id = ${conversations.id} and m.origin <> 'system'
+  order by m.platform_timestamp desc, m.id desc
+  limit 1
+)`
+
+/** Điều kiện của tab (AD-9); `undefined` = không lọc (`all`, gồm cả `triage`). */
+export function tabCondition(tab: InboxTab): SQL | undefined {
+  switch (tab) {
+    case 'all':
+      return undefined
+    case 'ai':
+      return eq(conversations.state, 'ai')
+    case 'done':
+      return eq(conversations.state, 'done')
+    case 'needs_human':
+      return sql`(${conversations.state} = 'handoff' or (${conversations.state} = 'human' and ${lastNonSystemOrigin} = 'customer'))`
+  }
+}
+
+/** Khoá sắp tab "Cần xử lý": mốc khách bắt đầu chờ. Giữ khớp với `waitKeyOf`. */
+const waitKey = sql`coalesce(${conversations.waitingSince}, ${conversations.lastCustomerMessageAt}, ${conversations.lastMessageAt})`
+const waitKeyOf = (c: typeof conversations.$inferSelect): Date => c.waitingSince ?? c.lastCustomerMessageAt ?? c.lastMessageAt
+
+/**
+ * Danh sách hội thoại của các trang `pageIds` (đã giải phạm vi, chỉ trang chưa gỡ) theo tab. `needs_human`: chờ lâu
+ * nhất trước `(waitKey, id)` tăng dần; tab khác: mới nhất trước `(last_message_at, id)` giảm dần.
+ */
+export async function listConversations(db: DbExecutor, pageIds: readonly string[], query: ConversationPageQuery): Promise<Paged<ConversationDto>> {
   if (pageIds.length === 0) return { items: [], nextCursor: null }
+  const tab = query.tab ?? 'all'
   const cursor = query.cursor ? decodeCursor(query.cursor) : null
+  const byWait = tab === 'needs_human'
+  const after = !cursor
+    ? undefined
+    : byWait
+      ? sql`(${waitKey} > ${cursor.at.toISOString()}::timestamptz or (${waitKey} = ${cursor.at.toISOString()}::timestamptz and ${conversations.id} > ${cursor.id}))`
+      : or(lt(conversations.lastMessageAt, cursor.at), and(eq(conversations.lastMessageAt, cursor.at), lt(conversations.id, cursor.id)))
   const rows = await db
     .select(conversationColumns)
     .from(conversations)
     .innerJoin(contactIdentities, eq(contactIdentities.id, conversations.contactIdentityId))
     .innerJoin(contacts, eq(contacts.id, contactIdentities.contactId))
-    .where(
-      and(
-        inArray(conversations.pageId, [...pageIds]),
-        cursor
-          ? or(
-              lt(conversations.lastMessageAt, cursor.at),
-              and(eq(conversations.lastMessageAt, cursor.at), lt(conversations.id, cursor.id)),
-            )
-          : undefined,
-      ),
-    )
-    .orderBy(desc(conversations.lastMessageAt), desc(conversations.id))
+    .where(and(inArray(conversations.pageId, [...pageIds]), tabCondition(tab), after))
+    .orderBy(...(byWait ? [asc(waitKey), asc(conversations.id)] : [desc(conversations.lastMessageAt), desc(conversations.id)]))
     .limit(query.limit + 1)
   const page = rows.slice(0, query.limit)
   const items = await toConversationDtos(db, page.map((r) => ({ ...r.conv, contactId: r.contactId, contactName: r.contactName, contactStage: r.contactStage })))
   const last = page.at(-1)
-  return { items, nextCursor: rows.length > query.limit && last ? encodeCursor(last.conv.lastMessageAt, last.conv.id) : null }
+  const nextCursor =
+    rows.length > query.limit && last ? encodeCursor(byWait ? waitKeyOf(last.conv) : last.conv.lastMessageAt, last.conv.id) : null
+  return { items, nextCursor }
+}
+
+/** Số hội thoại của tab trong các trang `pageIds` (badge "Cần xử lý" = `needs_human`). */
+export async function countConversations(db: DbExecutor, pageIds: readonly string[], tab: InboxTab): Promise<number> {
+  if (pageIds.length === 0) return 0
+  const [row] = await db
+    .select({ n: count() })
+    .from(conversations)
+    .where(and(inArray(conversations.pageId, [...pageIds]), tabCondition(tab)))
+  return Number(row?.n ?? 0)
 }
 
 /** Một hội thoại; `null` khi không có hoặc trang của nó đã gỡ. */
@@ -180,7 +230,10 @@ async function toConversationDtos(db: DbExecutor, rows: ConversationRow[]): Prom
   })
 }
 
-/** Điều kiện tab "Cần xử lý" (AD-9): `handoff`, hoặc `human` mà tin không phải `system` mới nhất là của khách. */
+/**
+ * Điều kiện tab "Cần xử lý" (AD-9): `handoff`, hoặc `human` mà tin không phải `system` mới nhất là của khách. Bản
+ * TypeScript của `tabCondition('needs_human')` cho DTO — đổi một bên thì đổi cả bên kia.
+ */
 export function needsAttention(state: ConversationState, lastOrigin: MessageOrigin | null): boolean {
   return state === 'handoff' || (state === 'human' && lastOrigin === 'customer')
 }

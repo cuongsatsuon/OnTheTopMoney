@@ -59,9 +59,6 @@
   summary: Gỡ trang thì huỷ đăng ký `DELETE /{page}/subscribed_apps` ở Meta.
   evidence: `removePage` xoá credential nhưng Meta vẫn gửi sự kiện của trang đã gỡ, và chúng được tính là sự kiện thật trong health.
 - source_spec: `spec-4-3-tin-dm-vao-hop-thu.md`
-  summary: Badge "Cần xử lý" ở sidebar/tab đếm trên các hội thoại đã tải (trang đầu 50) — cần đếm phía server + sắp theo `waiting_since`.
-  evidence: `useNeedsAttentionCount` đếm `needsAttention` của trang danh sách đã tải; Story 4.6 làm tab/badge đúng AD-9 (lọc + đếm ở server).
-- source_spec: `spec-4-3-tin-dm-vao-hop-thu.md`
   summary: `inbox.fetch_profile` gặp `TOKEN_INVALID` chỉ bỏ qua — chưa `connections.markDisconnected` như AD-10 yêu cầu cho đường gửi tin.
   evidence: Lấy tên khách là việc phụ; cron `connections.token_check` vẫn phát hiện token hỏng. Làm cùng `inbox.send` (Story 4.7) để mọi lời gọi Meta của `inbox` ánh xạ lỗi token một chỗ.
 - source_spec: `spec-4-3-tin-dm-vao-hop-thu.md`
@@ -79,3 +76,6 @@
 - source_spec: `spec-4-4-binh-luan-vao-hop-thu.md`
   summary: Trả lời Threads lồng nhiều cấp tới trước tin cha → `thread_key` = id tin cha, tách thành hội thoại riêng.
   evidence: `ingestComment` tra hội thoại của tin cha ngoài khoá luồng; tin cha chưa ingest thì dùng `parentId`. FB/IG không bị (cha luôn là bình luận gốc). Làm khi xác nhận payload Threads thật (có `root` id của luồng hay không).
+- source_spec: `spec-4-6-tab-tiep-quan-danh-dau-xong.md`
+  summary: Bật lại AI cho hội thoại mà khách đang chờ (tin không phải `system` mới nhất là `customer`) → cần chạy cổng AI ngay cho tin chờ sẵn (hoặc chặn/cảnh báo), không để hội thoại nằm ở tab "AI đang trả lời" mà không ai trả lời.
+  evidence: `applyUserAction('enable-ai')` đặt `waiting_since=null`, hội thoại rời "Cần xử lý"; `autoreply.triage` chỉ chạy khi có `message.received` mới. Trước Epic 5 cổng luôn đóng nên AI không bao giờ trả lời tin đó. Làm cùng chuỗi cổng AD-16 ở Epic 5 (kích hoạt quyết định khi bật lại AI).

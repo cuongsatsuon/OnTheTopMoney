@@ -1,7 +1,8 @@
 // Story 4.3 — helper thuần của Hộp thư: phạm vi gửi server, tab, nhãn khách, xem trước, lý do hệ thống, thời gian
 // (giờ VN), gộp trang tin, URL đính kèm. Story 4.4: nhãn kênh bình luận/Threads, dòng bài, nhãn xoá/ẩn, người viết tin,
-// ghi chú ô soạn theo kênh.
-import { STATE_CHANGE_REASONS, ATTACHMENT_ERRORS, MESSAGE_REMOVALS, type ConversationPreview } from '@ottm/shared'
+// ghi chú ô soạn theo kênh. Story 4.6: thao tác theo trạng thái, công tắc AI, ghi chú handoff (UX-DR5), khoá query tab/
+// badge nằm dưới gốc `conversations` để hint realtime làm cũ.
+import { CONVERSATION_STATES, INBOX_TABS, STATE_CHANGE_REASONS, ATTACHMENT_ERRORS, MESSAGE_REMOVALS, type ConversationPreview } from '@ottm/shared'
 import { describe, expect, it } from 'vitest'
 import {
   ATTACHMENT_ERROR_TEXT,
@@ -11,12 +12,16 @@ import {
   bubbleKind,
   channelLabel,
   composerNote,
+  INBOX_TAB_LABEL,
+  aiSwitchAction,
   contactLabel,
-  countNeedsAttention,
+  conversationControls,
+  conversationsCountKey,
+  conversationsListKey,
   durationLabel,
   flattenMessages,
+  handoffNote,
   listTimeLabel,
-  matchesTab,
   messageTimeLabel,
   postLine,
   previewText,
@@ -36,17 +41,41 @@ describe('serverScope', () => {
   })
 })
 
-describe('matchesTab / countNeedsAttention', () => {
-  const conv = (state: 'triage' | 'ai' | 'handoff' | 'human' | 'done', needsAttention = false) => ({ state, needsAttention })
-  it('Tất cả gồm cả triage; Cần xử lý theo needsAttention; AI = ai; Đã xong = done', () => {
-    expect(matchesTab(conv('triage'), 'all')).toBe(true)
-    expect(matchesTab(conv('triage'), 'needs')).toBe(false)
-    expect(matchesTab(conv('human', true), 'needs')).toBe(true)
-    expect(matchesTab(conv('human', false), 'needs')).toBe(false)
-    expect(matchesTab(conv('ai'), 'ai')).toBe(true)
-    expect(matchesTab(conv('done'), 'done')).toBe(true)
-    expect(matchesTab(conv('done'), 'ai')).toBe(false)
-    expect(countNeedsAttention([conv('human', true), conv('handoff', true), conv('ai')])).toBe(2)
+describe('thao tác theo trạng thái (Story 4.6)', () => {
+  it('Tiếp quản ở triage/ai/handoff; công tắc AI bật = ai, khoá ở triage/done; Đánh dấu xong khi chưa done', () => {
+    const table = Object.fromEntries(CONVERSATION_STATES.map((s) => [s, conversationControls(s)]))
+    expect(table).toEqual({
+      triage: { takeover: true, aiSwitch: { checked: false, disabled: true }, markDone: true },
+      ai: { takeover: true, aiSwitch: { checked: true, disabled: false }, markDone: true },
+      handoff: { takeover: true, aiSwitch: { checked: false, disabled: false }, markDone: true },
+      human: { takeover: false, aiSwitch: { checked: false, disabled: false }, markDone: true },
+      done: { takeover: false, aiSwitch: { checked: false, disabled: true }, markDone: false },
+    })
+  })
+
+  it('gạt công tắc: bật → enable-ai; tắt → Tiếp quản', () => {
+    expect(aiSwitchAction(true)).toBe('enable-ai')
+    expect(aiSwitchAction(false)).toBe('takeover')
+  })
+
+  it('tab: đủ 4 nhãn; khoá danh sách/số đếm theo phạm vi + tab, dưới gốc conversations', () => {
+    expect(INBOX_TABS.map((t) => INBOX_TAB_LABEL[t])).toEqual(['Tất cả', 'Cần xử lý', 'AI đang trả lời', 'Đã xong'])
+    expect(conversationsListKey('all', 'needs_human')).toEqual(['conversations', 'list', 'all', 'needs_human'])
+    expect(conversationsCountKey(`page:${UUID}`, 'needs_human')).toEqual(['conversations', 'count', `page:${UUID}`, 'needs_human'])
+  })
+})
+
+describe('handoffNote (UX-DR5)', () => {
+  const now = new Date('2026-10-23T03:30:00.000Z')
+  it('handoff: lý do theo HandoffReason + thời gian chờ từ waitingSince', () => {
+    expect(handoffNote({ state: 'handoff', stateReason: 'CUSTOMER_ASKED_HUMAN', waitingSince: '2026-10-23T03:18:00.000Z' }, now)).toBe(
+      'Khách muốn nói chuyện với người thật · khách chờ 12 phút',
+    )
+    expect(handoffNote({ state: 'handoff', stateReason: 'AI_BUDGET_EXCEEDED', waitingSince: null }, now)).toBe('Đã hết hạn mức AI tháng này — chuyển cho bạn')
+  })
+  it('không phải handoff hoặc chưa có lý do → không ghi chú', () => {
+    expect(handoffNote({ state: 'human', stateReason: 'AI_OFF', waitingSince: '2026-10-23T03:18:00.000Z' }, now)).toBeNull()
+    expect(handoffNote({ state: 'handoff', stateReason: null, waitingSince: null }, now)).toBeNull()
   })
 })
 

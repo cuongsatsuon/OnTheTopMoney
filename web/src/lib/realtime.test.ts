@@ -110,6 +110,23 @@ describe('createRealtimeClient — Hộp thư (Story 4.3)', () => {
     // conversation.state_changed ghi kèm tin `system` (lý do chuyển) → khung chat cũng phải tải lại.
     expect(hintInvalidates('messages', 'conversation')).toBe(true)
   })
+
+  it('conversation.state_changed (Tiếp quản ở tab khác) → làm cũ danh sách theo tab, badge, chi tiết và khung chat (Story 4.6)', async () => {
+    const { client, queryClient } = setup()
+    const keys = [
+      ['conversations', 'list', 'all', 'needs_human'],
+      ['conversations', 'count', 'all', 'needs_human'],
+      ['conversations', 'detail', 'c1'],
+      ['messages', 'c1'],
+    ]
+    const queries = keys.map((queryKey) => queryClient.getQueryCache().build(queryClient, { queryKey, queryFn: async () => 'x' }))
+    await Promise.all(queries.map((q) => q.fetch()))
+    client.start()
+    FakeEventSource.last.emit('ready')
+    FakeEventSource.last.emit('conversation.state_changed', { type: 'conversation.state_changed', entity: 'conversation', id: 'c1', pageId: 'p1' })
+    for (const key of keys) expect(queryClient.getQueryState(key)?.isInvalidated).toBe(true)
+    client.stop()
+  })
 })
 
 describe('createRealtimeClient', () => {

@@ -134,7 +134,7 @@ export function buildApp({ sql, db, logger, http = {}, loginLimiter, health, eve
   const mediaStores = media ?? createMediaStores({ CLOUDINARY_FOLDER: 'ottm' })
   registerBrandProfiles(app, { db, media: mediaStores })
   // Hộp thư (Story 4.3): hội thoại, tin, đính kèm (đọc từ kho riêng tư).
-  registerInbox(app, { db, media: mediaStores })
+  registerInbox(app, { db, media: mediaStores, events })
   // Viết thử bằng AI (Story 3.4): cần `events` (reserve/settle hạn mức của AI gateway, AD-7).
   if (events) {
     registerBrandSample(app, {

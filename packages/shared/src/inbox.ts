@@ -1,7 +1,8 @@
 // Hộp thư (Story 4.3, AD-9, AD-11, AD-18): DTO hội thoại, tin, đính kèm cho REST. Module `inbox` là chủ duy nhất
 // của khách/hội thoại/tin; web chỉ đọc qua các schema này và refetch khi có hint realtime (AD-3).
 // Story 4.3: DM (Messenger, Instagram Direct). Story 4.4: bình luận Facebook/Instagram và trả lời Threads (`channel=comment`,
-// bài được bình luận, tin bị sửa/xoá/ẩn, người trả lời khác trong cùng luồng).
+// bài được bình luận, tin bị sửa/xoá/ẩn, người trả lời khác trong cùng luồng). Story 4.6: tab lọc/đếm ở server, lệnh
+// Tiếp quản / bật lại AI / Đánh dấu xong.
 import { z } from 'zod'
 import {
   ContactStage,
@@ -145,12 +146,45 @@ export type ConversationDto = z.infer<typeof ConversationDto>
 
 export const INBOX_PAGE_SIZE = 50
 
-/** `GET /api/v1/conversations?scope=&cursor=&limit=` — tin mới nhất trước. `scope` kiểm bằng `ScopeParam` ở server. */
+/**
+ * Tab Hộp thư (Story 4.6, AD-9): `all` = mọi trạng thái (gồm `triage`) · `needs_human` = "Cần xử lý" (`handoff`, hoặc
+ * `human` mà tin không phải `system` mới nhất là của khách — cùng điều kiện với badge sidebar) · `ai` = "AI đang trả
+ * lời" · `done` = "Đã xong". Server lọc và đếm; web không lọc lại trên trang đã tải.
+ */
+export const INBOX_TABS = ['all', 'needs_human', 'ai', 'done'] as const
+export const InboxTab = z.enum(INBOX_TABS)
+export type InboxTab = z.infer<typeof InboxTab>
+
+/**
+ * `GET /api/v1/conversations?scope=&tab=&cursor=&limit=` — `needs_human`: chờ lâu nhất trước (theo `waitingSince`);
+ * tab khác: tin mới nhất trước. `scope` kiểm bằng `ScopeParam` ở server.
+ */
 export const ConversationsQuery = z.object({
+  tab: InboxTab.default('all'),
   cursor: z.string().min(1).max(200).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(INBOX_PAGE_SIZE),
 })
 export type ConversationsQuery = z.input<typeof ConversationsQuery>
+
+/** `GET /api/v1/conversations/count?scope=&tab=` — số hội thoại của tab (badge "Cần xử lý": `tab=needs_human`). */
+export const ConversationCountQuery = z.object({
+  tab: InboxTab.default('all'),
+})
+export type ConversationCountQuery = z.input<typeof ConversationCountQuery>
+
+export const ConversationCountResponse = z.object({
+  count: z.number().int().nonnegative(),
+})
+export type ConversationCountResponse = z.infer<typeof ConversationCountResponse>
+
+/**
+ * Lệnh của chủ shop trên một hội thoại (Story 4.6, AD-9) — `POST /api/v1/conversations/:id/<lệnh>`, trả
+ * `ConversationDto` sau khi đổi: `takeover` (Tiếp quản: → `human`, tắt AI) · `enable-ai` (bật lại AI: → `ai`) ·
+ * `done` (Đánh dấu xong). Đã ở trạng thái đích → không đổi gì; trạng thái nguồn không hợp lệ → 409.
+ */
+export const CONVERSATION_ACTIONS = ['takeover', 'enable-ai', 'done'] as const
+export const ConversationAction = z.enum(CONVERSATION_ACTIONS)
+export type ConversationAction = z.infer<typeof ConversationAction>
 
 export const ListConversationsResponse = z.object({
   items: z.array(ConversationDto),

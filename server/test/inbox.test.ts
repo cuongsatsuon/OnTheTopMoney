@@ -261,15 +261,29 @@ describe('ingest DM + triage', () => {
     expect(emittedOf('conversation.state_changed').map((e) => (e.payload as { version: number }).version)).toEqual([1, 3])
   })
 
-  it.each(['ai', 'handoff'] as const)('hội thoại %s → giữ trạng thái (Epic 5 xử lý), triage bỏ qua', async (state) => {
+  it('hội thoại handoff → giữ trạng thái (Epic 5 xử lý), triage bỏ qua', async () => {
     await page('facebook', 'FB_S')
     await dm('FB_S')
     await runTriage()
-    await handle.sql`update conversations set state = ${state}`
+    await handle.sql`update conversations set state = 'handoff'`
     await dm('FB_S')
     expect(await runTriage()).toEqual(['skipped'])
     const [conv] = await conversationsRows()
-    expect(conv!.state).toBe(state)
+    expect(conv!.state).toBe('handoff')
+  })
+
+  it('hội thoại ai (Story 4.6: bật lại AI) + tin khách → cổng AI đóng trước Epic 5 → human AI_OFF', async () => {
+    await page('facebook', 'FB_S2')
+    await dm('FB_S2', { ts: at(5) })
+    await runTriage()
+    await handle.sql`update conversations set state = 'ai', waiting_since = null`
+    await dm('FB_S2', { ts: at(6) })
+    expect(await runTriage()).toEqual(['applied'])
+    const [conv] = await conversationsRows()
+    expect(conv).toMatchObject({ state: 'human', state_reason: 'AI_OFF', state_version: 2 })
+    // `ai` không đếm chờ → mốc chờ lấy từ tin khách cuối.
+    expect(conv!.waiting_since!).toBe(at(6))
+    expect(emittedOf('conversation.state_changed').at(-1)!.payload).toMatchObject({ from: 'ai', to: 'human', reasonCode: 'AI_OFF' })
   })
 
   it('cùng người, trang khác (PSID khác) → định danh + khách riêng, không gộp', async () => {

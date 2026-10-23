@@ -2,45 +2,47 @@
 // khách đọc API thật. Tin mới tới → hint
 // realtime làm cũ `['conversations', …]` + `['messages', …]` → refetch (≤3 giây); mất kết nối → dải "Đang kết nối
 // lại…" của AppShell, nối lại thì tải bù (lib/realtime.ts).
-// Thao tác của story sau (Tiếp quản, Đánh dấu xong, bật AI — 4.6; gửi tin — 4.7; Gợi ý bằng AI — 4.8; sửa panel
-// khách — 4.9) hiện nhưng khoá, có gợi ý "Sắp có": không giả lập thao tác trên khách thật.
-import type { AttachmentDto, ConversationDto, MessageDto, Platform } from '@ottm/shared'
+// Story 4.6: tab lọc + số "Cần xử lý" từ server; Tiếp quản (nút, công tắc "AI tự trả lời", phím `T`), bật lại AI,
+// Đánh dấu xong; ghi chú "AI chuyển cho bạn" nêu lý do + thời gian khách chờ (UX-DR5).
+// Thao tác của story sau (gửi tin — 4.7; Gợi ý bằng AI — 4.8; sửa panel khách — 4.9) hiện nhưng khoá, có gợi ý
+// "Sắp có": không giả lập thao tác trên khách thật.
+import { INBOX_TABS, type AttachmentDto, type ConversationAction, type ConversationDto, type InboxTab, type MessageDto, type Platform } from '@ottm/shared'
 import { CheckCheck, FileText, Hand, MessageSquareText, Newspaper, Paperclip, Search, Sparkles, TriangleAlert, UserRound } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { Skeleton } from '../components/Skeleton'
-import { Avatar, Button, Chip, Drawer, EmptyState, PageAvatar, PlatformIcon, Tabs, cn } from '../components/ui'
+import { Avatar, Button, Chip, Drawer, EmptyState, PageAvatar, PlatformIcon, Switch, Tabs, cn } from '../components/ui'
 import { pages as pageStore, type Page } from '../data/mock'
 import { useApp } from '../lib/app-context'
 import { errorMessageOf } from '../lib/error-messages'
 import {
   ATTACHMENT_ERROR_TEXT,
   CHANNEL_LABEL,
+  INBOX_TAB_LABEL,
   REASON_TEXT,
   REMOVAL_TEXT,
+  aiSwitchAction,
   attachmentUrl,
   bubbleKind,
   channelLabel,
   composerNote,
   contactLabel,
-  countNeedsAttention,
+  conversationControls,
   durationLabel,
   flattenMessages,
+  handoffNote,
   listTimeLabel,
-  matchesTab,
   messageTimeLabel,
   postLine,
   previewText,
   senderLabel,
   useConversation,
+  useConversationAction,
   useConversations,
   useMessages,
-  type InboxTab,
+  useNeedsHumanCount,
 } from '../lib/inbox'
 import { WEBHOOK_PRODUCT_LABEL, WEBHOOK_SETTINGS_PATH, stalledProducts, useWebhookHealth } from '../lib/webhooks'
-
-/** Gợi ý trên nút của story sau. */
-const SOON = 'Sắp có — tạm thời trả lời khách trên Messenger/Instagram'
 
 const STAGE_LABEL: Record<ConversationDto['contact']['stage'], string> = {
   new: 'Mới',
@@ -74,7 +76,7 @@ function useNow(intervalMs = 30_000): Date {
 /* ---------- Màn hình ---------- */
 
 export default function Inbox() {
-  const { scope, scopeLabel } = useApp()
+  const { scope, scopeLabel, notify } = useApp()
   const [params, setParams] = useSearchParams()
   const [tab, setTab] = useState<InboxTab>('all')
   const [query, setQuery] = useState('')
@@ -82,9 +84,10 @@ export default function Inbox() {
   const now = useNow()
   const rowRefs = useRef<Record<string, HTMLButtonElement | null>>({})
 
-  const convs = useConversations(scope)
+  // Server lọc theo tab (AD-9); ô tìm chỉ lọc trong các hội thoại đã tải của tab.
+  const convs = useConversations(scope, tab)
   const all = useMemo(() => convs.data?.pages.flatMap((p) => p.items) ?? [], [convs.data])
-  const searched = useMemo(() => {
+  const list = useMemo(() => {
     const q = query.trim().toLowerCase()
     if (!q) return all
     return all.filter((c) => {
@@ -92,8 +95,7 @@ export default function Inbox() {
       return [contactLabel(c.contact, page?.platform), page?.name ?? '', previewText(c.preview)].some((s) => s.toLowerCase().includes(q))
     })
   }, [all, query])
-  const list = useMemo(() => searched.filter((c) => matchesTab(c, tab)), [searched, tab])
-  const needsCount = countNeedsAttention(all)
+  const needsCount = useNeedsHumanCount(scope)
 
   const paramId = params.get('c')
   const inList = all.find((c) => c.id === paramId)
@@ -102,17 +104,34 @@ export default function Inbox() {
 
   const select = useCallback((id: string) => setParams({ c: id }, { replace: true }), [setParams])
 
+  const { mutate: mutateAction, isPending: actionPending } = useConversationAction()
+  // Ghim hội thoại vào `?c=` trước khi đổi trạng thái: hội thoại rời tab hiện tại (vd Tiếp quản ở tab "AI đang trả
+  // lời") thì khung chat vẫn ở khách vừa thao tác, không nhảy sang `list[0]` là khách khác.
+  const runAction = useCallback(
+    (id: string, a: ConversationAction) => {
+      if (paramId !== id) select(id)
+      mutateAction({ id, action: a }, { onError: (err) => notify(errorMessageOf(err)) })
+    },
+    [mutateAction, notify, paramId, select],
+  )
+
   useEffect(() => {
     if (selected) rowRefs.current[selected.id]?.scrollIntoView({ block: 'nearest' })
   }, [selected])
 
-  // Phím tắt: ↑/↓ chuyển hội thoại (khi không gõ trong ô nhập).
+  // Phím tắt: ↑/↓ chuyển hội thoại, `T` tiếp quản (khi không gõ trong ô nhập, không có hộp thoại).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null
       if (el && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' || el.tagName === 'SELECT' || el.isContentEditable)) return
       if (e.metaKey || e.ctrlKey || e.altKey) return
       if (document.querySelector('[role="dialog"]')) return
+      if (e.key === 't' || e.key === 'T') {
+        if (!selected || actionPending || !conversationControls(selected.state).takeover) return
+        e.preventDefault()
+        runAction(selected.id, 'takeover')
+        return
+      }
       if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
       if (!list.length) return
       e.preventDefault()
@@ -123,7 +142,7 @@ export default function Inbox() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [list, selected, select])
+  }, [list, selected, select, runAction, actionPending])
 
   const page = selected ? findPage(selected.pageId) : undefined
   const name = selected ? contactLabel(selected.contact, page?.platform) : ''
@@ -153,12 +172,7 @@ export default function Inbox() {
           className="mt-2 px-2 [&>button]:px-1.5 [&>button]:text-[13px]"
           value={tab}
           onChange={setTab}
-          tabs={[
-            { id: 'all', label: 'Tất cả' },
-            { id: 'needs', label: 'Cần xử lý', count: needsCount },
-            { id: 'ai', label: 'AI đang trả lời' },
-            { id: 'done', label: 'Đã xong' },
-          ]}
+          tabs={INBOX_TABS.map((id) => ({ id, label: INBOX_TAB_LABEL[id], ...(id === 'needs_human' ? { count: needsCount } : {}) }))}
         />
         <WebhookStalledBanner />
         <div className="scrollbar-thin flex-1 overflow-y-auto" role="listbox" aria-label="Hội thoại">
@@ -197,7 +211,7 @@ export default function Inbox() {
           )}
         </div>
         <div className="border-t border-border px-4 py-2 text-[11px] text-muted-foreground">
-          <Kbd>↑</Kbd> <Kbd>↓</Kbd> chuyển hội thoại
+          <Kbd>↑</Kbd> <Kbd>↓</Kbd> chuyển hội thoại · <Kbd>T</Kbd> tiếp quản
         </div>
       </section>
 
@@ -205,7 +219,15 @@ export default function Inbox() {
       <section className="flex min-w-[480px] flex-1 flex-col bg-background" aria-label="Khung chat">
         {selected ? (
           <>
-            <ChatHeader conv={selected} name={name} page={page} now={now} onOpenPanel={() => setPanelOpen(true)} />
+            <ChatHeader
+              conv={selected}
+              name={name}
+              page={page}
+              now={now}
+              busy={actionPending}
+              onAction={(a) => runAction(selected.id, a)}
+              onOpenPanel={() => setPanelOpen(true)}
+            />
             <ChatBody conv={selected} platform={page?.platform} now={now} />
             <ComposerSoon note={composerNote(page?.platform, selected.channel)} />
           </>
@@ -233,7 +255,7 @@ export default function Inbox() {
 
 function emptyTitle(tab: InboxTab, query: string, total: number): string {
   if (query) return 'Không có hội thoại khớp từ khoá'
-  if (tab === 'needs') return 'Không còn tin nhắn cần xử lý. AI đang trông giúp bạn.'
+  if (tab === 'needs_human') return 'Không còn tin nhắn cần xử lý. AI đang trông giúp bạn.'
   if (tab === 'done') return 'Chưa có hội thoại nào xong'
   if (tab === 'ai') return 'AI chưa trả lời hội thoại nào'
   return total === 0 ? 'Chưa có tin nhắn nào' : 'Không có hội thoại'
@@ -330,7 +352,25 @@ function ConversationRow({ conv, now, active, onClick, buttonRef }: { conv: Conv
   )
 }
 
-function ChatHeader({ conv, name, page, now, onOpenPanel }: { conv: ConversationDto; name: string; page: Page | undefined; now: Date; onOpenPanel: () => void }) {
+function ChatHeader({
+  conv,
+  name,
+  page,
+  now,
+  busy,
+  onAction,
+  onOpenPanel,
+}: {
+  conv: ConversationDto
+  name: string
+  page: Page | undefined
+  now: Date
+  busy: boolean
+  onAction: (action: ConversationAction) => void
+  onOpenPanel: () => void
+}) {
+  const controls = conversationControls(conv.state)
+  const note = handoffNote(conv, now)
   return (
     <div className="border-b border-border bg-surface">
       <div className="flex items-center gap-4 px-5 py-3">
@@ -347,16 +387,26 @@ function ChatHeader({ conv, name, page, now, onOpenPanel }: { conv: Conversation
           </div>
         </div>
         <StateChip conv={conv} now={now} />
-        {conv.state === 'ai' || conv.state === 'handoff' ? (
-          <Button variant="primary" size="sm" icon={<Hand size={15} />} disabled title={SOON}>
+        <span className="flex items-center gap-2 text-[13px] font-medium">
+          <Switch
+            ai
+            label="AI tự trả lời"
+            checked={controls.aiSwitch.checked}
+            disabled={controls.aiSwitch.disabled || busy}
+            title={controls.aiSwitch.checked ? 'Tắt: bạn tiếp quản hội thoại này' : 'Bật: AI tự trả lời hội thoại này'}
+            onChange={(next) => onAction(aiSwitchAction(next))}
+          />
+          <span className="hidden xl:inline">AI tự trả lời</span>
+        </span>
+        {controls.takeover && (
+          <Button variant="primary" size="sm" icon={<Hand size={15} />} disabled={busy} onClick={() => onAction('takeover')} title="Tiếp quản (phím T)">
             Tiếp quản
           </Button>
-        ) : (
-          conv.state !== 'done' && (
-            <Button size="sm" icon={<CheckCheck size={15} />} disabled title={SOON}>
-              Đánh dấu xong
-            </Button>
-          )
+        )}
+        {controls.markDone && (
+          <Button size="sm" icon={<CheckCheck size={15} />} disabled={busy} onClick={() => onAction('done')}>
+            Đánh dấu xong
+          </Button>
         )}
         <Button variant="ghost" size="sm" icon={<UserRound size={15} />} onClick={onOpenPanel} className="min-[1440px]:hidden">
           Hồ sơ khách
@@ -370,12 +420,11 @@ function ChatHeader({ conv, name, page, now, onOpenPanel }: { conv: Conversation
           </span>
         </div>
       )}
-      {conv.state === 'handoff' && conv.stateReason && (
+      {note && (
         <div className="flex items-center gap-2 border-t border-amber-200 bg-warning-soft px-5 py-2 text-[13px] text-amber-900">
           <TriangleAlert size={15} className="shrink-0 text-warning" />
           <span>
-            <b>AI chuyển cho bạn:</b> {REASON_TEXT[conv.stateReason]}
-            {conv.waitingSince && <> · khách chờ {durationLabel(conv.waitingSince, now)}</>}
+            <b>AI chuyển cho bạn:</b> {note}
           </span>
         </div>
       )}

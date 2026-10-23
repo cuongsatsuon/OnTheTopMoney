@@ -2,13 +2,19 @@
 // rồi refetch (`message.*`, `contact.*`, `conversation.*` → khoá gốc `['conversations', …]` và `['messages', …]`,
 // xem `lib/realtime.ts`). Không có nghiệp vụ ở client. Helper thuần (nhãn, thời gian, lý do, tab) tách để test.
 // Story 4.4: hội thoại bình luận (FB/IG) và trả lời Threads — nhãn kênh, dòng bài, nhãn sửa/xoá/ẩn, người viết tin.
+// Story 4.6: tab lọc + badge đếm ở server (`tab=`, `/conversations/count`), lệnh Tiếp quản / bật lại AI / Đánh dấu
+// xong (`useConversationAction`), thao tác hiện theo trạng thái và ghi chú "AI chuyển cho bạn" (UX-DR5).
 import {
   ListConversationsResponse,
+  ConversationCountResponse,
   ConversationDto,
   ListMessagesResponse,
   formatScope,
   type AttachmentError,
+  type ConversationAction,
   type ConversationChannel,
+  type ConversationState,
+  type InboxTab,
   type ConversationPost,
   type ConversationPreview,
   type MessageDto,
@@ -18,11 +24,13 @@ import {
   type Scope,
   type StateChangeReason,
 } from '@ottm/shared'
-import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiFetch, apiUrl } from './api'
 
 export const CONVERSATIONS_KEY = ['conversations'] as const
-export const conversationsListKey = (scope: string | null) => ['conversations', 'list', scope] as const
+export const conversationsListKey = (scope: string | null, tab: InboxTab) => ['conversations', 'list', scope, tab] as const
+/** Số đếm của tab (badge sidebar + số ở tab "Cần xử lý"). Gốc `conversations` → hint `conversation.*`/`message.*` làm cũ. */
+export const conversationsCountKey = (scope: string | null, tab: InboxTab) => ['conversations', 'count', scope, tab] as const
 export const conversationKey = (id: string) => ['conversations', 'detail', id] as const
 export const messagesKey = (conversationId: string) => ['messages', conversationId] as const
 
@@ -39,14 +47,14 @@ export function serverScope(scope: Scope): string | null {
 
 const EMPTY_LIST: ListConversationsResponse = { items: [], nextCursor: null }
 
-/** Hội thoại theo phạm vi, mới nhất trước; "Xem thêm" bằng `fetchNextPage`. */
-export function useConversations(scope: Scope, options: { enabled?: boolean } = {}) {
+/** Hội thoại theo phạm vi và tab (server lọc); "Xem thêm" bằng `fetchNextPage`. */
+export function useConversations(scope: Scope, tab: InboxTab = 'all', options: { enabled?: boolean } = {}) {
   const param = serverScope(scope)
   return useInfiniteQuery({
-    queryKey: conversationsListKey(param),
+    queryKey: conversationsListKey(param, tab),
     queryFn: ({ signal, pageParam }) => {
       if (param === null) return Promise.resolve(EMPTY_LIST)
-      const qs = new URLSearchParams({ scope: param })
+      const qs = new URLSearchParams({ scope: param, tab })
       if (pageParam) qs.set('cursor', pageParam)
       return apiFetch(`/conversations?${qs}`, { schema: ListConversationsResponse, signal })
     },
@@ -54,6 +62,21 @@ export function useConversations(scope: Scope, options: { enabled?: boolean } = 
     getNextPageParam: (last) => last.nextCursor,
     enabled: options.enabled ?? true,
   })
+}
+
+/** Số hội thoại "Cần xử lý" trong phạm vi — đếm ở server, đúng điều kiện tab (AD-9). Đang tải / lỗi → 0. */
+export function useNeedsHumanCount(scope: Scope, options: { enabled?: boolean } = {}): number {
+  const param = serverScope(scope)
+  const query = useQuery({
+    queryKey: conversationsCountKey(param, 'needs_human'),
+    queryFn: ({ signal }) => {
+      if (param === null) return Promise.resolve({ count: 0 })
+      const qs = new URLSearchParams({ scope: param, tab: 'needs_human' })
+      return apiFetch(`/conversations/count?${qs}`, { schema: ConversationCountResponse, signal })
+    },
+    enabled: options.enabled ?? true,
+  })
+  return query.data?.count ?? 0
 }
 
 /** Một hội thoại (mở bằng `?c=` khi nó không nằm trong trang danh sách đang tải). */
@@ -85,26 +108,65 @@ export function flattenMessages<T>(pages: readonly { items: readonly T[] }[] | u
   return [...pages].reverse().flatMap((p) => p.items)
 }
 
-/** Số hội thoại "Cần xử lý" trong các hội thoại đã tải (badge sidebar). */
-export function useNeedsAttentionCount(scope: Scope, options: { enabled?: boolean } = {}): number {
-  const query = useConversations(scope, options)
-  return countNeedsAttention(query.data?.pages.flatMap((p) => p.items) ?? [])
-}
-
-export function countNeedsAttention(items: readonly Pick<ConversationDto, 'needsAttention'>[]): number {
-  return items.filter((c) => c.needsAttention).length
+/**
+ * Tiếp quản / bật lại AI / Đánh dấu xong (Story 4.6). Thành công → ghi đè chi tiết hội thoại và làm cũ danh sách, số
+ * đếm, tin (tin `system` mới) — hint realtime `conversation.state_changed` cũng làm vậy ở các tab trình duyệt khác.
+ */
+export function useConversationAction() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, action }: { id: string; action: ConversationAction }) =>
+      apiFetch(`/conversations/${id}/${action}`, { method: 'POST', schema: ConversationDto }),
+    onSuccess: (conv) => {
+      queryClient.setQueryData(conversationKey(conv.id), conv)
+      void queryClient.invalidateQueries({ queryKey: CONVERSATIONS_KEY })
+      void queryClient.invalidateQueries({ queryKey: messagesKey(conv.id) })
+    },
+  })
 }
 
 /* ---------- Helper thuần ---------- */
 
-export type InboxTab = 'all' | 'needs' | 'ai' | 'done'
+export interface ConversationControls {
+  /** Nút "Tiếp quản" (và phím `T`). */
+  takeover: boolean
+  /** Công tắc "AI tự trả lời": bật = AI đang trả lời; tắt = Tiếp quản; bật lại = `enable-ai`. */
+  aiSwitch: { checked: boolean; disabled: boolean }
+  /** Nút "Đánh dấu xong". */
+  markDone: boolean
+}
 
-/** Tab (AD-9): "Tất cả" gồm cả `triage`; "Cần xử lý" theo `needsAttention` của server. */
-export function matchesTab(conv: Pick<ConversationDto, 'state' | 'needsAttention'>, tab: InboxTab): boolean {
-  if (tab === 'all') return true
-  if (tab === 'needs') return conv.needsAttention
-  if (tab === 'ai') return conv.state === 'ai'
-  return conv.state === 'done'
+/**
+ * Thao tác dùng được theo trạng thái (AD-9, khớp luật server): Tiếp quản khi `triage|ai|handoff`; công tắc AI ở
+ * `human|handoff|ai` (`triage` chốc lát, `done` chỉ mở lại bằng tin khách); Đánh dấu xong khi chưa `done`.
+ */
+export function conversationControls(state: ConversationState): ConversationControls {
+  return {
+    takeover: state === 'triage' || state === 'ai' || state === 'handoff',
+    aiSwitch: { checked: state === 'ai', disabled: state === 'triage' || state === 'done' },
+    markDone: state !== 'done',
+  }
+}
+
+/** Lệnh khi gạt công tắc AI: bật → `enable-ai`; tắt → Tiếp quản. */
+export const aiSwitchAction = (next: boolean): ConversationAction => (next ? 'enable-ai' : 'takeover')
+
+/**
+ * Ghi chú vàng của hội thoại `handoff` (UX-DR5): lý do theo `REASON_TEXT` + thời gian khách chờ tính từ
+ * `waitingSince`. Không phải `handoff` hoặc chưa có lý do → `null`.
+ */
+export function handoffNote(conv: Pick<ConversationDto, 'state' | 'stateReason' | 'waitingSince'>, now: Date): string | null {
+  if (conv.state !== 'handoff' || !conv.stateReason) return null
+  const waiting = conv.waitingSince ? ` · khách chờ ${durationLabel(conv.waitingSince, now)}` : ''
+  return `${REASON_TEXT[conv.stateReason]}${waiting}`
+}
+
+/** Nhãn tab Hộp thư. */
+export const INBOX_TAB_LABEL: Record<InboxTab, string> = {
+  all: 'Tất cả',
+  needs_human: 'Cần xử lý',
+  ai: 'AI đang trả lời',
+  done: 'Đã xong',
 }
 
 export const CHANNEL_LABEL: Record<Platform, string> = { facebook: 'Messenger', instagram: 'Instagram', threads: 'Threads' }

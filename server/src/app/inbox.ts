@@ -3,7 +3,13 @@
 //   VALIDATION_FAILED, nhóm/trang không tồn tại → 404. Hội thoại của trang đã gỡ không trả.
 // - Đính kèm: bytes từ kho riêng tư (AD-14), không bao giờ trả URL Cloudinary/Meta. `Cache-Control: private` để
 //   trình duyệt giữ lại mà proxy chung không lưu; `nosniff` + MIME đã kiểm lúc lưu.
+// - Story 4.6: `tab=all|needs_human|ai|done` lọc ở server; `GET …/count` cho badge "Cần xử lý"; lệnh
+//   `POST …/:id/takeover|enable-ai|done` (rate-limit + kiểm Origin của route ghi do auth plugin áp). Trạng thái nguồn
+//   không hợp lệ → 409 VERSION_CONFLICT; đã ở đích → 200 không đổi.
 import {
+  CONVERSATION_ACTIONS,
+  ConversationCountQuery,
+  ConversationCountResponse,
   ConversationDto,
   ConversationsQuery,
   ListConversationsResponse,
@@ -14,22 +20,59 @@ import {
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import type { MediaStores } from '../adapters/media/index.ts'
-import { getAttachmentFile, getConversation, listConversations, listMessages } from '../modules/inbox/index.ts'
+import {
+  applyUserAction,
+  countConversations,
+  getAttachmentFile,
+  getConversation,
+  listConversations,
+  listMessages,
+} from '../modules/inbox/index.ts'
 import { resolveScope } from '../modules/pages/index.ts'
 import type { Db } from '../platform/db/index.ts'
 import { AppError } from '../platform/errors/index.ts'
+import type { EventPublisher } from '../platform/events/index.ts'
 
 const ListQuery = ConversationsQuery.extend({ scope: ScopeParam.optional() })
+const CountQuery = ConversationCountQuery.extend({ scope: ScopeParam.optional() })
 const IdParam = z.object({ id: z.uuid() })
 
 const notFound = (message: string) => new AppError('NOT_FOUND', 404, { message })
 
-export function registerInbox(app: FastifyInstance, deps: { db: Db; media: Pick<MediaStores, 'privateStore'> }): void {
+export function registerInbox(
+  app: FastifyInstance,
+  deps: { db: Db; media: Pick<MediaStores, 'privateStore'>; events?: EventPublisher | undefined },
+): void {
   app.get('/api/v1/conversations', async (req): Promise<ListConversationsResponse> => {
-    const { scope, cursor, limit } = ListQuery.parse(req.query ?? {})
+    const { scope, tab, cursor, limit } = ListQuery.parse(req.query ?? {})
     const pageIds = await resolveScope(deps.db, scope ?? { kind: 'all' })
-    return ListConversationsResponse.parse(await listConversations(deps.db, pageIds, { cursor, limit }))
+    return ListConversationsResponse.parse(await listConversations(deps.db, pageIds, { tab, cursor, limit }))
   })
+
+  app.get('/api/v1/conversations/count', async (req): Promise<ConversationCountResponse> => {
+    const { scope, tab } = CountQuery.parse(req.query ?? {})
+    const pageIds = await resolveScope(deps.db, scope ?? { kind: 'all' })
+    return { count: await countConversations(deps.db, pageIds, tab) }
+  })
+
+  // Lệnh chuyển trạng thái (Story 4.6) phát `conversation.state_changed` → chỉ đăng ký khi có `events`.
+  const { events } = deps
+  if (events) {
+    for (const action of CONVERSATION_ACTIONS) {
+      app.post(`/api/v1/conversations/:id/${action}`, async (req): Promise<ConversationDto> => {
+        const { id } = IdParam.parse(req.params)
+        if (!(await getConversation(deps.db, id))) throw notFound('Hội thoại không tồn tại')
+        const result = await applyUserAction({ db: deps.db, events }, id, action)
+        if (result.status === 'missing') throw notFound('Hội thoại không tồn tại')
+        if (result.status === 'conflict') {
+          throw new AppError('VERSION_CONFLICT', 409, { message: `Không áp được "${action}" cho hội thoại đang ở trạng thái ${result.state}` })
+        }
+        const conv = await getConversation(deps.db, id)
+        if (!conv) throw notFound('Hội thoại không tồn tại')
+        return ConversationDto.parse(conv)
+      })
+    }
+  }
 
   app.get('/api/v1/conversations/:id', async (req): Promise<ConversationDto> => {
     const { id } = IdParam.parse(req.params)

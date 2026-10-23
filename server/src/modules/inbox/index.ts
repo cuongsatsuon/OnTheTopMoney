@@ -4,6 +4,7 @@
 // Được gọi bởi: `webhooks` (`ingest`), `autoreply` (bước triage), entrypoint (REST, worker).
 // Story 4.3: ingest DM (Messenger, IG Direct), giải `triage`, đính kèm vào kho riêng tư, tên khách từ Meta, đọc REST.
 // Story 4.4: ingest bình luận FB/IG + trả lời Threads, sửa/xoá/ẩn tin, caption bài được bình luận.
+// Story 4.6: lọc/đếm theo tab ở server, lệnh Tiếp quản / bật lại AI / Đánh dấu xong.
 export const MODULE = 'inbox'
 
 export {
@@ -28,11 +29,13 @@ export {
 } from './post-text.ts'
 export {
   applyTriageDecision,
+  applyUserAction,
   getTriageState,
   type ApplyTriageResult,
   type StateDeps,
   type TriageDecision,
   type TriageState,
+  type UserActionResult,
 } from './state.ts'
 export {
   AttachmentRetryableError,
@@ -55,12 +58,15 @@ export {
   type FetchProfileOutcome,
 } from './profile.ts'
 export {
+  countConversations,
   decodeCursor,
   encodeCursor,
   getConversation,
   listConversations,
   listMessages,
   needsAttention,
+  tabCondition,
+  type ConversationPageQuery,
   type PageQuery,
   type Paged,
 } from './queries.ts'
