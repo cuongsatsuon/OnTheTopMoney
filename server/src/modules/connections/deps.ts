@@ -4,6 +4,7 @@ import type { MetaClient } from '../../adapters/meta/index.ts'
 import type { Config } from '../../platform/config/index.ts'
 import type { Db } from '../../platform/db/index.ts'
 import type { EventPublisher } from '../../platform/events/index.ts'
+import type { JobSender } from '../../platform/jobs/index.ts'
 
 export type ConnectionsConfig = Pick<
   Config,
@@ -27,6 +28,8 @@ export interface ConnectionsLogger {
 export interface ConnectionsDeps {
   db: Db
   events: EventPublisher
+  /** Enqueue job (Story 4.2: `connections.subscribe_page` trong transaction xác nhận — AD-2). */
+  jobs: JobSender
   /** `null` khi máy chủ chưa có `APP_ENCRYPTION_KEYS` → không lưu được token (`ENCRYPTION_NOT_CONFIGURED`). */
   cipher: SecretCipher | null
   /** Client Graph (`createMetaClients().graph`; fake khi `META_FAKE=1`). */

@@ -3,6 +3,8 @@
 // quyền) hoặc `FAKE_CODE.noMessaging` (bỏ `pages_messaging` + `instagram_manage_messages`). Biến thể đi theo
 // token giả qua từng bước đổi token, nên `debug_token` trả `granular_scopes` tương ứng.
 // Dữ liệu: 2 Fanpage — một có IG Business liên kết, một có IG chưa phải tài khoản Business.
+// Story 4.2: `POST /{fanpage}/subscribed_apps` (đăng ký webhook trang) trả `{success: true}` khi token là token
+// Page giả của đúng Fanpage đó; token khác → 190 TOKEN_INVALID.
 // Threads (Story 2.3): client riêng (`createFakeThreads`), trang đồng ý giả `/oauth/threads/fake-consent` gửi
 // `FAKE_THREADS_CODE.full` hoặc `.noReplies` (bỏ `threads_read_replies` + `threads_manage_replies`), kèm hậu tố
 // `#_` như Threads thật; dữ liệu: 1 tài khoản Threads.
@@ -121,6 +123,15 @@ export function program(graph: FakeMetaClient, now: () => Date = () => new Date(
   graph.on('GET', '/me/accounts', (call: FakeMetaCall) =>
     variantOfToken(call.options.token, 'LONG') ? { ok: true, data: { data: fakeAccounts(), paging: { cursors: {} } } } : rejected(),
   )
+
+  for (const page of [FAKE_PAGES.beauty, FAKE_PAGES.home]) {
+    graph.on('POST', `/${page.id}/subscribed_apps`, (call: FakeMetaCall) => {
+      const token = call.options.token
+      if (typeof token !== 'string' || !token.startsWith(`FAKE_PAGE_${page.id}_`)) return rejected()
+      if (typeof call.options.params?.subscribed_fields !== 'string') return rejected(100)
+      return { ok: true, data: { success: true } }
+    })
+  }
 }
 
 // ---------------------------------------------------------------------------------------------------------

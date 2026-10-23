@@ -23,7 +23,7 @@ import { FAKE_APP_ID, FAKE_IG, FAKE_PAGES, FAKE_USER, createFakeMetaGraph, fakeG
 import { createSession } from '../src/modules/settings/index.ts'
 import { createDb, type DbHandle } from '../src/platform/db/index.ts'
 import { createEventPublisher, type EventPublisher } from '../src/platform/events/index.ts'
-import { BOSS_SCHEMA, createBoss } from '../src/platform/jobs/index.ts'
+import { BOSS_SCHEMA, createBoss, createJobSender, ensureQueues, type JobSender } from '../src/platform/jobs/index.ts'
 import { createLogger } from '../src/platform/log/index.ts'
 import { listenRealtime, sleep, waitFor } from './helpers/realtime.ts'
 
@@ -36,6 +36,7 @@ const REAL_SECRET = 'real-app-secret-should-not-leak'
 let handle: DbHandle
 let boss: PgBoss
 let events: EventPublisher
+let jobs: JobSender
 let realtime: Awaited<ReturnType<typeof listenRealtime>>
 const cipher: SecretCipher = createSecretCipher({ keys: new Map([['k1', randomBytes(32)]]), activeKeyId: 'k1' })
 const logLines: string[] = []
@@ -80,6 +81,9 @@ beforeAll(async () => {
   boss.on('error', () => {})
   await boss.start()
   events = createEventPublisher(boss)
+  // Story 4.2: xác nhận enqueue `connections.subscribe_page` → queue phải tồn tại.
+  await ensureQueues(boss)
+  jobs = createJobSender(boss)
   realtime = await listenRealtime(handle.sql)
 })
 afterAll(async () => {
@@ -101,7 +105,7 @@ function build(config: ConnectionsConfig = FAKE_CONFIG, options: { cipher?: Secr
     logger: createLogger({ level: 'trace' }, logSink),
     http: { allowedOrigins: [ORIGIN] },
     events,
-    connections: { graph, cipher: options.cipher === undefined ? cipher : options.cipher, config },
+    connections: { graph, jobs, cipher: options.cipher === undefined ? cipher : options.cipher, config },
   })
 }
 
@@ -748,7 +752,7 @@ describe('callback — lỗi và trường hợp biên của Meta', () => {
       logger: createLogger({ level: 'trace' }, logSink),
       http: { allowedOrigins: [ORIGIN] },
       events,
-      connections: { graph, cipher, config: FAKE_CONFIG },
+      connections: { graph, jobs, cipher, config: FAKE_CONFIG },
     })
     const res = await app.inject({
       method: 'GET',

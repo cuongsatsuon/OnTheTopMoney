@@ -1,6 +1,20 @@
 // Story 4.1 — helper thuần của Cài đặt › Webhook (nhãn/tone/thời gian).
 import { describe, expect, it } from 'vitest'
-import { canRetry, webhookErrorLabel, webhookEventTime, webhookFieldLabel, webhookStatusView } from './webhooks'
+import { WEBHOOK_SUBSCRIBE_ERRORS } from '@ottm/shared'
+import {
+  WEBHOOK_HEALTH_KEY,
+  WEBHOOK_SETTINGS_PATH,
+  canRetry,
+  lastEventLabel,
+  pageSubscriptionErrorOf,
+  stalledProducts,
+  subscribeErrorLabel,
+  webhookErrorLabel,
+  webhookEventTime,
+  webhookFieldLabel,
+  webhookStatusView,
+} from './webhooks'
+import { hintInvalidates } from './realtime'
 
 describe('webhookStatusView', () => {
   it('ánh xạ trạng thái → nhãn + tone', () => {
@@ -51,5 +65,60 @@ describe('webhookEventTime', () => {
   it('khác ngày → DD/MM HH:MM', () => {
     const now = new Date('2026-10-23T20:43:12')
     expect(webhookEventTime('2026-10-20T08:00:00', now)).not.toMatch(/^Hôm nay /)
+  })
+})
+
+// Story 4.2 — sức khoẻ webhook.
+describe('lastEventLabel', () => {
+  const now = new Date('2026-10-23T10:00:00Z')
+  it('chưa có sự kiện → "Đang chờ tin đầu tiên"', () => {
+    expect(lastEventLabel(null, now)).toBe('Đang chờ tin đầu tiên')
+  })
+  it('dưới 1 phút → vừa xong; phút / giờ / ngày trước', () => {
+    expect(lastEventLabel('2026-10-23T09:59:30Z', now)).toBe('Nhận tin gần nhất: vừa xong')
+    expect(lastEventLabel('2026-10-23T10:00:05Z', now)).toBe('Nhận tin gần nhất: vừa xong')
+    expect(lastEventLabel('2026-10-23T09:59:00Z', now)).toBe('Nhận tin gần nhất: 1 phút trước')
+    expect(lastEventLabel('2026-10-23T09:29:00Z', now)).toBe('Nhận tin gần nhất: 31 phút trước')
+    expect(lastEventLabel('2026-10-23T07:00:00Z', now)).toBe('Nhận tin gần nhất: 3 giờ trước')
+    expect(lastEventLabel('2026-10-21T09:00:00Z', now)).toBe('Nhận tin gần nhất: 2 ngày trước')
+  })
+})
+
+describe('subscribeErrorLabel', () => {
+  it('mọi mã lỗi đăng ký đều có câu tiếng Việt riêng', () => {
+    const labels = WEBHOOK_SUBSCRIBE_ERRORS.map(subscribeErrorLabel)
+    for (const l of labels) expect(l).toMatch(/\S/)
+    expect(new Set(labels).size).toBe(WEBHOOK_SUBSCRIBE_ERRORS.length)
+    expect(subscribeErrorLabel('PERMISSION_DENIED')).toMatch(/quyền/)
+    expect(subscribeErrorLabel('TOKEN_INVALID')).toMatch(/Kết nối lại/)
+  })
+})
+
+describe('stalledProducts / pageSubscriptionErrorOf', () => {
+  const health = {
+    products: [
+      { product: 'meta' as const, status: 'stalled' as const, lastEventAt: '2026-10-23T09:00:00.000Z' },
+      { product: 'threads' as const, status: 'waiting_first' as const, lastEventAt: null },
+    ],
+    pageSubscriptionErrors: [{ pageId: 'p1', name: 'Trang 1', platform: 'facebook' as const, errorCode: 'REJECTED' as const }],
+  }
+  it('banner chỉ khi có sản phẩm stalled', () => {
+    expect(stalledProducts(health)).toEqual(['meta'])
+    expect(stalledProducts({ products: health.products.map((p) => ({ ...p, status: 'ok' as const })) })).toEqual([])
+    expect(stalledProducts(undefined)).toEqual([])
+  })
+  it('lỗi đăng ký của đúng trang', () => {
+    expect(pageSubscriptionErrorOf(health, 'p1')?.errorCode).toBe('REJECTED')
+    expect(pageSubscriptionErrorOf(health, 'p2')).toBeNull()
+    expect(pageSubscriptionErrorOf(undefined, 'p1')).toBeNull()
+  })
+  it('link banner mở Cài đặt › Webhook', () => {
+    expect(WEBHOOK_SETTINGS_PATH).toBe('/cai-dat?section=webhook')
+  })
+})
+
+describe('hint realtime webhook.* làm cũ khoá sức khoẻ', () => {
+  it('entity `webhook` (webhook.stalled|recovered) khớp khoá gốc `webhooks`', () => {
+    expect(hintInvalidates(WEBHOOK_HEALTH_KEY[0], 'webhook')).toBe(true)
   })
 })

@@ -31,17 +31,20 @@ export function aiOptionsFromConfig(config: Pick<Config, 'APP_ENCRYPTION_KEYS' |
 
 /**
  * Phần `connections` của `buildApp` (Story 2.2, 2.3): client Graph + Threads dựng từ config (fake khi `META_FAKE=1`),
- * mã hoá token bằng cùng khoá chủ với khoá OpenAI.
+ * mã hoá token bằng cùng khoá chủ với khoá OpenAI. Story 4.2: `jobs` (pg-boss của api) để xác nhận trang enqueue
+ * `connections.subscribe_page` trong cùng transaction.
  */
 export function connectionsOptionsFromConfig(
   config: Config,
   db: Db,
   logger: Logger,
+  boss: Pick<PgBoss, 'send'>,
 ): Omit<ConnectionsDeps, 'db' | 'events' | 'log'> {
   const { graph, threads } = createMetaClients({ config, db, log: logger.child({ component: 'meta' }) })
   return {
     graph,
     threads,
+    jobs: createJobSender(boss),
     cipher: cipherFromConfig(config),
     config: {
       META_APP_ID: config.META_APP_ID,

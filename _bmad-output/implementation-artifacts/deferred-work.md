@@ -46,3 +46,15 @@
 - source_spec: `spec-4-1-cong-webhook.md`
   summary: Nhật ký webhook ở Cài đặt phân trang "xem thêm" (hiện cap 50 mục mới nhất; API đã trả nextCursor).
   evidence: useWebhookEvents chưa đọc nextCursor; panel chẩn đoán nên đủ 50 trước mắt.
+- source_spec: `spec-4-2-dang-ky-webhook-va-suc-khoe.md`
+  summary: Dead-letter + thông báo (critical) cho `webhook.route` hết retry — comment ở `queues.ts` từng hứa làm ở 4.2.
+  evidence: 4.2 giữ `webhook.route` không critical (spec chỉ yêu cầu banner sức khoẻ, không tạo thông báo). Mục hỏng vẫn ghi `failed` + "Xử lý lại" ở nhật ký. Làm khi mở rộng trung tâm thông báo (cần NotificationType/prefs).
+- source_spec: `spec-4-2-dang-ky-webhook-va-suc-khoe.md`
+  summary: API sức khoẻ webhook coi trạng thái cũ là cũ khi `webhook_health.checked_at` quá ~2 chu kỳ cron (worker/cron chết).
+  evidence: `getWebhookHealth` tin dòng cron bất kể `checked_at`; worker chết thì trạng thái `ok` giữ mãi.
+- source_spec: `spec-4-2-dang-ky-webhook-va-suc-khoe.md`
+  summary: Cho đăng ký lại webhook một trang lỗi (nút ở Cài đặt/Chi tiết trang hoặc cron thử lại FAILED/REJECTED).
+  evidence: Chạy bù chỉ chọn trang chưa có lỗi; hiện trang FAILED chỉ phục hồi bằng kết nối lại OAuth.
+- source_spec: `spec-4-2-dang-ky-webhook-va-suc-khoe.md`
+  summary: Gỡ trang thì huỷ đăng ký `DELETE /{page}/subscribed_apps` ở Meta.
+  evidence: `removePage` xoá credential nhưng Meta vẫn gửi sự kiện của trang đã gỡ, và chúng được tính là sự kiện thật trong health.

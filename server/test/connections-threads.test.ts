@@ -30,7 +30,7 @@ import {
 import { createSession } from '../src/modules/settings/index.ts'
 import { createDb, type DbHandle } from '../src/platform/db/index.ts'
 import { createEventPublisher, type EventPublisher } from '../src/platform/events/index.ts'
-import { BOSS_SCHEMA, createBoss } from '../src/platform/jobs/index.ts'
+import { BOSS_SCHEMA, createBoss, createJobSender, ensureQueues, type JobSender } from '../src/platform/jobs/index.ts'
 import { createLogger } from '../src/platform/log/index.ts'
 import { listenRealtime, sleep, waitFor } from './helpers/realtime.ts'
 
@@ -44,6 +44,7 @@ const RESULT_LOCATION = /^\/trang-nhom\?ket-noi=[0-9a-f-]{36}&nen-tang=threads$/
 let handle: DbHandle
 let boss: PgBoss
 let events: EventPublisher
+let jobs: JobSender
 let realtime: Awaited<ReturnType<typeof listenRealtime>>
 const cipher: SecretCipher = createSecretCipher({ keys: new Map([['k1', randomBytes(32)]]), activeKeyId: 'k1' })
 const logLines: string[] = []
@@ -85,6 +86,9 @@ beforeAll(async () => {
   boss.on('error', () => {})
   await boss.start()
   events = createEventPublisher(boss)
+  // Story 4.2: xác nhận enqueue `connections.subscribe_page` → queue phải tồn tại.
+  await ensureQueues(boss)
+  jobs = createJobSender(boss)
   realtime = await listenRealtime(handle.sql)
 })
 afterAll(async () => {
@@ -107,7 +111,7 @@ function build(config: ConnectionsConfig = FAKE_CONFIG, options: { threads?: Fak
     logger: createLogger({ level: 'trace' }, logSink),
     http: { allowedOrigins: [ORIGIN] },
     events,
-    connections: { graph, threads: client, cipher, config },
+    connections: { graph, jobs, threads: client, cipher, config },
   })
 }
 
@@ -605,7 +609,7 @@ describe('URL lỗi theo màn gốc + nền tảng', () => {
       logger: createLogger({ level: 'trace' }, logSink),
       http: { allowedOrigins: [ORIGIN] },
       events,
-      connections: { graph, threads, cipher, config: FAKE_CONFIG },
+      connections: { graph, jobs, threads, cipher, config: FAKE_CONFIG },
     })
     const res = await app.inject({
       method: 'GET',

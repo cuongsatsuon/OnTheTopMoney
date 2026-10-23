@@ -2,13 +2,15 @@
 // Mỗi mục đã tách khỏi body (Graph `entry[].messaging[]`/`changes[]`, Threads parser riêng), chống trùng bằng
 // UNIQUE(product, dedupe_key): Meta gửi lại gom khác vẫn một dòng. Payload thô chỉ là MỤC (không phải cả body),
 // không chứa chữ ký (AD-12). `status` do job `webhook.route` đặt; `error_code` chẩn đoán khi lỗi.
-import { WEBHOOK_EVENT_STATUSES, WEBHOOK_PRODUCTS } from '@ottm/shared'
+// Story 4.2: `webhook_health` — trạng thái sức khoẻ mỗi sản phẩm do cron `webhooks.health` ghi.
+import { WEBHOOK_EVENT_STATUSES, WEBHOOK_HEALTH_STATUSES, WEBHOOK_PRODUCTS } from '@ottm/shared'
 import { sql } from 'drizzle-orm'
-import { boolean, check, jsonb, pgTable, text, timestamp, unique, uuid } from 'drizzle-orm/pg-core'
+import { boolean, check, index, jsonb, pgTable, text, timestamp, unique, uuid } from 'drizzle-orm/pg-core'
 import { pagesTable } from '../pages/index.ts'
 
 const PRODUCT_LIST = sql.raw(WEBHOOK_PRODUCTS.map((p) => `'${p}'`).join(', '))
 const STATUS_LIST = sql.raw(WEBHOOK_EVENT_STATUSES.map((s) => `'${s}'`).join(', '))
+const HEALTH_LIST = sql.raw(WEBHOOK_HEALTH_STATUSES.map((s) => `'${s}'`).join(', '))
 
 export const webhookEvents = pgTable(
   'webhook_events',
@@ -41,5 +43,29 @@ export const webhookEvents = pgTable(
     check('webhook_events_status_check', sql`${t.status} in (${STATUS_LIST})`),
     // Nhật ký Cài đặt › Webhook sắp xếp và phân trang theo `id desc` (UUIDv7 = thứ tự thời gian). Không thêm
     // index riêng: khoá chính `id` phục vụ quét ngược cho `order by id desc` / `id < cursor`.
+    // Story 4.2: `max(received_at)` theo sản phẩm (cron sức khoẻ 5 phút + API sức khoẻ) không quét cả bảng.
+    index('webhook_events_product_received_at_idx').on(t.product, t.receivedAt),
+  ],
+)
+
+/**
+ * Sức khoẻ webhook mỗi sản phẩm (AD-4, Story 4.2): một dòng cho `meta`, một cho `threads`. Cron `webhooks.health`
+ * (5 phút) tính lại `status` và phát `webhook.stalled|recovered` khi đổi trạng thái, trong cùng transaction với
+ * lần ghi. `last_event_at` = `max(received_at)` của sự kiện thật (không phải `test`) lúc kiểm.
+ */
+export const webhookHealth = pgTable(
+  'webhook_health',
+  {
+    product: text('product').primaryKey(),
+    status: text('status').notNull(),
+    lastEventAt: timestamp('last_event_at', { withTimezone: true, precision: 3 }),
+    /** Lần cuối `status` đổi giá trị. */
+    statusChangedAt: timestamp('status_changed_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
+    /** Lần cuối cron kiểm (kể cả khi trạng thái không đổi). */
+    checkedAt: timestamp('checked_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
+  },
+  (t) => [
+    check('webhook_health_product_check', sql`${t.product} in (${PRODUCT_LIST})`),
+    check('webhook_health_status_check', sql`${t.status} in (${HEALTH_LIST})`),
   ],
 )

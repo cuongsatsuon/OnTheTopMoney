@@ -5,8 +5,9 @@
 // - lưu `page_credentials`: Fanpage giữ envelope token Page, IG trỏ `token_source_page_id` về Fanpage, Threads
 //   giữ envelope token dài hạn của chính nó kèm `expires_at` (Story 2.3; không có `meta_accounts`);
 // - phát `page.connected` (trang mới) / `page.reconnected` (dòng đã gỡ hoặc mất kết nối); trang đang hoạt động
-//   được xác nhận lại chỉ làm mới token, giữ `connected_at`, không phát sự kiện.
-// Không đăng ký webhook trang (Story 4.2).
+//   được xác nhận lại chỉ làm mới token, giữ `connected_at`, không phát sự kiện;
+// - enqueue `connections.subscribe_page` cho MỌI trang vừa upsert (kể cả trang `active` xác nhận lại) — Story 4.2,
+//   AD-2: job chỉ tồn tại khi transaction commit. Không gọi Meta trong request/transaction.
 import type { ConfirmConnectionsRequest, ConfirmConnectionsResponse, PageDto } from '@ottm/shared'
 import { and, eq, gt, sql } from 'drizzle-orm'
 import { AppError } from '../../platform/errors/index.ts'
@@ -14,6 +15,7 @@ import { setConnectionStatus, upsertFromPlatform } from '../pages/index.ts'
 import type { StoredCandidate } from './candidates.ts'
 import type { ConnectionsDeps } from './deps.ts'
 import { oauthResults, pageCredentials } from './schema.ts'
+import { enqueueSubscribePage } from './subscribe.ts'
 
 /** Page token lấy từ user token dài hạn không hết hạn → `expires_at = 0` (quy ước của Meta). */
 const PAGE_TOKEN_EXPIRES_AT = 0
@@ -23,7 +25,7 @@ function invalid(accountId: string, message: string): AppError {
 }
 
 export async function confirmConnections(
-  deps: Pick<ConnectionsDeps, 'db' | 'events' | 'now'>,
+  deps: Pick<ConnectionsDeps, 'db' | 'events' | 'jobs' | 'now'>,
   input: { sessionId: string; request: ConfirmConnectionsRequest },
 ): Promise<ConfirmConnectionsResponse> {
   const { resultId, accountIds } = input.request
@@ -99,6 +101,7 @@ export async function confirmConnections(
           ? 'page.reconnected'
           : null
       if (event) await deps.events.publishEvent(tx, event, { id: page.id, pageId: page.id })
+      await enqueueSubscribePage(tx, deps.jobs, page.id)
       out.push(page)
     }
     return { pages: out }

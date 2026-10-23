@@ -41,6 +41,8 @@ describe('app/deps — connections từ config', () => {
   // `createMetaClients` chỉ giữ `db` cho store tần suất; test này không gọi Meta nên không cần DB thật.
   const db = {} as Db
   const logger = createLogger({ level: 'silent' })
+  // Story 4.2: `jobs` dựng từ pg-boss của api; test không enqueue nên chỉ cần `send` giả.
+  const boss = { send: async () => null }
 
   it('mang META_LOGIN_CONFIG_ID, META_FAKE, PUBLIC_BASE_URL (mặc định dev) và cặp Threads vào cấu hình OAuth', () => {
     const config = parseEnv({
@@ -53,7 +55,7 @@ describe('app/deps — connections từ config', () => {
       APP_ENCRYPTION_KEYS: `k1:${KEY}`,
       APP_ENCRYPTION_ACTIVE_KEY: 'k1',
     })
-    const opts = connectionsOptionsFromConfig(config, db, logger)
+    const opts = connectionsOptionsFromConfig(config, db, logger, boss)
     expect(opts.config).toEqual({
       META_APP_ID: '123',
       META_APP_SECRET: 's',
@@ -72,13 +74,13 @@ describe('app/deps — connections từ config', () => {
   })
 
   it('chưa đặt cặp Threads → không có client Threads', () => {
-    const opts = connectionsOptionsFromConfig(parseEnv(base), db, logger)
+    const opts = connectionsOptionsFromConfig(parseEnv(base), db, logger, boss)
     expect(opts.threads).toBeUndefined()
     expect(opts.config.THREADS_APP_ID).toBeUndefined()
   })
 
   it('META_FAKE=1 → graph là Meta giả (có `calls`), cấu hình mang META_FAKE', () => {
-    const opts = connectionsOptionsFromConfig(parseEnv({ ...base, META_FAKE: '1' }), db, logger)
+    const opts = connectionsOptionsFromConfig(parseEnv({ ...base, META_FAKE: '1' }), db, logger, boss)
     expect(opts.config.META_FAKE).toBe(true)
     expect('calls' in opts.graph).toBe(true)
     expect(opts.threads && 'calls' in opts.threads).toBe(true)

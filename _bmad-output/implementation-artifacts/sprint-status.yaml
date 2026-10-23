@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 10-20-2026 11:40
-last_updated: 10-22-2026 14:35
+last_updated: 10-23-2026 21:30
 project: OnTheTopMoney
 project_key: NOKEY
 tracking_system: file-system
@@ -63,7 +63,7 @@ development_status:
 
   epic-4: in-progress
   4-1-cổng-nhận-webhook-meta-và-threads: review
-  4-2-tự-đăng-ký-webhook-trang-và-theo-dõi-sức-khoẻ-webhook: backlog
+  4-2-tự-đăng-ký-webhook-trang-và-theo-dõi-sức-khoẻ-webhook: review
   4-3-tin-messenger-và-instagram-direct-vào-hộp-thư: backlog
   4-4-bình-luận-facebook-instagram-và-trả-lời-threads-vào-hộp-thư: backlog
   4-5-nhận-diện-tin-của-chính-trang-echo: backlog

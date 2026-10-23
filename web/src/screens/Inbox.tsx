@@ -26,6 +26,7 @@ import {
   type Stage,
 } from '../data/mock'
 import { useApp } from '../lib/app-context'
+import { WEBHOOK_PRODUCT_LABEL, WEBHOOK_SETTINGS_PATH, stalledProducts, useWebhookHealth } from '../lib/webhooks'
 
 /* ---------- Dữ liệu cục bộ ---------- */
 
@@ -289,6 +290,7 @@ export default function Inbox() {
             { id: 'done', label: 'Đã xong' },
           ]}
         />
+        <WebhookStalledBanner />
         <div className="scrollbar-thin flex-1 overflow-y-auto" role="listbox" aria-label="Hội thoại">
           {list.length === 0 ? (
             <EmptyState
@@ -522,6 +524,27 @@ function ChatHeader({
           </span>
         </div>
       )}
+    </div>
+  )
+}
+
+/**
+ * Banner vàng khi webhook ngừng nhận tin (Story 4.2): có sản phẩm `stalled` → dẫn tới Cài đặt › Webhook. Hint
+ * realtime `webhook.recovered` làm cũ `['webhooks', …]` → refetch → banner tự biến mất, không cần tải lại trang.
+ */
+function WebhookStalledBanner() {
+  const health = useWebhookHealth()
+  const stalled = stalledProducts(health.data)
+  if (stalled.length === 0) return null
+  return (
+    <div role="status" className="mx-3 mt-2 flex items-center gap-2 rounded-md border border-amber-200 bg-warning-soft px-3 py-2 text-[13px] text-amber-900">
+      <TriangleAlert size={15} className="shrink-0 text-warning" />
+      <span>
+        Chưa nhận tin mới 30 phút ({stalled.map((p) => WEBHOOK_PRODUCT_LABEL[p]).join(', ')}) —{' '}
+        <Link to={WEBHOOK_SETTINGS_PATH} className="font-medium underline hover:text-amber-950">
+          Kiểm tra webhook
+        </Link>
+      </span>
     </div>
   )
 }

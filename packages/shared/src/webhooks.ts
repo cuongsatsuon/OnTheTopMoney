@@ -1,7 +1,7 @@
 // Cổng nhận webhook Meta/Threads (Story 4.1, AD-4). Web chỉ đọc nhật ký + gửi sự kiện thử + xử lý lại qua REST.
 // `WebhookProduct` và `WebhookEventStatus` định nghĩa ở enums.ts (Consistency Conventions › Enum).
 import { z } from 'zod'
-import { Platform, WebhookEventStatus, WebhookProduct } from './enums.ts'
+import { Platform, WebhookEventStatus, WebhookHealthStatus, WebhookProduct } from './enums.ts'
 
 /**
  * Field tối thiểu đăng ký ở cấp app cho từng sản phẩm (AD-4). Chỉ để Cài đặt › Webhook hiển thị cho chủ shop
@@ -77,3 +77,39 @@ export type WebhookConfigResponse = z.infer<typeof WebhookConfigResponse>
 /** `POST /api/v1/webhooks/test` — tạo một sự kiện thử (cờ `test`) chỉ để kiểm nhật ký. */
 export const WebhookTestRequest = z.object({ product: WebhookProduct })
 export type WebhookTestRequest = z.infer<typeof WebhookTestRequest>
+
+// ---------------------------------------------------------------------------------------------------------
+// Story 4.2 — tự đăng ký webhook trang (`connections.subscribe_page`) + sức khoẻ webhook (cron `webhooks.health`).
+// ---------------------------------------------------------------------------------------------------------
+
+/**
+ * Mã lỗi chẩn đoán khi đăng ký webhook cho một trang (`POST /{page}/subscribed_apps`) thất bại, lưu ở
+ * `page_credentials.webhook_subscribe_error`. `RATE_LIMITED`/`TRANSIENT` không lưu (job retry); hết retry → `FAILED`.
+ */
+export const WEBHOOK_SUBSCRIBE_ERRORS = ['PERMISSION_DENIED', 'TOKEN_INVALID', 'REJECTED', 'FAILED'] as const
+export const WebhookSubscribeError = z.enum(WEBHOOK_SUBSCRIBE_ERRORS)
+export type WebhookSubscribeError = z.infer<typeof WebhookSubscribeError>
+
+/** Sức khoẻ một sản phẩm webhook: `lastEventAt` = sự kiện thật (không phải `test`) gần nhất; `null` khi chưa có. */
+export const WebhookProductHealth = z.object({
+  product: WebhookProduct,
+  status: WebhookHealthStatus,
+  lastEventAt: IsoDateTime.nullable(),
+})
+export type WebhookProductHealth = z.infer<typeof WebhookProductHealth>
+
+/** Trang chưa gỡ mà lần đăng ký webhook gần nhất lỗi. */
+export const PageSubscriptionError = z.object({
+  pageId: z.string().min(1),
+  name: z.string(),
+  platform: Platform,
+  errorCode: WebhookSubscribeError,
+})
+export type PageSubscriptionError = z.infer<typeof PageSubscriptionError>
+
+/** `GET /api/v1/webhooks/health` — Cài đặt › Webhook, banner Hộp thư, cảnh báo Chi tiết trang. */
+export const WebhookHealthResponse = z.object({
+  products: z.array(WebhookProductHealth),
+  pageSubscriptionErrors: z.array(PageSubscriptionError),
+})
+export type WebhookHealthResponse = z.infer<typeof WebhookHealthResponse>

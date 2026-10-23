@@ -19,7 +19,7 @@ import { FAKE_IG, FAKE_PAGES, createFakeMetaGraph } from '../src/modules/connect
 import { createSession } from '../src/modules/settings/index.ts'
 import { createDb, type DbHandle } from '../src/platform/db/index.ts'
 import { createEventPublisher, type EventPublisher } from '../src/platform/events/index.ts'
-import { createBoss } from '../src/platform/jobs/index.ts'
+import { createBoss, createJobSender, ensureQueues, type JobSender } from '../src/platform/jobs/index.ts'
 import { createLogger } from '../src/platform/log/index.ts'
 import { listenRealtime, sleep, waitFor } from './helpers/realtime.ts'
 
@@ -40,6 +40,7 @@ const UNKNOWN_ID = '00000000-0000-7000-8000-000000000000'
 let handle: DbHandle
 let boss: PgBoss
 let events: EventPublisher
+let jobs: JobSender
 let realtime: Awaited<ReturnType<typeof listenRealtime>>
 const cipher: SecretCipher = createSecretCipher({ keys: new Map([['k1', randomBytes(32)]]), activeKeyId: 'k1' })
 
@@ -58,6 +59,9 @@ beforeAll(async () => {
   boss.on('error', () => {})
   await boss.start()
   events = createEventPublisher(boss)
+  // Story 4.2: xác nhận enqueue `connections.subscribe_page` → queue phải tồn tại.
+  await ensureQueues(boss)
+  jobs = createJobSender(boss)
   realtime = await listenRealtime(handle.sql)
 })
 afterAll(async () => {
@@ -78,7 +82,7 @@ function build() {
     logger: createLogger({ level: 'silent' }),
     http: { allowedOrigins: [ORIGIN] },
     events,
-    connections: { graph, cipher, config: FAKE_CONFIG },
+    connections: { graph, jobs, cipher, config: FAKE_CONFIG },
   })
 }
 

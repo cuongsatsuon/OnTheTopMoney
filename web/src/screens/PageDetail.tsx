@@ -9,6 +9,7 @@ import { compact, engagement30d, formatNumber, pages, posts, type Page, type Pla
 import { ScreenSkeleton } from '../components/Skeleton'
 import { useApp } from '../lib/app-context'
 import { usePages } from '../lib/connections'
+import { pageSubscriptionErrorOf, subscribeErrorLabel, useWebhookHealth } from '../lib/webhooks'
 import { AutoReplyForm } from './AutoReply'
 
 type TabId = 'brand' | 'ai' | 'schedule' | 'perf'
@@ -70,6 +71,9 @@ function PageDetailView({ page }: { page: Page }) {
   const initial = params.get('tab') as TabId | null
   const [tab, setTabState] = useState<TabId>(initial && TAB_IDS.includes(initial) ? initial : 'brand')
   const [status, setStatus] = useState(page.status)
+  // Story 4.2: trang đăng ký webhook lỗi → cảnh báo (tin nhắn của trang có thể không về Hộp thư).
+  const webhookHealth = useWebhookHealth()
+  const subscribeError = pageSubscriptionErrorOf(webhookHealth.data, page.id)
 
   const setTab = (t: TabId) => {
     setTabState(t)
@@ -131,6 +135,15 @@ function PageDetailView({ page }: { page: Page }) {
           <button type="button" onClick={reconnect} className="ml-auto font-medium text-primary hover:underline">
             Kết nối lại
           </button>
+        </div>
+      )}
+
+      {subscribeError && (
+        <div role="alert" className="mb-5 flex items-center gap-2 rounded-md border border-amber-200 bg-warning-soft/60 px-4 py-3 text-sm text-amber-900">
+          <TriangleAlert size={16} className="shrink-0" />
+          <span>
+            <b>Chưa đăng ký nhận tin nhắn cho trang này.</b> {subscribeErrorLabel(subscribeError.errorCode)}
+          </span>
         </div>
       )}
 

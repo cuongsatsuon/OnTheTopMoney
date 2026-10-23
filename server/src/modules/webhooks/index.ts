@@ -35,5 +35,18 @@ export {
   type RouteResult,
 } from './route-job.ts'
 
+// Story 4.2: sức khoẻ webhook (cron `webhooks.health` + API).
+export {
+  HEALTH_WINDOW_END_HOUR,
+  HEALTH_WINDOW_START_HOUR,
+  STALL_AFTER_MS,
+  computeHealthStatus,
+  getWebhookHealth,
+  runHealthCheck,
+  type HealthCheckDeps,
+  type HealthInput,
+  type ProductHealthResult,
+} from './health.ts'
+
 /** Chỉ để khai khoá ngoại / join tới `webhook_events` từ test; không truy vấn trực tiếp ngoài module. */
 export { webhookEvents as webhookEventsTable } from './schema.ts'

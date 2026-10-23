@@ -36,7 +36,7 @@ const app = buildApp({
   events: createEventPublisher(boss),
   realtime,
   ai,
-  connections: connectionsOptionsFromConfig(config, dbHandle.db, logger),
+  connections: connectionsOptionsFromConfig(config, dbHandle.db, logger, boss),
   media: mediaStoresFromConfig(config),
   webhooks: webhooksOptionsFromConfig(config, boss),
 })

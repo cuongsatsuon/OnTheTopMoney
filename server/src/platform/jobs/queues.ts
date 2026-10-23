@@ -52,6 +52,8 @@ export interface QueuePayloads {
   'connections.oauth_gc': Record<string, never>
   'connections.token_check': Record<string, never>
   'webhook.route': { eventId: string }
+  'connections.subscribe_page': { pageId: string }
+  'webhooks.health': Record<string, never>
 }
 
 export const QUEUES = {
@@ -131,8 +133,9 @@ export const QUEUES = {
   // UNIQUE(product, dedupe_key) ở lúc ghi (mỗi mục một job duy nhất) + handler idempotent (tính lại trạng thái
   // xác định), nên retry an toàn. Retry 5 backoff, concurrency 10 (AD-24). Chưa `critical` ở 4.1 → job hết retry
   // vẫn phát `job.failed` nhưng KHÔNG sinh thông báo (consumer `events.notifications` chỉ báo queue critical).
-  // Việc ghi mục `failed` do handler webhook.route tự làm ở lần thử cuối (không qua `job.failed`). Dead-letter +
-  // thông báo để ở story webhook health 4.2.
+  // Việc ghi mục `failed` do handler webhook.route tự làm ở lần thử cuối (không qua `job.failed`); chủ shop thấy
+  // mục lỗi ở nhật ký Cài đặt › Webhook và bấm "Xử lý lại". Story 4.2 giữ không critical (chỉ có banner sức khoẻ);
+  // dead-letter + thông báo cho `webhook.route` hoãn (deferred-work.md).
   'webhook.route': {
     policy: 'standard',
     retryLimit: 5,
@@ -140,6 +143,29 @@ export const QUEUES = {
     retryBackoff: true,
     concurrency: 10,
     expireInSeconds: 120,
+  },
+  // Module `connections` (Story 4.2, AD-4/AD-24 `connections.*`): đăng ký webhook cho một trang
+  // (`POST /{page}/subscribed_apps`). Enqueue trong transaction xác nhận/kết nối lại + chạy bù khi worker khởi động.
+  // Idempotent (đăng ký lại cùng field không đổi gì) nên retry an toàn. Chỉ `RATE_LIMITED`/`TRANSIENT` ném để retry;
+  // lỗi khác ghi `webhook_subscribe_error` rồi kết thúc; hết retry → `FAILED`.
+  'connections.subscribe_page': {
+    policy: 'standard',
+    retryLimit: 3,
+    // Chặn tần suất của Meta thường kéo dài vài phút → bắt đầu từ 60 giây (60/120/240) thay vì hết retry trong
+    // chưa tới một phút rồi thành `FAILED` vĩnh viễn (nhất là lúc chạy bù nhiều trang).
+    retryDelay: 60,
+    retryBackoff: true,
+    concurrency: 2,
+    expireInSeconds: 120,
+  },
+  // Module `webhooks` (Story 4.2, AD-4): mỗi 5 phút (giờ VN) tính sức khoẻ `meta`/`threads`, phát
+  // `webhook.stalled|recovered` khi đổi trạng thái (cùng transaction với lần ghi). Cron chạy lại sau 5 phút → retry 1.
+  'webhooks.health': {
+    policy: 'standard',
+    retryLimit: 1,
+    concurrency: 1,
+    expireInSeconds: 60,
+    cron: { expression: '*/5 * * * *', tz: CRON_TZ },
   },
 } as const satisfies { [N in keyof QueuePayloads]: QueueDef }
 

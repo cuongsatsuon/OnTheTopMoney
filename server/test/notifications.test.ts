@@ -351,6 +351,8 @@ describe('worker thật: publish → events.notifications → thông báo; job h
         'connections.oauth_gc': async () => {},
         'connections.token_check': async () => {},
         'webhook.route': async () => {},
+        'connections.subscribe_page': async () => {},
+        'webhooks.health': async () => {},
         'events.notifications': async (job) => {
           await handleEvent(workerDeps, parseEventEnvelope(job.data))
         },

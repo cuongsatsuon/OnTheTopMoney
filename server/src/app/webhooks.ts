@@ -4,16 +4,23 @@
 //   chữ ký → 401, KHÔNG ghi (AD-4). Dùng content-type parser buffer RIÊNG cho scope này để giữ raw body;
 //   /api/v1 vẫn parse JSON như thường (parser đóng gói theo scope).
 // - GET /webhooks/{meta,threads}: trả `hub.challenge` khi `hub.verify_token` khớp `META_VERIFY_TOKEN`; sai → 403.
-// - /api/v1/webhooks/{config,events,test,events/:id/retry}: dưới guard phiên.
+// - /api/v1/webhooks/{config,events,test,events/:id/retry,health}: dưới guard phiên.
 import type { WebhookConfigResponse, WebhookLogResponse, WebhookProduct } from '@ottm/shared'
-import { WEBHOOK_FIELDS, WebhookEventDto, WebhookLogQuery, WebhookTestRequest } from '@ottm/shared'
+import { WEBHOOK_FIELDS, WebhookEventDto, WebhookHealthResponse, WebhookLogQuery, WebhookTestRequest } from '@ottm/shared'
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { AppError } from '../platform/errors/index.ts'
 import type { Db } from '../platform/db/index.ts'
 import type { JobSender } from '../platform/jobs/index.ts'
 import type { Logger } from '../platform/log/index.ts'
-import { createTestEvent, ingestWebhook, listWebhookEvents, retryEvent, type IngestDeps } from '../modules/webhooks/index.ts'
+import {
+  createTestEvent,
+  getWebhookHealth,
+  ingestWebhook,
+  listWebhookEvents,
+  retryEvent,
+  type IngestDeps,
+} from '../modules/webhooks/index.ts'
 
 export interface WebhooksDeps {
   db: Db
@@ -26,6 +33,8 @@ export interface WebhooksDeps {
   /** Gốc công khai của api để dựng URL callback hiển thị ở Cài đặt. */
   publicBaseUrl: string
   log: Logger
+  /** Đồng hồ cho `GET /api/v1/webhooks/health` khi chưa có dòng cron (test). */
+  now?: () => Date
 }
 
 const SIGNATURE_HEADER = 'x-hub-signature-256'
@@ -116,5 +125,10 @@ export function registerWebhooks(app: FastifyInstance, deps: WebhooksDeps): void
     // Chỉ mục failed mới xử lý lại được (AD-4): received/routed/ignored → 409, không reset/re-route.
     if (outcome.status === 'not_failed') throw new AppError('VERSION_CONFLICT', 409, { message: 'Chỉ sự kiện lỗi mới xử lý lại được' })
     return WebhookEventDto.parse(outcome.event)
+  })
+
+  // Sức khoẻ webhook (Story 4.2): trạng thái mỗi sản phẩm + trang đăng ký lỗi. Chỉ đọc DB, không gọi Meta.
+  app.get('/api/v1/webhooks/health', async (): Promise<WebhookHealthResponse> => {
+    return WebhookHealthResponse.parse(await getWebhookHealth(deps.db, deps.now?.() ?? new Date()))
   })
 }

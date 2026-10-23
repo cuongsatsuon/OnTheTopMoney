@@ -1,12 +1,14 @@
 // Bảng của module `connections` (AD-1). Story 2.1: `meta_rate_state` — trạng thái ngân sách tần suất Meta (AD-6).
 // Story 2.2: `oauth_states`, `oauth_results`, `meta_accounts`, `page_credentials`.
-import { CONNECT_FROM, OAUTH_PROVIDERS } from '@ottm/shared'
+// Story 4.2: kết quả đăng ký webhook trang (`webhook_subscribed_at`, `webhook_subscribe_error`) trên `page_credentials`.
+import { CONNECT_FROM, OAUTH_PROVIDERS, WEBHOOK_SUBSCRIBE_ERRORS } from '@ottm/shared'
 import { sql } from 'drizzle-orm'
 import { bigint, boolean, check, index, jsonb, pgTable, primaryKey, real, text, timestamp, uuid } from 'drizzle-orm/pg-core'
 import { pagesTable } from '../pages/index.ts'
 
 const RETURN_TO_LIST = sql.raw(CONNECT_FROM.map((r) => `'${r}'`).join(', '))
 const PROVIDER_LIST = sql.raw(OAUTH_PROVIDERS.map((p) => `'${p}'`).join(', '))
+const SUBSCRIBE_ERROR_LIST = sql.raw(WEBHOOK_SUBSCRIBE_ERRORS.map((e) => `'${e}'`).join(', '))
 
 /**
  * Một dòng cho mỗi (phạm vi, bucket): `scope` = `app` hoặc phạm vi của lời gọi (vd `page:<id>`);
@@ -106,6 +108,9 @@ export const metaAccounts = pgTable('meta_accounts', {
  * Trang IG không có token riêng: `token_source_page_id` trỏ tới Fanpage nguồn (đúng một trong hai cột có giá trị).
  * `expires_at` kiểu Meta (giây epoch, 0 = không hết hạn — thường gặp với Page token), `data_access_expires_at`
  * (90 ngày) và `granular_scopes` = các quyền đã cấp cho riêng trang này (đọc từ `debug_token`).
+ * Story 4.2: job `connections.subscribe_page` ghi `webhook_subscribed_at` khi đăng ký webhook thành công (xoá lỗi
+ * cũ) hoặc `webhook_subscribe_error` (mã chẩn đoán `WebhookSubscribeError`) khi lỗi. Cả hai `null` = chưa đăng ký
+ * lần nào → worker chạy bù khi khởi động. Ghi hai cột này KHÔNG đụng `updated_at` (tuổi token Threads).
  */
 export const pageCredentials = pgTable(
   'page_credentials',
@@ -121,10 +126,13 @@ export const pageCredentials = pgTable(
     expiresAt: bigint('expires_at', { mode: 'number' }).notNull().default(0),
     dataAccessExpiresAt: bigint('data_access_expires_at', { mode: 'number' }),
     granularScopes: jsonb('granular_scopes').notNull().default(sql`'[]'::jsonb`),
+    webhookSubscribedAt: timestamp('webhook_subscribed_at', { withTimezone: true, precision: 3 }),
+    webhookSubscribeError: text('webhook_subscribe_error'),
     createdAt: timestamp('created_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
   },
   (t) => [
+    check('page_credentials_webhook_subscribe_error_check', sql`${t.webhookSubscribeError} in (${SUBSCRIBE_ERROR_LIST})`),
     check('page_credentials_token_source_check', sql`(${t.accessToken} is null) <> (${t.tokenSourcePageId} is null)`),
     index('page_credentials_token_source_idx').on(t.tokenSourcePageId),
   ],

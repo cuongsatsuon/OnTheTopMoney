@@ -1,6 +1,6 @@
-import { Bell, Check, Copy, Eye, EyeOff, KeyRound, Loader2, Plus, RefreshCw, Send, Sparkles, Trash2, Webhook } from 'lucide-react'
+import { Bell, Check, Copy, Eye, EyeOff, KeyRound, Loader2, Plus, RefreshCw, Send, Sparkles, Trash2, TriangleAlert, Webhook } from 'lucide-react'
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { Content } from '../components/AppShell'
 import ConnectResultModal from '../components/ConnectResultModal'
 import { Button, Card, CardHeader, Chip, Field, Input, Modal, PageHeader, PageLabel, PlatformIcon, Progress, Select, StatusChip, Switch, cn } from '../components/ui'
@@ -37,11 +37,15 @@ import {
 import { errorMessage, errorMessageOf } from '../lib/error-messages'
 import { useNotificationPrefs, useSaveNotificationPrefs } from '../lib/notifications'
 import {
+  WEBHOOK_PRODUCT_LABEL,
   canRetry,
+  lastEventLabel,
+  subscribeErrorLabel,
   useRetryWebhookEvent,
   useSendTestEvent,
   useWebhookConfig,
   useWebhookEvents,
+  useWebhookHealth,
   webhookEventTime,
   webhookFieldLabel,
   webhookStatusView,
@@ -65,6 +69,11 @@ import {
 } from '../lib/openai'
 
 type Section = 'openai' | 'webhook' | 'meta' | 'notify'
+
+/** `?section=` mở thẳng một mục (vd banner Hộp thư → `/cai-dat?section=webhook`). */
+const SECTION_PARAM = 'section'
+const sectionOf = (raw: string | null): Section | null =>
+  raw === 'openai' || raw === 'webhook' || raw === 'meta' || raw === 'notify' ? raw : null
 
 const SECTIONS: { id: Section; label: string; icon: ReactNode }[] = [
   { id: 'openai', label: 'Kết nối OpenAI', icon: <KeyRound size={16} /> },
@@ -115,10 +124,19 @@ const NOTIFY_ITEMS: { id: NotificationType; label: string; hint: string }[] = [
 export default function Settings() {
   const { notify } = useApp()
   const [searchParams, setSearchParams] = useSearchParams()
-  // Quay về từ OAuth (`?ket-noi=` / `?ket-noi-loi=`, from: 'settings') → mở thẳng mục Tài khoản Meta.
+  // Quay về từ OAuth (`?ket-noi=` / `?ket-noi-loi=`, from: 'settings') → mở thẳng mục Tài khoản Meta;
+  // `?section=webhook` (banner Hộp thư) → mở thẳng mục đó.
+  const sectionParam = sectionOf(searchParams.get(SECTION_PARAM))
   const [section, setSection] = useState<Section>(() =>
-    searchParams.has(CONNECT_RESULT_PARAM) || searchParams.has(CONNECT_ERROR_PARAM) ? 'meta' : 'openai',
+    searchParams.has(CONNECT_RESULT_PARAM) || searchParams.has(CONNECT_ERROR_PARAM) ? 'meta' : (sectionParam ?? 'openai'),
   )
+  // Đang ở Cài đặt mà bấm link khác `?section=` (vd banner) → đổi mục theo URL (chỉnh state ngay lúc render khi
+  // tham số đổi — mẫu "điều chỉnh state khi prop đổi" của React, không cần effect).
+  const [appliedSectionParam, setAppliedSectionParam] = useState(sectionParam)
+  if (sectionParam !== appliedSectionParam) {
+    setAppliedSectionParam(sectionParam)
+    if (sectionParam) setSection(sectionParam)
+  }
   const [dirty, setDirty] = useState(false)
   const touch = () => setDirty(true)
 
@@ -147,6 +165,8 @@ export default function Settings() {
   const webhookEvents = useWebhookEvents()
   const sendTestEvent = useSendTestEvent()
   const retryEvent = useRetryWebhookEvent()
+  // Sức khoẻ webhook (Story 4.2): tin gần nhất mỗi sản phẩm + trang đăng ký lỗi.
+  const webhookHealth = useWebhookHealth()
 
   // Tài khoản Meta: trang thật, tách khối Facebook và Threads. "Kết nối" / "Kết nối lại" chạy lại OAuth đúng nền
   // tảng; callback đưa về đây (`from: 'settings'`) và mở bước chọn trang ngay trong Cài đặt.
@@ -614,6 +634,53 @@ export default function Settings() {
 
           {section === 'webhook' && (
             <>
+              <Card>
+                <CardHeader title="Tình trạng nhận tin" subtitle="Webhook ngừng nhận tin quá 30 phút (08:00–22:00) thì Hộp thư hiện cảnh báo" />
+                {webhookHealth.data ? (
+                  <div className="divide-y divide-border">
+                    {webhookHealth.data.products.map((p) => (
+                      <div key={p.product} className="flex flex-wrap items-center gap-3 px-4 py-3">
+                        <span className="text-sm font-medium">{WEBHOOK_PRODUCT_LABEL[p.product]}</span>
+                        <span className="text-[13px] text-muted-foreground">{lastEventLabel(p.lastEventAt)}</span>
+                        {p.status === 'stalled' && (
+                          <Chip tone="warning" icon={<TriangleAlert size={11} />} className="ml-auto">
+                            Ngừng nhận tin
+                          </Chip>
+                        )}
+                      </div>
+                    ))}
+                    {webhookHealth.data.pageSubscriptionErrors.length > 0 && (
+                      <div className="space-y-2 px-4 py-3" role="alert">
+                        <p className="text-[13px] font-medium text-red-700">Trang chưa đăng ký nhận tin được</p>
+                        <ul className="space-y-2">
+                          {webhookHealth.data.pageSubscriptionErrors.map((e) => (
+                            <li key={e.pageId} className="flex flex-wrap items-center gap-2 text-sm">
+                              <PlatformIcon platform={e.platform} size={14} />
+                              <Link to={`/trang-nhom/trang/${e.pageId}`} className="font-medium hover:text-primary hover:underline">
+                                {e.name}
+                              </Link>
+                              <span className="text-[13px] text-muted-foreground">{subscribeErrorLabel(e.errorCode)}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                ) : webhookHealth.isError ? (
+                  <div className="px-4 py-6 text-center" role="alert">
+                    <p className="text-sm">{errorMessageOf(webhookHealth.error)}</p>
+                    <Button className="mt-3" onClick={() => void webhookHealth.refetch()}>
+                      Thử lại
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="space-y-3 p-4" aria-busy="true">
+                    <Skeleton className="h-5 w-2/3" />
+                    <Skeleton className="h-5 w-1/2" />
+                  </div>
+                )}
+              </Card>
+
               <Card>
                 <CardHeader title="Webhook tin nhắn" subtitle="Meta gửi tin nhắn và bình luận mới về các địa chỉ này" />
                 {webhookConfig.data ? (

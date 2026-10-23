@@ -534,6 +534,17 @@ Cần quyền Admin trên app chính ở <https://developers.facebook.com/apps>.
      `https://<tên miền>/webhooks/meta` và `https://<tên miền>/webhooks/threads` (= `PUBLIC_BASE_URL` +
      `/webhooks/{meta,threads}`); verify token = `META_VERIFY_TOKEN` trong `deploy/.env`. Chủ shop cũng xem được
      URL + verify token ở **Cài đặt › Webhook** (có nút sao chép). Đây là bước triển khai một lần (AD-4).
+   - **Đăng ký theo trang là tự động (Story 4.2)**: bước cấp app ở trên chỉ làm **một lần** cho mỗi app. Mỗi khi chủ
+     shop xác nhận hoặc kết nối lại trang, worker chạy job `connections.subscribe_page`: Fanpage gọi
+     `POST /{page-id}/subscribed_apps` (`messages,messaging_postbacks,message_echoes,feed`); Instagram đăng ký qua
+     Fanpage nguồn với cùng field — field IG `messages`, `comments` **chỉ bật ở cấp app** (bước trên), app không bật
+     qua API; Threads không có API đăng ký theo tài khoản — field `replies` **chỉ bật ở cấp app**. Worker khởi động
+     sẽ chạy bù cho trang đã kết nối mà chưa từng đăng ký. Trang đăng ký lỗi hiện ở **Cài đặt › Webhook** và trang
+     chi tiết (thiếu quyền / token hỏng → kết nối lại trang).
+   - **Sức khoẻ webhook**: cron `webhooks.health` (5 phút) đánh dấu `stalled` khi sản phẩm (Facebook/Instagram hoặc
+     Threads) có trang đang hoạt động mà không nhận sự kiện nào quá 30 phút trong 08:00–22:00 giờ VN; Hộp thư hiện
+     banner vàng "Chưa nhận tin mới 30 phút". Gặp banner: kiểm callback + verify token + field ở trên còn đúng, app
+     còn Live, và log `docker compose logs api | grep webhook` có `401` (sai app secret) hay không.
    - **Chữ ký webhook Threads [ASSUMPTION]**: tài liệu Meta chưa nói rõ app secret nào ký `X-Hub-Signature-256`
      của webhook Threads. App hiện kiểm chữ ký `/webhooks/threads` bằng **Threads app secret** (`THREADS_APP_SECRET`).
      Khi có sự kiện Threads thật, xác nhận lại tại đây và ghi secret đúng: ______________________________________.

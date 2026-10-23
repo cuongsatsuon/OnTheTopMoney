@@ -1,5 +1,6 @@
 // Module `connections` (AD-1, AD-5, AD-6, AD-23): sở hữu `meta_rate_state` (Story 2.1), `page_credentials`,
 // `oauth_states`, `oauth_results`, `meta_accounts` (Story 2.2); OAuth Threads dùng chung các bảng này (Story 2.3). Public API chỉ export từ file này.
+// Story 4.2: đăng ký webhook trang (job `connections.subscribe_page`) + lỗi đăng ký cho API sức khoẻ của `webhooks`.
 // Phụ thuộc: chỉ module nền (`pages`); được import `adapters/meta`. Chỉ module này giữ token trang và gọi
 // `pages.upsertFromPlatform` / `pages.setConnectionStatus`.
 export const MODULE = 'connections'
@@ -35,6 +36,19 @@ export {
   type CallbackQuery,
 } from './oauth.ts'
 export { confirmConnections } from './confirm.ts'
+export {
+  PAGE_SUBSCRIBED_FIELDS,
+  SubscribeRetryableError,
+  enqueueMissingSubscriptions,
+  handleSubscribeJob,
+  listSubscriptionErrors,
+  parseSubscribeJobData,
+  recordSubscribeError,
+  subscribePage,
+  type SubscribeJobHandlerDeps,
+  type SubscribeOutcome,
+  type SubscribePageDeps,
+} from './subscribe.ts'
 export { getAccessToken, removePage } from './credentials.ts'
 export { FAKE_CODE, FAKE_THREADS_CODE } from './fake-meta.ts'
 export {

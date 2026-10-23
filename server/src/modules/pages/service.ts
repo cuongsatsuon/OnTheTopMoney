@@ -166,6 +166,19 @@ export async function getPage(db: DbExecutor, id: string): Promise<PageDto | nul
 }
 
 /**
+ * Id nền tảng (`platform_account_id`) của một trang chưa gỡ; `null` khi không có hoặc đã gỡ. Dành cho module gọi
+ * Meta theo id nền tảng (vd `connections` đăng ký webhook `POST /{page}/subscribed_apps` — Story 4.2). Không nằm
+ * trong `PageDto` vì client không cần.
+ */
+export async function getPlatformAccountId(db: DbExecutor, id: string): Promise<string | null> {
+  const [row] = await db
+    .select({ platformAccountId: pages.platformAccountId })
+    .from(pages)
+    .where(and(eq(pages.id, id), isNull(pages.removedAt)))
+  return row?.platformAccountId ?? null
+}
+
+/**
  * Trang CHƯA gỡ theo id nền tảng (AD-6: webhook mang id nền tảng, không phải id nội bộ). Dùng ở job
  * `webhook.route` để định tuyến mục webhook: không khớp (chưa kết nối hoặc đã gỡ) → `null` (mục chỉ lưu,
  * không route). `platform_account_id` chỉ duy nhất TRONG từng nền tảng, nên lọc theo `platforms` (suy từ

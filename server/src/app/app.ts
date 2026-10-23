@@ -63,7 +63,8 @@ export interface AppDeps {
   clock?: () => Date
   /**
    * Kết nối Fanpage + IG (Story 2.2) và Threads (Story 2.3): client Graph + Threads (fake khi `META_FAKE=1`), mã hoá token, cấu hình OAuth.
-   * Đăng ký cùng `events` (xác nhận phát `page.connected` / `page.reconnected`).
+   * Đăng ký cùng `events` (xác nhận phát `page.connected` / `page.reconnected`). `jobs` (Story 4.2): xác nhận enqueue
+   * `connections.subscribe_page` trong cùng transaction.
    */
   connections?: Omit<ConnectionsDeps, 'db' | 'events' | 'log'>
   /**

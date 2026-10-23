@@ -4,13 +4,21 @@ import { getConfig } from '../platform/config/index.ts'
 import { createLogger } from '../platform/log/index.ts'
 import { assertBossDbSupported, createDb, newId } from '../platform/db/index.ts'
 import { createEventPublisher, parseEventEnvelope } from '../platform/events/index.ts'
-import { QUEUES, createBoss, ensureQueues, isCriticalQueue, startWorkers } from '../platform/jobs/index.ts'
+import { QUEUES, createBoss, createJobSender, ensureQueues, isCriticalQueue, startWorkers } from '../platform/jobs/index.ts'
 import { createSecretCipher } from '../adapters/crypto/index.ts'
 import { gcReservations, handleAiEvent } from '../modules/ai/index.ts'
-import { cleanupExpiredOAuth, createMetaClients, runTokenCheck } from '../modules/connections/index.ts'
+import {
+  cleanupExpiredOAuth,
+  createMetaClients,
+  enqueueMissingSubscriptions,
+  handleSubscribeJob,
+  recordSubscribeError,
+  runTokenCheck,
+  subscribePage,
+} from '../modules/connections/index.ts'
 import { handleEvent } from '../modules/notifications/index.ts'
 import { handleProfilesEvent } from '../modules/profiles/index.ts'
-import { handleRouteJob, markEventFailed, routeWebhookEvent } from '../modules/webhooks/index.ts'
+import { handleRouteJob, markEventFailed, routeWebhookEvent, runHealthCheck } from '../modules/webhooks/index.ts'
 import { HEARTBEAT_INTERVAL_MS, writeHeartbeat } from './heartbeat.ts'
 
 const config = getConfig()
@@ -25,8 +33,10 @@ const cipher =
   config.APP_ENCRYPTION_KEYS && config.APP_ENCRYPTION_ACTIVE_KEY
     ? createSecretCipher({ keys: config.APP_ENCRYPTION_KEYS, activeKeyId: config.APP_ENCRYPTION_ACTIVE_KEY })
     : null
-// Client Threads (fake khi `META_FAKE=1`; undefined khi chưa cấu hình app Threads) để làm mới token Threads.
-const { threads } = createMetaClients({ config, db: dbHandle.db, log: logger.child({ component: 'meta' }) })
+// Client Threads (fake khi `META_FAKE=1`; undefined khi chưa cấu hình app Threads) để làm mới token Threads;
+// client Graph để đăng ký webhook trang (`connections.subscribe_page`, Story 4.2).
+const { graph, threads } = createMetaClients({ config, db: dbHandle.db, log: logger.child({ component: 'meta' }) })
+const jobs = createJobSender(boss)
 
 let heartbeatTimer: NodeJS.Timeout | undefined
 let closing = false
@@ -99,11 +109,41 @@ try {
           },
           job as JobWithMetadata<unknown>,
         ),
+      // Story 4.2: đăng ký webhook cho một trang. Lỗi retry được ném lại; lần thử cuối ghi `FAILED` (handleSubscribeJob).
+      'connections.subscribe_page': (job) =>
+        handleSubscribeJob(
+          {
+            subscribe: async (pageId) => {
+              const outcome = await subscribePage(
+                { db: dbHandle.db, events, cipher, graph, log: logger.child({ component: 'subscribe_page' }) },
+                pageId,
+              )
+              logger.debug({ jobId: job.id, pageId, outcome: outcome.status }, 'connections.subscribe_page')
+            },
+            markFailed: (pageId, errorCode) => recordSubscribeError(dbHandle.db, pageId, errorCode),
+          },
+          job as JobWithMetadata<unknown>,
+        ),
+      // Story 4.2: sức khoẻ webhook mỗi 5 phút; phát `webhook.stalled|recovered` khi đổi trạng thái.
+      'webhooks.health': async () => {
+        const results = await runHealthCheck({ db: dbHandle.db, events })
+        for (const r of results) {
+          if (r.emitted) logger.warn({ product: r.product, status: r.status, previous: r.previous }, `webhooks: ${r.emitted}`)
+        }
+      },
     },
     logger,
     QUEUES,
     { failures: { events, db: dbHandle.db } },
   )
+  // Chạy bù (Story 4.2): trang đã kết nối trước khi có job đăng ký webhook (hoặc job bị mất) → enqueue một lần.
+  // Lỗi ở đây không được làm chết worker — chỉ log; lần khởi động sau chạy lại.
+  try {
+    const enqueued = await enqueueMissingSubscriptions(dbHandle.db, jobs)
+    if (enqueued > 0) logger.info({ enqueued }, 'connections: chạy bù đăng ký webhook trang')
+  } catch (err) {
+    logger.error({ err }, 'connections: chạy bù đăng ký webhook trang lỗi')
+  }
   // Heartbeat ngay khi khởi động, rồi mỗi 30 giây (spec); cron 1 phút của pg-boss vẫn ghi song song.
   await writeHeartbeat(dbHandle.db, instanceId)
   heartbeatTimer = setInterval(() => {

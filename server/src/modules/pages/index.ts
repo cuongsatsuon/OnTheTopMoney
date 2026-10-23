@@ -5,6 +5,7 @@ export const MODULE = 'pages'
 export {
   findPageByPlatformAccountId,
   getPage,
+  getPlatformAccountId,
   listPages,
   resolveScope,
   setConnectionStatus,
