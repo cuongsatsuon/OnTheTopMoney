@@ -1,7 +1,17 @@
 // Story 6.1 — helper thuần của Soạn bài: chọn đích theo Phạm vi / nhóm, luật nền tảng trên tab (cùng bảng với server),
 // chép caption, gắn ảnh, body lưu nháp, nạp nháp, kiểm file ảnh, câu lỗi.
 // Story 6.2 — caption AI: body gọi AI, áp kết quả từng tab, khoá nút AI, cụm vi phạm còn trong chữ, câu ghi chú / toast.
-import { ComposeCaptionsRequest, SavePostRequest, type ComposeCaptionResult, type MediaAssetDto, type PageDto, type PostDto } from '@ottm/shared'
+// Story 6.3 — ảnh AI: lưới ô (đang tạo / lỗi / ảnh rồi kho ảnh), tạo lại giữ ảnh đang gắn, "Thử mô tả khác", mô tả gửi AI.
+import {
+  ComposeCaptionsRequest,
+  GenerateImagesRequest,
+  SavePostRequest,
+  type ComposeCaptionResult,
+  type GeneratedImageDto,
+  type MediaAssetDto,
+  type PageDto,
+  type PostDto,
+} from '@ottm/shared'
 import { describe, expect, it } from 'vitest'
 import { ApiError } from './api'
 import { SUGGEST_HINTS } from './inbox'
@@ -15,6 +25,7 @@ import {
   assignUploaded,
   blockingIssues,
   buildComposeBody,
+  buildImageBody,
   buildSaveBody,
   captionCounter,
   captionViolations,
@@ -24,12 +35,19 @@ import {
   composeToast,
   composerErrorMessage,
   copyCaptionToEmpty,
+  dismissFailed,
   draftFromPost,
+  imageFailureText,
   imageFileIssue,
+  imagePrompt,
+  imageTiles,
   initialSelection,
   issueText,
   issuesFor,
+  keepAttachedGenerated,
   orderedTargets,
+  pendingTiles,
+  tileImages,
   toggleGroupSelection,
   type Drafts,
 } from './composer'
@@ -256,5 +274,66 @@ describe('Viết caption bằng AI (Story 6.2)', () => {
       ]),
     ).toBe('AI đã viết cho 1 trang · 1 trang chưa viết được')
     expect(composeToast([{ pageId: B, status: 'error', errorCode: 'CONFIG_MISSING' }])).toBe(aiErrorText('CONFIG_MISSING'))
+  })
+})
+
+describe('ảnh AI (Story 6.3)', () => {
+  const asset = (n: number, source: MediaAssetDto['source'] = 'ai'): MediaAssetDto => ({
+    id: id(n),
+    source,
+    url: `https://res.cloudinary.com/demo/image/upload/v1/ottm/public/${n}.jpg`,
+    width: 1024,
+    height: 1024,
+    createdAt: '2026-10-24T00:00:00.000Z',
+  })
+  const slot = (n: number, status: GeneratedImageDto['status'], errorCode: GeneratedImageDto['errorCode'] = null): GeneratedImageDto => ({
+    id: id(n),
+    status,
+    errorCode,
+    asset: status === 'ready' ? asset(n) : null,
+    createdAt: '2026-10-24T00:00:00.000Z',
+  })
+  const gen = [slot(301, 'pending'), slot(302, 'ready'), slot(303, 'failed', 'IMAGE_REJECTED'), slot(304, 'ready')]
+  const genIds = gen.map((g) => g.id)
+  const uploaded = asset(305, 'upload')
+
+  it('lưới: ô AI theo thứ tự (đang tạo / ảnh / lỗi kèm mã / ảnh) rồi ảnh tải lên; chưa có trạng thái → đang tạo; ô bị dọn → bỏ', () => {
+    const tiles = imageTiles(genIds, gen, [uploaded, asset(302)])
+    expect(tiles.map((t) => (t.kind === 'image' ? `image:${t.asset.id}` : `${t.kind}:${t.id}`))).toEqual([
+      `pending:${id(301)}`,
+      `image:${id(302)}`,
+      `failed:${id(303)}`,
+      `image:${id(304)}`,
+      `image:${id(305)}`, // ảnh 302 có trong kho không lặp lại
+    ])
+    expect(tiles[2]).toEqual({ kind: 'failed', id: id(303), errorCode: 'IMAGE_REJECTED' })
+    expect(pendingTiles(tiles)).toBe(1)
+    expect(tileImages(tiles).map((m) => m.id)).toEqual([id(302), id(304), id(305)])
+    // Trước khi đọc được trạng thái: cả 4 ô đang tạo.
+    expect(imageTiles(genIds, undefined, []).map((t) => t.kind)).toEqual(['pending', 'pending', 'pending', 'pending'])
+    // Đã đọc mà thiếu id (ô bị dọn) → bỏ ô đó.
+    expect(imageTiles(genIds, gen.slice(1), []).map((t) => t.kind)).toEqual(['image', 'failed', 'image'])
+  })
+
+  it('câu lỗi ô ảnh theo mã; "Thử mô tả khác" chỉ bỏ ô lỗi', () => {
+    expect(imageFailureText('IMAGE_REJECTED')).toContain('từ chối')
+    expect(imageFailureText('IMAGE_FAILED')).toContain('lỗi')
+    expect(dismissFailed(genIds, gen)).toEqual([id(301), id(302), id(304)])
+  })
+
+  it('tạo lại: bộ cũ rời lưới, ảnh AI đang gắn một tab giữ lại trong kho (không trùng)', () => {
+    const drafts: Drafts = { [id(1)]: { ...EMPTY_DRAFT, mediaIds: [id(304)] }, [id(2)]: { ...EMPTY_DRAFT, mediaIds: [id(305)] } }
+    const pool = keepAttachedGenerated([uploaded], gen, drafts)
+    expect(pool.map((m) => m.id)).toEqual([id(304), id(305)])
+    expect(keepAttachedGenerated(pool, gen, drafts).map((m) => m.id)).toEqual([id(304), id(305)])
+    // Lần sinh mới (ô chưa có trạng thái) + kho → ảnh đang gắn vẫn chọn được.
+    expect(tileImages(imageTiles([id(401)], undefined, pool)).map((m) => m.id)).toEqual([id(304), id(305)])
+  })
+
+  it('mô tả gửi AI: ô Mô tả ảnh nếu có, không thì ý tưởng; cả hai trống → không gửi', () => {
+    expect(imagePrompt('  ', ' Nồi chiên ')).toBe('Nồi chiên')
+    expect(buildImageBody('Nồi chiên trên bếp gỗ', 'Khuyến mãi', 'lifestyle')).toEqual({ prompt: 'Nồi chiên trên bếp gỗ', style: 'lifestyle' })
+    expect(GenerateImagesRequest.parse(buildImageBody('', 'Khuyến mãi', 'product'))).toEqual({ prompt: 'Khuyến mãi', style: 'product' })
+    expect(buildImageBody(' ', '  ', 'product')).toBeNull()
   })
 })

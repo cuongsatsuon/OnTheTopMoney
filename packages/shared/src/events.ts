@@ -66,7 +66,9 @@ export const EVENTS = {
   'page.group_changed': event(true, { fromGroupId: Id.nullable(), toGroupId: Id.nullable() }),
   // Story 2.5: `id` = groupId đã xoá; `memberPageIds` = các trang vừa bị gỡ khỏi nhóm (Epic 3 giữ cấu hình).
   'group.deleted': event(true, { groupId: Id, memberPageIds: z.array(Id) }),
+  // Story 6.3: ô ảnh AI đã có file (`created`) hoặc không tạo được (`failed`, `IMAGE_REJECTED`/`IMAGE_FAILED`).
   'media_asset.created': event(true, {}),
+  'media_asset.failed': event(true, { errorCode: ErrorCode }),
   // Story 5.2: job trích văn bản kết thúc một mục kho kiến thức. `pageId` có khi chủ là trang.
   'knowledge_item.processed': event(true, { ownerType: ConfigOwnerType, ownerId: Id, status: KnowledgeStatus }),
   'ai_budget.threshold_reached': event(true, { level: z.union([z.literal(80), z.literal(100)]) }),

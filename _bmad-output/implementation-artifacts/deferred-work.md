@@ -24,7 +24,7 @@
   evidence: Bước CI "xuất bản web lỗi → không đổi current" bị bỏ cùng cơ chế WEB_ROOT; cần cách cố ý làm hỏng build `ottm-web` (vd nginx -t lỗi) trong CI.
 - source_spec: `spec-media-cloudinary.md`
   summary: Dọn file mồ côi trên Cloudinary (liệt kê `<folder>/private|public/*`, so với tham chiếu trong DB), kể cả sau khi khôi phục backup.
-  evidence: Adapter chưa có thao tác liệt kê theo prefix; runbook chỉ nêu chiều ngược lại.
+  evidence: Adapter chưa có thao tác liệt kê theo prefix; runbook chỉ nêu chiều ngược lại. Story 6.3 thêm cron `content.media_gc` nhưng chỉ dọn theo DB (dòng `media_assets` không gắn bài quá 7 ngày + file của dòng đó); file mà DB không còn trỏ tới (xoá file lỗi lúc dọn — `fileErrors` trong log, ghi DB lỗi sau khi tải lên, khôi phục backup) vẫn nằm trên kho.
 - source_spec: `spec-media-cloudinary.md`
   summary: Job CI tuỳ chọn chạy `runMediaCheck` với tài khoản Cloudinary thử (secret `CLOUDINARY_URL_TEST`).
   evidence: Fake ký bằng chính `signParams` của adapter; tải file `authenticated` qua API download chưa được kiểm với Cloudinary thật.
@@ -170,3 +170,18 @@
 - source_spec: `spec-6-2-caption-ai.md`
   summary: Soạn bài viết song song 3 trang khi hạn mức còn sát: chỗ giữ của các trang đang chạy làm trang sau gặp `AI_BUDGET_EXCEEDED` dù hạn mức chưa hết (`remainingVnd > 0`) → thành mã dừng cho các trang chưa bắt đầu, FE khoá mọi nút AI ("hết hạn mức") tới khi trạng thái hạn mức đổi.
   evidence: `content/compose.ts` `STOP_CODES` gồm `AI_BUDGET_EXCEEDED` không phân biệt `details.remainingVnd`; `ai/budget.ts` `reserve` cộng chỗ giữ đang mở. Hướng sửa: chỉ coi là mã dừng khi `remainingVnd === 0` (còn lại → lỗi riêng trang, có "Thử lại"), FE chỉ khoá theo `lockCode` đó.
+- source_spec: `spec-6-3-sinh-anh-ai.md`
+  summary: Kiểm bằng trình duyệt + OpenAI / Cloudinary thật, worker chạy, luồng ảnh AI ở Soạn bài:
+    - "Tạo bằng AI" (bật "Kèm 4 ảnh AI") → 4 ô "Đang tạo ảnh…" đổi dần thành ảnh qua realtime; chọn ảnh cho từng tab, "Tạo lại ảnh" giữ ảnh đang gắn;
+    - mô tả vi phạm chính sách → ô "Không tạo được ảnh này" + "Thử mô tả khác" (focus ô Mô tả ảnh), caption giữ nguyên;
+    - chất lượng ảnh của `gpt-image-*` với prompt tiếng Việt (`ai/prompts/image.ts`, "không chữ trong ảnh"); thời gian sinh thật so với hạn job 240 giây.
+  evidence: Chỉ có test API (Postgres thật, pg-boss, OpenAI + Cloudinary giả — `server/test/content-images.test.ts`) và test helper web (`web/src/lib/composer.test.ts`); chưa chạy UI với phiên chủ shop + worker + khoá OpenAI thật.
+- source_spec: `spec-6-3-sinh-anh-ai.md`
+  summary: Ô ảnh AI chưa gắn tab mất khỏi lưới khi tải lại trang / mở lại nháp (FE chỉ theo dõi id của lần sinh trong phiên) — ảnh vẫn còn trên kho tới khi cron dọn sau 7 ngày.
+  evidence: `media_assets` không gắn với bài; `draftFromPost` chỉ dựng kho ảnh từ ảnh đang gắn target. Nếu chủ shop phản ánh mất ảnh vừa sinh: lưu `post_id` cho ô ảnh AI (bài đã lưu) hoặc giữ danh sách id trong `sessionStorage` theo `?bai=`.
+- source_spec: `spec-6-3-sinh-anh-ai.md`
+  summary: Ảnh AI đã tính tiền có thể mất hoặc bị tính lại: kho (Cloudinary) lỗi tạm sau khi OpenAI đã trả ảnh → ô `failed IMAGE_FAILED` ngay, ảnh bỏ đi; lời gọi hết giờ sau khi gửi (`maybeBilled`, gateway ghi chi phí ước tính) ném `AI_PROVIDER_ERROR` 502 → job retry gọi OpenAI lần nữa (tối đa 3 lần tính tiền cho một ô).
+  evidence: `content/images.ts` `generateImageAsset` (`put` lỗi → `markFailed`, `retryable` coi mọi `AI_PROVIDER_ERROR` ≥500 là thử lại được); `ai/gateway.ts` `runCall` nhánh `maybeBilled`. Hướng sửa: thử `put` lại 1 lần trong job trước khi `failed`; gateway đưa `maybeBilled` vào `details` để job không retry lời gọi có thể đã tính tiền.
+- source_spec: `spec-6-3-sinh-anh-ai.md`
+  summary: Tỉ lệ ảnh tải lên cho Instagram khi đăng (Story 6.4): ảnh dọc từ điện thoại (3:4, 9:16) nằm ngoài khoảng tỉ lệ ảnh feed IG (4:5 – 1,91:1) — cần cắt/đệm bằng biến đổi Cloudinary (vd `c_pad,ar_4:5`) hoặc kiểm tỉ lệ trong `assertPublishable`.
+  evidence: Ảnh AI đã sửa ở review 6.3 (`content/images.ts` `postImageSize`: Cài đặt `1024x1536` → sinh `1024x1024`); ảnh tải lên (`app/media-assets.ts`) giữ nguyên tỉ lệ gốc.

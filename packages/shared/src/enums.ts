@@ -136,6 +136,11 @@ export const MEDIA_ASSET_SOURCES = ['upload', 'ai'] as const
 export const MediaAssetSource = z.enum(MEDIA_ASSET_SOURCES)
 export type MediaAssetSource = z.infer<typeof MediaAssetSource>
 
+// Story 6.3: ô ảnh AI đang sinh (`pending`), đã có file (`ready`) hoặc không tạo được (`failed`). Ảnh tải lên luôn `ready`.
+export const MEDIA_ASSET_STATUSES = ['pending', 'ready', 'failed'] as const
+export const MediaAssetStatus = z.enum(MEDIA_ASSET_STATUSES)
+export type MediaAssetStatus = z.infer<typeof MediaAssetStatus>
+
 // Khởi điểm; story Lịch/Chiến dịch có thể bổ sung.
 export const CANCEL_REASONS = [
   'USER_DELETED',

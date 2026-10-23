@@ -1,6 +1,16 @@
 // Ảnh bài (Story 6.1, AD-14): kiểm bytes trước khi tải lên kho công khai, ghi `media_assets` sau khi kho trả về.
 // Route (`app/media-assets.ts`) lo tải lên Cloudinary; module chỉ kiểm và ghi — không gọi mạng.
-import { POST_IMAGE_MAX_BYTES, type MediaAssetDto, type MediaAssetSource, type PostImageMime } from '@ottm/shared'
+// Story 6.3: dòng có thêm trạng thái (ô ảnh AI đang sinh / lỗi chưa có file) — DTO ảnh chỉ dựng từ dòng `ready`.
+import {
+  IMAGE_PENDING_MS,
+  POST_IMAGE_MAX_BYTES,
+  type GeneratedImageDto,
+  type ImageErrorCode,
+  type MediaAssetDto,
+  type MediaAssetSource,
+  type MediaAssetStatus,
+  type PostImageMime,
+} from '@ottm/shared'
 import type { StoredImage } from '../../adapters/media/index.ts'
 import type { DbExecutor } from '../../platform/db/index.ts'
 import { detectImageMime } from '../profiles/index.ts'
@@ -30,9 +40,13 @@ export function validatePostImage(
   return { ok: true, mime: detected }
 }
 
-type MediaRow = typeof mediaAssets.$inferSelect
+export type MediaRow = typeof mediaAssets.$inferSelect
 
+/** Ảnh có file (`ready`) → DTO. Dòng chưa có file là lỗi lập trình (chỉ ảnh `ready` được gắn / trả về như ảnh). */
 export function toMediaAssetDto(row: MediaRow): MediaAssetDto {
+  if (row.status !== 'ready' || row.url === null || row.width === null || row.height === null) {
+    throw new Error(`media_assets ${row.id}: ảnh chưa sẵn sàng (${row.status})`)
+  }
   return {
     id: row.id,
     source: row.source as MediaAssetSource,
@@ -43,12 +57,29 @@ export function toMediaAssetDto(row: MediaRow): MediaAssetDto {
   }
 }
 
+/**
+ * Ô ảnh AI → DTO. Ô `pending` quá `IMAGE_PENDING_MS` (job mất / worker chết giữa chừng) đọc ra `failed IMAGE_FAILED`
+ * để FE không chờ mãi; dòng giữ nguyên (cron dọn sau 7 ngày, job muộn vẫn có thể ghi `ready`).
+ */
+export function toGeneratedImageDto(row: MediaRow, now: Date): GeneratedImageDto {
+  const stale = row.status === 'pending' && now.getTime() - row.createdAt.getTime() >= IMAGE_PENDING_MS
+  const status: MediaAssetStatus = stale ? 'failed' : (row.status as MediaAssetStatus)
+  return {
+    id: row.id,
+    status,
+    errorCode: stale ? 'IMAGE_FAILED' : ((row.errorCode as ImageErrorCode | null) ?? null),
+    asset: status === 'ready' ? toMediaAssetDto(row) : null,
+    createdAt: row.createdAt.toISOString(),
+  }
+}
+
 /** Ghi một ảnh đã nằm trên kho công khai. Ném lỗi DB thì route xoá ảnh vừa tải (không bỏ lại file mồ côi). */
 export async function recordMediaAsset(db: DbExecutor, source: MediaAssetSource, stored: StoredImage): Promise<MediaAssetDto> {
   const [row] = await db
     .insert(mediaAssets)
     .values({
       source,
+      status: 'ready',
       publicId: stored.publicId,
       url: stored.url,
       width: stored.width,

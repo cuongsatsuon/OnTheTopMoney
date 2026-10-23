@@ -4,8 +4,12 @@
 // Phần thuần (chọn đích, gắn ảnh, dựng body, nạp nháp, câu lỗi) tách khỏi hook để test được (composer.test.ts).
 // Story 6.2: viết caption bằng AI theo hồ sơ từng trang (`POST /posts/compose`, huỷ bằng `signal`) — áp kết quả từng tab
 // (`applyComposeResults`), ghi chú lỗi / cụm vi phạm trên tab, khoá nút AI theo khoá OpenAI / hạn mức / mã lỗi (`composeLock`).
+// Story 6.3: sinh 4 ảnh AI (`POST /media-assets/generate` → 4 ô đang sinh), trạng thái ô đọc lại qua
+// `GET /media-assets/generated` khi SSE báo `media_asset.created|failed` (khoá query gốc `media_assets`); lưới ảnh dựng
+// bằng `imageTiles` (ô chờ / ô lỗi / ảnh, rồi kho ảnh của bài).
 import {
   ComposeCaptionsResponse,
+  GeneratedImagesResponse,
   MediaAssetDto,
   PLATFORM_RULES,
   POST_IMAGE_MAX_BYTES,
@@ -20,6 +24,10 @@ import {
   type ComposeLength,
   type ComposeReviseAction,
   type ErrorCode,
+  type GenerateImagesRequest,
+  type GeneratedImageDto,
+  type ImageErrorCode,
+  type ImageStyle,
   type PageDto,
   type Platform,
   type PostImageMime,
@@ -325,6 +333,84 @@ export function captionViolations(caption: string, platform: Platform, violation
   return [...phrases, ...long]
 }
 
+/* ---------- Sinh ảnh AI (Story 6.3) ---------- */
+
+export const IMAGE_STYLE_OPTIONS: { value: ImageStyle; label: string }[] = [
+  { value: 'product', label: 'Ảnh sản phẩm' },
+  { value: 'lifestyle', label: 'Phong cách sống' },
+  { value: 'minimal', label: 'Tối giản' },
+  { value: 'illustration', label: 'Minh hoạ' },
+]
+
+/** Mô tả gửi AI: ô "Mô tả ảnh" nếu có, không thì ý tưởng bài. Cả hai trống → chuỗi rỗng (nút khoá). */
+export const imagePrompt = (description: string, idea: string): string => description.trim() || idea.trim()
+
+/** Body `POST /media-assets/generate`; `null` khi chưa có gì để mô tả. */
+export function buildImageBody(description: string, idea: string, style: ImageStyle): GenerateImagesRequest | null {
+  const prompt = imagePrompt(description, idea)
+  return prompt ? { prompt, style } : null
+}
+
+/** Một ô của lưới ảnh: ô AI đang sinh, ô AI lỗi, hoặc ảnh chọn được (AI đã xong / tải lên / đang gắn). */
+export type ImageTile = { kind: 'pending'; id: string } | { kind: 'failed'; id: string; errorCode: ImageErrorCode } | { kind: 'image'; asset: MediaAssetDto }
+
+/**
+ * Lưới ảnh: các ô AI của lần sinh hiện tại theo thứ tự `genIds` (chưa có trạng thái → coi như đang sinh; ô đã bị dọn
+ * → bỏ), rồi kho ảnh của bài không trùng.
+ */
+export function imageTiles(genIds: readonly string[], generated: readonly GeneratedImageDto[] | undefined, pool: readonly MediaAssetDto[]): ImageTile[] {
+  const byId = new Map((generated ?? []).map((g) => [g.id, g]))
+  const tiles: ImageTile[] = []
+  const seen = new Set<string>()
+  for (const id of genIds) {
+    const g = byId.get(id)
+    if (!g) {
+      if (!generated) tiles.push({ kind: 'pending', id })
+      continue
+    }
+    if (g.status === 'ready' && g.asset) {
+      tiles.push({ kind: 'image', asset: g.asset })
+      seen.add(g.asset.id)
+    } else if (g.status === 'failed') tiles.push({ kind: 'failed', id, errorCode: g.errorCode ?? 'IMAGE_FAILED' })
+    else tiles.push({ kind: 'pending', id })
+  }
+  for (const m of pool) {
+    if (!seen.has(m.id)) {
+      tiles.push({ kind: 'image', asset: m })
+      seen.add(m.id)
+    }
+  }
+  return tiles
+}
+
+/** Ảnh chọn được trong lưới (để tìm ảnh đang gắn của tab, xem trước). */
+export const tileImages = (tiles: readonly ImageTile[]): MediaAssetDto[] => tiles.flatMap((t) => (t.kind === 'image' ? [t.asset] : []))
+
+/** Số ô AI còn đang sinh (khoá nút "Tạo ảnh AI" cho tới khi xong). */
+export const pendingTiles = (tiles: readonly ImageTile[]): number => tiles.filter((t) => t.kind === 'pending').length
+
+/**
+ * "Tạo lại ảnh": bộ ảnh AI cũ rời lưới, trừ ảnh đã xong đang gắn cho một tab nào đó — ảnh đó vào kho của bài (không
+ * thì tab trỏ tới ảnh không còn hiển thị).
+ */
+export function keepAttachedGenerated(pool: readonly MediaAssetDto[], generated: readonly GeneratedImageDto[] | undefined, drafts: Drafts): MediaAssetDto[] {
+  const attached = new Set(Object.values(drafts).flatMap((d) => d.mediaIds))
+  const keep = (generated ?? []).flatMap((g) => (g.status === 'ready' && g.asset && attached.has(g.asset.id) ? [g.asset] : []))
+  const known = new Set(pool.map((m) => m.id))
+  return [...keep.filter((m) => !known.has(m.id)), ...pool]
+}
+
+/** "Thử mô tả khác": bỏ các ô lỗi khỏi lưới (ô đang sinh / đã xong giữ nguyên). */
+export function dismissFailed(genIds: readonly string[], generated: readonly GeneratedImageDto[] | undefined): string[] {
+  const failed = new Set((generated ?? []).filter((g) => g.status === 'failed').map((g) => g.id))
+  return genIds.filter((id) => !failed.has(id))
+}
+
+/** Lý do dưới "Không tạo được ảnh này". */
+export function imageFailureText(code: ImageErrorCode): string {
+  return code === 'IMAGE_REJECTED' ? 'OpenAI từ chối mô tả này.' : 'AI gặp lỗi khi tạo ảnh.'
+}
+
 /* ---------- Hook React Query ---------- */
 
 export const postKey = (id: string) => ['posts', id] as const
@@ -361,5 +447,33 @@ export function useComposeCaptions() {
   return useMutation({
     mutationFn: ({ body, signal }: { body: ComposeCaptionsRequest; signal?: AbortSignal }) =>
       apiFetch('/posts/compose', { method: 'POST', body, schema: ComposeCaptionsResponse, ...(signal ? { signal } : {}) }),
+  })
+}
+
+/** Trạng thái các ô ảnh AI — khoá gốc `media_assets` để SSE `media_asset.*` làm cũ (realtime.ts). */
+export const generatedImagesKey = (ids: readonly string[]) => ['media_assets', 'generated', ids.join(',')] as const
+
+/** Đang có ô chờ → hỏi lại mỗi 10 giây phòng khi lỡ sự kiện realtime (SSE vẫn là đường chính). */
+export const GENERATED_POLL_MS = 10_000
+
+export function useGeneratedImages(ids: readonly string[]) {
+  return useQuery({
+    queryKey: generatedImagesKey(ids),
+    queryFn: ({ signal }) => apiFetch(`/media-assets/generated?ids=${ids.join(',')}`, { schema: GeneratedImagesResponse, signal }),
+    enabled: ids.length > 0,
+    refetchInterval: (q) => (q.state.data?.images.some((i) => i.status === 'pending') ? GENERATED_POLL_MS : false),
+  })
+}
+
+/** "Tạo ảnh AI": 202 với 4 ô đang sinh — ghi sẵn vào cache để lưới hiện ngay, sau đó SSE cập nhật từng ô. */
+export function useGenerateImages() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body: GenerateImagesRequest) => apiFetch('/media-assets/generate', { method: 'POST', body, schema: GeneratedImagesResponse }),
+    onSuccess: (res) =>
+      qc.setQueryData(
+        generatedImagesKey(res.images.map((i) => i.id)),
+        res,
+      ),
   })
 }

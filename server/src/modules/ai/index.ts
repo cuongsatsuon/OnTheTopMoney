@@ -71,6 +71,7 @@ export {
   buildCaptionPrompt,
   buildComposePrompt,
   buildContactSummaryPrompt,
+  buildImagePrompt,
   composeInput,
   composeInstructions,
   contactSummaryInput,

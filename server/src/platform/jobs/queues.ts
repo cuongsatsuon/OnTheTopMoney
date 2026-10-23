@@ -65,6 +65,9 @@ export interface QueuePayloads {
   'inbox.contact_summary': { contactId: string }
   /** Story 5.2: trích văn bản một file kho kiến thức — xử lý theo file (mọi mục `processing` trỏ cùng file). */
   'profiles.knowledge.extract': { knowledgeItemId: string; filePublicId: string }
+  /** Story 6.3: sinh một ô ảnh AI (`media_assets` đang `pending`). */
+  'content.image.generate': { mediaAssetId: string }
+  'content.media_gc': Record<string, never>
   /** Story 4.5: tin của chính trang chưa khớp tin nào của app — bản chuẩn hoá (dạng JSON) để thử khớp lại. */
   'inbox.echo_match': {
     pageId: string
@@ -321,6 +324,29 @@ export const QUEUES = {
     concurrency: 1,
     expireInSeconds: 180,
     pollingIntervalSeconds: 0.5,
+  },
+  // Module `content` (Story 6.3, AD-14, AD-24): sinh một ô ảnh AI (gateway `image_generate` → kho công khai). Route ghi ô
+  // `pending` + enqueue cùng transaction; chống trùng bằng `UPDATE … WHERE status='pending'` (không singletonKey). Chỉ
+  // lỗi tạm của OpenAI (`RATE_LIMITED`, 5xx) ném để retry; lỗi khác / lần cuối ghi `failed` rồi kết thúc êm. Retry 2
+  // backoff, concurrency 2 (AD-24). Hạn 240 giây > hết giờ Images API (180 giây) + tải lên kho, để lời gọi tự hết giờ
+  // trước khi pg-boss huỷ `job.signal`. Hỏi job 0,5 giây để ô ảnh bắt đầu sớm.
+  'content.image.generate': {
+    policy: 'standard',
+    retryLimit: 2,
+    retryDelay: 10,
+    retryBackoff: true,
+    concurrency: 2,
+    expireInSeconds: 240,
+    pollingIntervalSeconds: 0.5,
+  },
+  // Module `content` (Story 6.3, AD-14): mỗi ngày 4h sáng (giờ VN) xoá ảnh bài không gắn vào bài nào quá 7 ngày (dòng +
+  // file Cloudinary). Idempotent; cron chạy lại ngày sau → retry 1.
+  'content.media_gc': {
+    policy: 'standard',
+    retryLimit: 1,
+    concurrency: 1,
+    expireInSeconds: 600,
+    cron: { expression: '0 4 * * *', tz: CRON_TZ },
   },
 } as const satisfies { [N in keyof QueuePayloads]: QueueDef }
 

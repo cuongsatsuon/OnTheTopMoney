@@ -2,11 +2,21 @@
 // Body là NGUYÊN bytes của ảnh (không base64, không multipart), `Content-Type` = MIME khai báo (jpeg/png/webp — loại
 // khác Fastify trả 415 → `VALIDATION_FAILED`). Thứ tự: kiểm bytes (magic + kích thước) → tải lên kho công khai dạng
 // JPEG sRGB, bỏ EXIF/ICC (mọi ảnh bài đều chuẩn hoá vì có thể gắn cho trang Instagram) → ghi `media_assets`; ghi
-// lỗi thì xoá ảnh vừa tải. Ảnh chưa gắn vào bài nào sẽ do cron dọn (Story 6.3).
-import { POST_IMAGE_MAX_BYTES, POST_IMAGE_MIMES, PostImageMime, type MediaAssetDto } from '@ottm/shared'
+// lỗi thì xoá ảnh vừa tải. Ảnh chưa gắn vào bài nào quá 7 ngày do cron `content.media_gc` dọn (Story 6.3).
+// Story 6.3: `GET /media-assets/generated?ids=a,b` — trạng thái các ô ảnh AI (Soạn bài hỏi lại khi SSE báo
+// `media_asset.created|failed`). Tạo ô (`POST /media-assets/generate`) ở `media-generate.ts` (cần AI + jobs).
+import {
+  GENERATED_IMAGES_QUERY_MAX,
+  GeneratedImagesResponse,
+  POST_IMAGE_MAX_BYTES,
+  POST_IMAGE_MIMES,
+  PostImageMime,
+  type MediaAssetDto,
+} from '@ottm/shared'
 import type { FastifyInstance } from 'fastify'
+import { z } from 'zod'
 import type { MediaStores } from '../adapters/media/index.ts'
-import { recordMediaAsset, validatePostImage } from '../modules/content/index.ts'
+import { listGeneratedImages, recordMediaAsset, validatePostImage } from '../modules/content/index.ts'
 import type { Db } from '../platform/db/index.ts'
 import { AppError } from '../platform/errors/index.ts'
 import { mediaAppError } from './media-errors.ts'
@@ -23,10 +33,27 @@ function imageError(message: string): AppError {
 export interface MediaAssetsDeps {
   db: Db
   media: MediaStores
+  now?: () => Date
 }
+
+/** `?ids=a,b,c`: 1–40 uuid, không trùng thứ tự. */
+const GeneratedQuery = z
+  .object({
+    ids: z
+      .string()
+      .transform((v) => [...new Set(v.split(',').map((s) => s.trim()).filter(Boolean))])
+      .pipe(z.array(z.uuid()).min(1).max(GENERATED_IMAGES_QUERY_MAX)),
+  })
+  .strict()
 
 export function registerMediaAssets(app: FastifyInstance, deps: MediaAssetsDeps): void {
   const { db, media } = deps
+
+  app.get('/api/v1/media-assets/generated', async (req): Promise<GeneratedImagesResponse> => {
+    const { ids } = GeneratedQuery.parse(req.query ?? {})
+    return { images: await listGeneratedImages(db, ids, deps.now?.() ?? new Date()) }
+  })
+
   // Parser bytes chỉ trong scope này (route khác vẫn parse JSON như thường).
   app.register(async (scope) => {
     scope.addContentTypeParser([...POST_IMAGE_MIMES], { parseAs: 'buffer', bodyLimit: IMAGE_BODY_LIMIT }, (_req, body, done) => done(null, body))

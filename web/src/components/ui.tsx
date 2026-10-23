@@ -1,6 +1,6 @@
 import clsx from 'clsx'
 import { ArrowDownRight, ArrowUpRight, Sparkles, X } from 'lucide-react'
-import { useEffect, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react'
+import { useEffect, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type Ref, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react'
 import { groupById, type ConnectionStatus, type Page, type Platform } from '../data/mock'
 
 export const cn = clsx
@@ -295,7 +295,8 @@ const inputCls = 'rounded-sm border border-border bg-surface px-3 text-sm placeh
 /** Mặc định rộng 100%, trừ khi className đã đặt chiều rộng (w-48, w-[150px]…) — tránh hai lớp width đè nhau. */
 const fieldCls = (extra: string, className?: string) => cn(inputCls, /(^|\s)(w-|flex-1)/.test(className ?? '') ? '' : 'w-full', extra, className)
 
-export function Input(props: InputHTMLAttributes<HTMLInputElement>) {
+/** `ref` (React 19: prop thường) để màn gọi `focus()` — vd "Thử mô tả khác" ở Soạn bài. */
+export function Input(props: InputHTMLAttributes<HTMLInputElement> & { ref?: Ref<HTMLInputElement> }) {
   return <input {...props} className={fieldCls('h-9', props.className)} />
 }
 

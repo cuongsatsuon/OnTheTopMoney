@@ -22,7 +22,9 @@ interface FieldIssue {
 
 /**
  * Trang phải tồn tại và chưa gỡ (trang `disconnected` vẫn lưu nháp được — 6.4 chặn lúc đăng); ảnh phải là
- * `media_assets` có thật. Gom mọi lỗi rồi ném một `VALIDATION_FAILED` với `path` trỏ đúng dòng.
+ * `media_assets` có thật và đã `ready` (ô ảnh AI đang sinh / lỗi chưa có file — Story 6.3). Gom mọi lỗi rồi ném một
+ * `VALIDATION_FAILED` với `path` trỏ đúng dòng. Dòng ảnh khoá `FOR KEY SHARE` tới hết transaction: cron
+ * `content.media_gc` không xoá chen được ảnh đang được gắn (lệnh xoá của cron chờ rồi gặp khoá ngoại, bỏ qua dòng đó).
  */
 async function assertTargetsValid(db: DbExecutor, targets: ParsedSavePostRequest['targets']): Promise<void> {
   const issues: FieldIssue[] = []
@@ -31,11 +33,21 @@ async function assertTargetsValid(db: DbExecutor, targets: ParsedSavePostRequest
   }
   const mediaIds = [...new Set(targets.flatMap((t) => t.mediaIds))]
   const known = mediaIds.length
-    ? new Set((await db.select({ id: mediaAssets.id }).from(mediaAssets).where(inArray(mediaAssets.id, mediaIds))).map((r) => r.id))
-    : new Set<string>()
+    ? new Map(
+        (
+          await db
+            .select({ id: mediaAssets.id, status: mediaAssets.status })
+            .from(mediaAssets)
+            .where(inArray(mediaAssets.id, mediaIds))
+            .for('key share')
+        ).map((r) => [r.id, r.status]),
+      )
+    : new Map<string, string>()
   for (const [i, t] of targets.entries()) {
     for (const [j, id] of t.mediaIds.entries()) {
-      if (!known.has(id)) issues.push({ path: ['targets', i, 'mediaIds', j], message: 'Ảnh không tồn tại' })
+      const status = known.get(id)
+      if (status === undefined) issues.push({ path: ['targets', i, 'mediaIds', j], message: 'Ảnh không tồn tại' })
+      else if (status !== 'ready') issues.push({ path: ['targets', i, 'mediaIds', j], message: 'Ảnh chưa sẵn sàng' })
     }
     if (new Set(t.mediaIds).size !== t.mediaIds.length) issues.push({ path: ['targets', i, 'mediaIds'], message: 'Ảnh bị chọn hai lần' })
   }

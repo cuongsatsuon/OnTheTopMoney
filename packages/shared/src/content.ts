@@ -3,7 +3,7 @@
 // server (`content.assertPublishable`) chặn khi lên lịch (Story 6.4). Nháp được lưu cả khi còn vi phạm.
 import { z } from 'zod'
 import { AiViolation } from './ai.ts'
-import { MediaAssetSource, Platform, PostSource, PostTargetStatus } from './enums.ts'
+import { MediaAssetSource, MediaAssetStatus, Platform, PostSource, PostTargetStatus } from './enums.ts'
 import { ErrorCode } from './errors.ts'
 
 const IsoDateTime = z.iso.datetime({ offset: false })
@@ -114,6 +114,49 @@ export const MediaAssetDto = z.object({
   createdAt: IsoDateTime,
 })
 export type MediaAssetDto = z.infer<typeof MediaAssetDto>
+
+/* ---------- Sinh ảnh AI (Story 6.3, AD-14) ---------- */
+
+/** Số ảnh mỗi lần bấm "Tạo ảnh AI" (UX F4: "sinh 4 ảnh; chọn 1"). Mỗi ảnh một job `content.image.generate`. */
+export const IMAGE_GENERATE_COUNT = 4
+/** Ô đang sinh quá lâu (job mất, worker chết) thì đọc ra `failed IMAGE_FAILED` [ASSUMPTION 15 phút > 3 lượt job]. */
+export const IMAGE_PENDING_MS = 15 * 60_000
+/** Số id tối đa khi hỏi trạng thái ô ảnh (`GET /media-assets/generated`). */
+export const GENERATED_IMAGES_QUERY_MAX = 40
+
+/** Phong cách ảnh (ô "Phong cách" ở mục Ảnh): ảnh sản phẩm, phong cách sống, tối giản, minh hoạ. */
+export const IMAGE_STYLES = ['product', 'lifestyle', 'minimal', 'illustration'] as const
+export const ImageStyle = z.enum(IMAGE_STYLES)
+export type ImageStyle = z.infer<typeof ImageStyle>
+
+/** Lý do một ô ảnh không tạo được: OpenAI từ chối nội dung / lỗi khác (hết hạn mức giữa chừng, kho lỗi…). */
+export const IMAGE_ERROR_CODES = ['IMAGE_REJECTED', 'IMAGE_FAILED'] as const satisfies readonly ErrorCode[]
+export const ImageErrorCode = z.enum(IMAGE_ERROR_CODES)
+export type ImageErrorCode = z.infer<typeof ImageErrorCode>
+
+/** Body `POST /api/v1/media-assets/generate`: mô tả ảnh (Composer gửi "Mô tả ảnh", trống thì ý tưởng bài) + phong cách. */
+export const GenerateImagesRequest = z
+  .object({
+    prompt: z.string().trim().min(1, 'Nhập mô tả ảnh hoặc ý tưởng bài').max(POST_TOPIC_MAX, `Mô tả tối đa ${POST_TOPIC_MAX} ký tự`),
+    style: ImageStyle.default('product'),
+  })
+  .strict()
+export type GenerateImagesRequest = z.input<typeof GenerateImagesRequest>
+export type ParsedGenerateImagesRequest = z.output<typeof GenerateImagesRequest>
+
+/** Một ô ảnh AI: `asset` có khi `ready`; `errorCode` có khi `failed`. */
+export const GeneratedImageDto = z.object({
+  id: z.uuid(),
+  status: MediaAssetStatus,
+  errorCode: ImageErrorCode.nullable(),
+  asset: MediaAssetDto.nullable(),
+  createdAt: IsoDateTime,
+})
+export type GeneratedImageDto = z.infer<typeof GeneratedImageDto>
+
+/** `POST /media-assets/generate` → 202 (4 ô `pending`); `GET /media-assets/generated?ids=` → 200 theo thứ tự `ids`. */
+export const GeneratedImagesResponse = z.object({ images: z.array(GeneratedImageDto) })
+export type GeneratedImagesResponse = z.infer<typeof GeneratedImagesResponse>
 
 /* ---------- Bài + đích ---------- */
 

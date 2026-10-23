@@ -4,7 +4,7 @@
 //   trang đó). Cột lịch/lỗi (`scheduled_at`, `schedule_version`, `error_code`, `cancel_reason`) do Story 6.4/6.5 dùng.
 // - `media_assets` chỉ chứa ảnh bài (không logo, không đính kèm của khách); ảnh gắn vào target qua `post_target_media`.
 // - FK tới `pages`/`posts` `on delete cascade`: trang chỉ bị xoá cứng khi xoá dữ liệu theo yêu cầu (gỡ trang là soft-delete).
-import { CANCEL_REASONS, MEDIA_ASSET_SOURCES, POST_SOURCES, POST_TARGET_STATUSES } from '@ottm/shared'
+import { CANCEL_REASONS, IMAGE_ERROR_CODES, MEDIA_ASSET_SOURCES, MEDIA_ASSET_STATUSES, POST_SOURCES, POST_TARGET_STATUSES } from '@ottm/shared'
 import { sql } from 'drizzle-orm'
 import { check, index, integer, pgTable, primaryKey, text, timestamp, unique, uuid } from 'drizzle-orm/pg-core'
 import { pagesTable } from '../pages/index.ts'
@@ -66,20 +66,39 @@ export const mediaAssets = pgTable(
     id: uuid('id').primaryKey().default(sql`uuidv7()`),
     /** `upload` | `ai`. */
     source: text('source').notNull(),
-    /** public_id trên Cloudinary (`<folder>/public/<uuid>`) — để xoá khi dọn ảnh mồ côi (Story 6.3). */
-    publicId: text('public_id').notNull(),
+    /**
+     * `MediaAssetStatus` (Story 6.3): ảnh tải lên ghi thẳng `ready`; ô ảnh AI tạo `pending` rồi job đổi sang `ready`
+     * (có file) hoặc `failed`. Chỉ ảnh `ready` gắn được vào target.
+     */
+    status: text('status').notNull().default('ready'),
+    /** `IMAGE_REJECTED` | `IMAGE_FAILED` — có đúng khi `failed`. */
+    errorCode: text('error_code'),
+    /** Prompt ảnh AI đã dựng (`ai/prompts/image.ts`) — job đọc lại ở mỗi lượt thử. Không log. */
+    prompt: text('prompt'),
+    /** public_id trên Cloudinary (`<folder>/public/<uuid>`) — để cron `content.media_gc` xoá file. Null khi chưa `ready`. */
+    publicId: text('public_id'),
     /** URL công khai `https://res.cloudinary.com/...` — Meta và trình duyệt tải trực tiếp. */
-    url: text('url').notNull(),
-    width: integer('width').notNull(),
-    height: integer('height').notNull(),
-    bytes: integer('bytes').notNull(),
+    url: text('url'),
+    width: integer('width'),
+    height: integer('height'),
+    bytes: integer('bytes'),
     /** Định dạng Cloudinary lưu (`jpg`). */
-    format: text('format').notNull(),
+    format: text('format'),
     createdAt: timestamp('created_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
   },
   (t) => [
     unique('media_assets_public_id_unique').on(t.publicId),
+    index('media_assets_created_at_idx').on(t.createdAt),
     check('media_assets_source_check', sql`${t.source} in (${inList(MEDIA_ASSET_SOURCES)})`),
+    check('media_assets_status_check', sql`${t.status} in (${inList(MEDIA_ASSET_STATUSES)})`),
+    check(
+      'media_assets_error_code_check',
+      sql`(${t.status} = 'failed') = (${t.errorCode} is not null) and (${t.errorCode} is null or ${t.errorCode} in (${inList(IMAGE_ERROR_CODES)}))`,
+    ),
+    check(
+      'media_assets_ready_file_check',
+      sql`${t.status} <> 'ready' or (${t.publicId} is not null and ${t.url} is not null and ${t.width} is not null and ${t.height} is not null and ${t.bytes} is not null and ${t.format} is not null)`,
+    ),
   ],
 )
 

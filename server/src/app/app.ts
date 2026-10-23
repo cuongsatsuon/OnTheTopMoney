@@ -27,6 +27,7 @@ import { registerInbox } from './inbox.ts'
 import { registerInboxSuggest } from './inbox-suggest.ts'
 import { registerKnowledgeItems } from './knowledge-items.ts'
 import { registerMediaAssets } from './media-assets.ts'
+import { registerMediaGenerate } from './media-generate.ts'
 import { registerNotifications } from './notifications.ts'
 import { registerOAuth } from './oauth.ts'
 import { registerOnboarding } from './onboarding.ts'
@@ -153,7 +154,7 @@ export function buildApp({ sql, db, logger, http = {}, loginLimiter, health, eve
   // Kho kiến thức (Story 5.2): FAQ + file lưu kho riêng tư; tải file cần `jobs` (enqueue `profiles.knowledge.extract`).
   registerKnowledgeItems(app, { db, media: mediaStores, jobs })
   // Soạn bài (Story 6.1): ảnh bài lên kho công khai + nháp nhiều trang (một cửa tạo `content.createPost`).
-  registerMediaAssets(app, { db, media: mediaStores })
+  registerMediaAssets(app, { db, media: mediaStores, ...(clock ? { now: clock } : {}) })
   registerPosts(app, { db })
   // Hộp thư (Story 4.3): hội thoại, tin, đính kèm (đọc từ kho riêng tư); Story 4.7: gửi tin (cần `events` + `jobs`).
   registerInbox(app, { db, media: mediaStores, events, jobs })
@@ -177,6 +178,8 @@ export function buildApp({ sql, db, logger, http = {}, loginLimiter, health, eve
     registerInboxSuggest(app, aiDeps)
     registerAutoreplyTest(app, aiDeps)
     registerPostsCompose(app, aiDeps)
+    // Sinh ảnh AI (Story 6.3): enqueue `content.image.generate` cùng transaction → cần `jobs`.
+    if (jobs) registerMediaGenerate(app, { db, cipher: aiDeps.cipher, media: mediaStores, jobs, ...(clock ? { now: clock } : {}) })
   }
   if (events && connections) {
     const deps: ConnectionsDeps = { ...connections, db, events, log: logger.child({ component: 'connections' }) }

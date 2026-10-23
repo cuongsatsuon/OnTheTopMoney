@@ -18,6 +18,7 @@ import {
   runTokenCheck,
   subscribePage,
 } from '../modules/connections/index.ts'
+import { gcOrphanMedia, handleImageGenerateJob } from '../modules/content/index.ts'
 import {
   handleContactSummaryJob,
   handleEchoMatchJob,
@@ -50,7 +51,8 @@ const cipher =
 const { graph, threads } = createMetaClients({ config, db: dbHandle.db, log: logger.child({ component: 'meta' }) })
 const jobs = createJobSender(boss)
 // Kho file riêng tư (AD-14) cho đính kèm của khách (Story 4.3) và file kho kiến thức (Story 5.2); thiếu
-// `CLOUDINARY_URL` → đính kèm `failed` `MEDIA_NOT_CONFIGURED`, tin vẫn vào Hộp thư.
+// `CLOUDINARY_URL` → đính kèm `failed` `MEDIA_NOT_CONFIGURED`, tin vẫn vào Hộp thư. Kho công khai cho ảnh AI và cron
+// dọn ảnh bài (Story 6.3).
 const media = createMediaStores({ CLOUDINARY_URL: config.CLOUDINARY_URL, CLOUDINARY_FOLDER: config.CLOUDINARY_FOLDER })
 // Story 4.5: id app của chính máy chủ — echo có `app_id` khác là chủ shop trả lời ngoài app (Business Suite…).
 const appIds = [config.META_APP_ID, config.THREADS_APP_ID].filter((id): id is string => typeof id === 'string' && id !== '')
@@ -201,6 +203,19 @@ try {
       'profiles.knowledge.extract': async (job) => {
         const result = await handleKnowledgeExtractJob({ db: dbHandle.db, events, media }, job as JobWithMetadata<unknown>)
         logger.debug({ jobId: job.id, result }, 'profiles.knowledge.extract')
+      },
+      // Story 6.3: sinh một ô ảnh AI (gateway → kho công khai). Lỗi tạm của OpenAI ném lại; lần cuối / lỗi khác ghi `failed`.
+      'content.image.generate': async (job) => {
+        const result = await handleImageGenerateJob(
+          { db: dbHandle.db, events, cipher, media, log: logger.child({ component: 'image_generate' }) },
+          job as JobWithMetadata<unknown>,
+        )
+        logger.debug({ jobId: job.id, result }, 'content.image.generate')
+      },
+      // Story 6.3: xoá ảnh bài không gắn vào bài nào quá 7 ngày (dòng + file Cloudinary).
+      'content.media_gc': async () => {
+        const result = await gcOrphanMedia({ db: dbHandle.db, media, log: logger.child({ component: 'media_gc' }) })
+        if (result.deleted > 0 || result.fileErrors > 0) logger.info(result, 'content: đã dọn ảnh bài không gắn bài')
       },
       // Story 4.7: tin kẹt `sending` quá 15 phút → `failed` `SEND_UNKNOWN`.
       'inbox.send_sweep': async () => {

@@ -2,8 +2,9 @@
 // nền tảng báo ngay trên tab (bảng `publishIssues` dùng chung với server), tải ảnh thật, "Lưu nháp" thật và mở lại
 // nháp bằng `?bai=<id>`. Story 6.2: "Tạo bằng AI", "Viết bằng AI cho N trang", Viết lại / Ngắn hơn / Thêm CTA gọi AI thật
 // theo hồ sơ từng trang (`POST /posts/compose`, nút Dừng huỷ request); tab báo lỗi riêng (chưa có hồ sơ…) và đánh dấu
-// cụm vi phạm; nút AI khoá theo khoá OpenAI / hạn mức / mã lỗi, vẫn soạn tay được. Sinh ảnh AI (6.3), lên lịch / đăng
-// (6.4) chưa bật.
+// cụm vi phạm; nút AI khoá theo khoá OpenAI / hạn mức / mã lỗi, vẫn soạn tay được. Story 6.3: "Tạo ảnh AI" (và "Tạo bằng
+// AI" khi bật "Kèm 4 ảnh AI") sinh 4 ảnh bằng job; ô ảnh đổi dần qua realtime (đang tạo → ảnh, hoặc "Không tạo được ảnh
+// này" + "Thử mô tả khác"), caption không bị ảnh hưởng. Lên lịch / đăng (6.4) chưa bật.
 import {
   AlertCircle,
   Bookmark,
@@ -33,7 +34,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import type { ComposeGoal, ComposeLength, ComposeReviseAction, MediaAssetDto, PageDto } from '@ottm/shared'
+import type { ComposeGoal, ComposeLength, ComposeReviseAction, ImageStyle, MediaAssetDto, PageDto } from '@ottm/shared'
 import { AiLockHint } from '../components/AiLockHint'
 import { Content } from '../components/AppShell'
 import { Skeleton } from '../components/Skeleton'
@@ -52,6 +53,7 @@ import {
   PlatformIcon,
   Segmented,
   Select,
+  Switch,
   Tabs,
   Textarea,
   cn,
@@ -63,6 +65,7 @@ import { useApp } from '../lib/app-context'
 import {
   GOAL_OPTIONS,
   IMAGE_ACCEPT,
+  IMAGE_STYLE_OPTIONS,
   LENGTH_OPTIONS,
   POST_PARAM,
   aiErrorText,
@@ -73,6 +76,7 @@ import {
   blockingIssues,
   brandProfileLink,
   buildComposeBody,
+  buildImageBody,
   buildSaveBody,
   captionCounter,
   captionViolations,
@@ -82,16 +86,25 @@ import {
   composeToast,
   composerErrorMessage,
   copyCaptionToEmpty,
+  dismissFailed,
   draftFromPost,
   draftOf,
+  imageFailureText,
   imageFileIssue,
+  imagePrompt,
+  imageTiles,
   initialSelection,
   isSelectable,
   issueText,
   issuesFor,
+  keepAttachedGenerated,
   orderedTargets,
+  pendingTiles,
+  tileImages,
   toggleGroupSelection,
   useComposeCaptions,
+  useGenerateImages,
+  useGeneratedImages,
   usePost,
   useSavePost,
   useUploadPostImage,
@@ -99,6 +112,7 @@ import {
   type AiNotes,
   type ComposeLockCode,
   type Drafts,
+  type ImageTile,
   type TargetDraft,
 } from '../lib/composer'
 import { toUiPage, usePages } from '../lib/connections'
@@ -120,6 +134,7 @@ export default function Composer() {
   const save = useSavePost()
   const upload = useUploadPostImage()
   const compose = useComposeCaptions()
+  const generateImages = useGenerateImages()
 
   const allPages = useMemo(() => pagesQuery.data ?? [], [pagesQuery.data])
   const groupList = groupsQuery.data ?? []
@@ -145,6 +160,15 @@ export default function Composer() {
   const controller = useRef<AbortController | null>(null)
   /** Lần nạp nháp (đổi `?bai=`, bấm "Soạn bài" mới): đổi → huỷ AI đang viết để kết quả không đổ vào nháp khác. */
   const [session, setSession] = useState(0)
+
+  // Ảnh AI (Story 6.3): id các ô của lần sinh gần nhất (trạng thái đọc qua REST, SSE làm cũ); mô tả + phong cách.
+  const [genIds, setGenIds] = useState<string[]>([])
+  const [imageDesc, setImageDesc] = useState('')
+  const [imageStyle, setImageStyle] = useState<ImageStyle>('product')
+  /** "Kèm 4 ảnh AI": "Tạo bằng AI" sinh ảnh cùng lúc với caption (UX F4 b3). */
+  const [withImages, setWithImages] = useState(true)
+  const imageDescRef = useRef<HTMLInputElement>(null)
+  const generatedQuery = useGeneratedImages(genIds)
 
   // Khoá nút AI (UX-DR2): khoá OpenAI → hạn mức → mã khoá của lần gọi trước. Mã lần trước chỉ còn hiệu lực khi khoá /
   // hạn mức chưa đổi (realtime làm cũ query) — đổi rồi thì để trạng thái mới quyết định.
@@ -175,6 +199,7 @@ export default function Composer() {
     }
     setActiveTab('')
     setNotes({})
+    setGenIds([])
     setSession((s) => s + 1)
     setLoadedKey(initKey)
   }
@@ -202,7 +227,10 @@ export default function Composer() {
   const activePage = targets.find((p) => p.id === activeTab) ?? targets[0] ?? null
   const activeId = activePage?.id ?? ''
   const activeDraft = activePage ? draftOf(drafts, activePage.id) : null
-  const activeImage = activeDraft ? pool.find((m) => m.id === activeDraft.mediaIds[0]) : undefined
+  const generated = generatedQuery.data?.images
+  const tiles = imageTiles(genIds, generated, pool)
+  const imagesPending = pendingTiles(tiles)
+  const activeImage = activeDraft ? tileImages(tiles).find((m) => m.id === activeDraft.mediaIds[0]) : undefined
   const emptyTabs = targets.filter((p) => !draftOf(drafts, p.id).caption.trim())
   const tabsWithIssues = targets.filter((p) => blockingIssues(issuesFor(p.platform, draftOf(drafts, p.id))).length > 0)
   const grouped = groupList.map((g) => ({ group: g, pages: allPages.filter((p) => p.groupId === g.id) })).filter((x) => x.pages.length > 0)
@@ -236,6 +264,8 @@ export default function Composer() {
 
   const running = writing !== null || busy !== null
   const canGenerate = !lock.locked && targets.length > 0 && idea.trim().length > 0 && !running
+  const imagesBusy = generateImages.isPending || imagesPending > 0
+  const canGenerateImages = !lock.locked && !imagesBusy && imagePrompt(imageDesc, idea).length > 0
 
   /**
    * Gọi AI cho `list` (Story 6.2): viết mới cho mọi tab / các tab trống, hoặc sửa caption của một tab (`revise`).
@@ -273,6 +303,35 @@ export default function Composer() {
         },
       },
     )
+  }
+
+  /**
+   * Sinh 4 ảnh AI (Story 6.3): bộ mới thay bộ cũ trong lưới (ảnh cũ đang gắn tab giữ lại trong kho). Ảnh về dần qua
+   * realtime; lỗi chặn trước (thiếu khoá, hết hạn mức…) khoá nút AI như khi viết caption.
+   */
+  function startImages(description: string) {
+    const body = buildImageBody(description, idea, imageStyle)
+    if (!body || lock.locked || imagesBusy) return
+    const stamp = lockStamp
+    generateImages.mutate(body, {
+      onSuccess: ({ images }) => {
+        setPool((p) => keepAttachedGenerated(p, generated, drafts))
+        setGenIds(images.map((i) => i.id))
+        notify(`AI đang tạo ${images.length} ảnh…`)
+      },
+      onError: (err) => {
+        const code = composeLockCodeOf(err)
+        if (code) setServerLock({ code, stamp })
+        notify(composerErrorMessage(err))
+      },
+    })
+  }
+
+  /** "Thử mô tả khác": bỏ ô lỗi, đưa con trỏ vào ô Mô tả ảnh. */
+  function retryImageDescription() {
+    setGenIds((ids) => dismissFailed(ids, generated))
+    imageDescRef.current?.focus()
+    imageDescRef.current?.select()
   }
 
   function stop() {
@@ -470,6 +529,14 @@ export default function Composer() {
               </div>
             </div>
 
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <span className="block text-[13px] font-medium">Kèm 4 ảnh AI</span>
+                <span className="text-xs text-muted-foreground">AI tạo ảnh theo ý tưởng, bạn chọn 1 ảnh cho mỗi trang.</span>
+              </div>
+              <Switch checked={withImages} onChange={setWithImages} label="Kèm 4 ảnh AI" ai />
+            </div>
+
             <p className="flex items-start gap-2 text-xs text-muted-foreground">
               <Sparkles size={14} className="mt-px shrink-0 text-ai" />
               AI viết riêng cho từng trang theo hồ sơ thương hiệu của trang đó: giọng điệu, sản phẩm và từ cấm.
@@ -477,7 +544,15 @@ export default function Composer() {
 
             <div>
               <AiLockHint locked={lock.locked} hint={lock.hint} link={lock.link} className="flex w-full">
-                <Button variant="ai" className="h-11 w-full text-[15px]" disabled={!canGenerate} onClick={() => runCompose(targets)}>
+                <Button
+                  variant="ai"
+                  className="h-11 w-full text-[15px]"
+                  disabled={!canGenerate}
+                  onClick={() => {
+                    runCompose(targets)
+                    if (withImages && !imagesBusy) startImages(imageDesc)
+                  }}
+                >
                   {writing !== null ? 'AI đang viết…' : 'Tạo bằng AI'}
                 </Button>
               </AiLockHint>
@@ -573,41 +648,49 @@ export default function Composer() {
                     <p className="text-xs text-muted-foreground">Bấm một ảnh để dùng cho {activePage.name} · mỗi trang 1 ảnh</p>
                   </div>
                   <div className="flex gap-2">
-                    <AiLockHint locked hint="Sinh ảnh bằng AI sắp có. Hiện bạn tải ảnh của mình lên." link={null} align="end">
-                      <Button variant="ai" size="sm" disabled>
-                        Tạo ảnh AI
-                      </Button>
-                    </AiLockHint>
                     <Button size="sm" icon={<Upload size={14} />} onClick={() => fileRef.current?.click()} disabled={upload.isPending}>
                       {upload.isPending ? 'Đang tải ảnh…' : 'Tải ảnh lên'}
                     </Button>
                     <input ref={fileRef} type="file" accept={IMAGE_ACCEPT} className="hidden" onChange={(e) => onUpload(e.target.files)} />
                   </div>
                 </div>
-                {pool.length === 0 && !upload.isPending ? (
+                <div className="mb-3 flex flex-wrap items-end gap-2">
+                  <Field label="Mô tả ảnh" className="min-w-[200px] flex-1">
+                    <Input
+                      ref={imageDescRef}
+                      value={imageDesc}
+                      onChange={(e) => setImageDesc(e.target.value)}
+                      placeholder="Để trống: AI vẽ theo ý tưởng bài"
+                      maxLength={1000}
+                    />
+                  </Field>
+                  <Field label="Phong cách" className="w-[150px]">
+                    <Select options={IMAGE_STYLE_OPTIONS} value={imageStyle} onChange={(e) => setImageStyle(e.target.value as ImageStyle)} />
+                  </Field>
+                  <AiLockHint locked={lock.locked} hint={lock.hint} link={lock.link} align="end">
+                    <Button variant="ai" size="sm" className="h-9" icon={<Sparkles size={14} />} disabled={!canGenerateImages} onClick={() => startImages(imageDesc)}>
+                      {imagesBusy ? 'AI đang tạo ảnh…' : genIds.length > 0 ? 'Tạo lại ảnh' : 'Tạo ảnh AI'}
+                    </Button>
+                  </AiLockHint>
+                </div>
+                {tiles.length === 0 && !upload.isPending ? (
                   <div className="flex items-center gap-2 rounded-md border border-dashed border-border px-3 py-4 text-[13px] text-muted-foreground">
-                    <ImageOff size={16} /> Chưa có ảnh. Tải ảnh của bạn lên (PNG, JPEG, WebP · tối đa 10MB).
+                    <ImageOff size={16} /> Chưa có ảnh. Tạo ảnh bằng AI hoặc tải ảnh của bạn lên (PNG, JPEG, WebP · tối đa 10MB).
                   </div>
                 ) : (
                   <div className="grid grid-cols-4 gap-2">
                     {upload.isPending && <div className="aspect-square animate-pulse rounded-md bg-slate-100" aria-label="Đang tải ảnh" />}
-                    {pool.map((im, i) => {
-                      const chosen = activeDraft.mediaIds.includes(im.id)
-                      return (
-                        <button
-                          key={im.id}
-                          onClick={() => setDrafts((d) => assignImage(d, activePage.id, im.id))}
-                          className={cn('relative aspect-square overflow-hidden rounded-md border border-border', chosen && 'ring-2 ring-primary ring-offset-2')}
-                          aria-pressed={chosen}
-                          aria-label={`Dùng ảnh ${i + 1} cho ${activePage.name}`}
-                        >
-                          <img src={im.url} alt="" className="size-full object-cover" />
-                          <span className={cn('absolute top-1 left-1 rounded px-1 text-[10px] font-semibold', im.source === 'ai' ? 'bg-ai text-white' : 'bg-white/90 text-slate-700')}>
-                            {im.source === 'ai' ? 'AI' : 'Tải lên'}
-                          </span>
-                        </button>
-                      )
-                    })}
+                    {tiles.map((tile, i) => (
+                      <ImageTileView
+                        key={tile.kind === 'image' ? tile.asset.id : tile.id}
+                        tile={tile}
+                        index={i}
+                        pageName={activePage.name}
+                        chosen={tile.kind === 'image' && activeDraft.mediaIds.includes(tile.asset.id)}
+                        onChoose={(id) => setDrafts((d) => assignImage(d, activePage.id, id))}
+                        onRetry={retryImageDescription}
+                      />
+                    ))}
                   </div>
                 )}
                 {activeImage && (
@@ -838,6 +921,58 @@ function WritingSkeleton({ onStop, count }: { onStop: () => void; count: number 
 
 function CaptionText({ text, clamp }: { text: string; clamp?: boolean }) {
   return <p className={cn('text-[13px] leading-relaxed whitespace-pre-line', clamp && 'line-clamp-6')}>{text}</p>
+}
+
+/** Một ô của lưới ảnh: đang tạo (khung chờ), lỗi ("Không tạo được ảnh này" + "Thử mô tả khác"), hoặc ảnh chọn được. */
+function ImageTileView({
+  tile,
+  index,
+  pageName,
+  chosen,
+  onChoose,
+  onRetry,
+}: {
+  tile: ImageTile
+  index: number
+  pageName: string
+  chosen: boolean
+  onChoose: (mediaId: string) => void
+  onRetry: () => void
+}) {
+  if (tile.kind === 'pending') {
+    return (
+      <div className="flex aspect-square animate-pulse flex-col items-center justify-center gap-1 rounded-md bg-ai-soft text-[11px] text-ai" aria-label="Đang tạo ảnh">
+        <Sparkles size={16} />
+        Đang tạo ảnh…
+      </div>
+    )
+  }
+  if (tile.kind === 'failed') {
+    return (
+      <div className="flex aspect-square flex-col items-center justify-center gap-1 rounded-md border border-dashed border-border bg-slate-50 p-2 text-center" role="group" aria-label="Không tạo được ảnh này">
+        <ImageOff size={16} className="text-muted-foreground" />
+        <span className="text-[11px] font-medium leading-tight">Không tạo được ảnh này</span>
+        <span className="text-[10px] leading-tight text-muted-foreground">{imageFailureText(tile.errorCode)}</span>
+        <button type="button" className="text-[11px] font-medium text-primary hover:underline" onClick={onRetry}>
+          Thử mô tả khác
+        </button>
+      </div>
+    )
+  }
+  const im = tile.asset
+  return (
+    <button
+      onClick={() => onChoose(im.id)}
+      className={cn('relative aspect-square overflow-hidden rounded-md border border-border', chosen && 'ring-2 ring-primary ring-offset-2')}
+      aria-pressed={chosen}
+      aria-label={`Dùng ảnh ${index + 1} cho ${pageName}`}
+    >
+      <img src={im.url} alt="" className="size-full object-cover" />
+      <span className={cn('absolute top-1 left-1 rounded px-1 text-[10px] font-semibold', im.source === 'ai' ? 'bg-ai text-white' : 'bg-white/90 text-slate-700')}>
+        {im.source === 'ai' ? 'AI' : 'Tải lên'}
+      </span>
+    </button>
+  )
 }
 
 function FacebookPreview({ page, caption, image }: { page: Page; caption: string; image?: string | undefined }) {
