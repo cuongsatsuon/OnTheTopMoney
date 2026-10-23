@@ -68,6 +68,9 @@ export interface QueuePayloads {
   /** Story 6.3: sinh một ô ảnh AI (`media_assets` đang `pending`). */
   'content.image.generate': { mediaAssetId: string }
   'content.media_gc': Record<string, never>
+  /** Story 6.4: đăng một target đúng phiên bản lịch (lệch → job bỏ qua im lặng). */
+  'publish.target': { targetId: string; scheduleVersion: number }
+  'content.requeue': Record<string, never>
   /** Story 4.5: tin của chính trang chưa khớp tin nào của app — bản chuẩn hoá (dạng JSON) để thử khớp lại. */
   'inbox.echo_match': {
     pageId: string
@@ -347,6 +350,34 @@ export const QUEUES = {
     concurrency: 1,
     expireInSeconds: 600,
     cron: { expression: '0 4 * * *', tz: CRON_TZ },
+  },
+  // Module `content` (Story 6.4, AD-13, AD-24): đăng một target lên trang. Không singletonKey — chống trùng bằng
+  // `schedule_version` + `UPDATE … SET status='publishing' WHERE status='scheduled' AND schedule_version=?` (đổi giờ = job
+  // mới, job cũ thấy lệch phiên bản rồi bỏ qua). Chỉ lỗi tạm CHẮC CHẮN chưa tạo bài ném để retry (target về `scheduled`
+  // trước); `RATE_LIMITED` hoãn bằng job mới `startAfter` (không tính lượt); không rõ Meta đã nhận → `PUBLISH_UNKNOWN`,
+  // không retry. Retry 5 backoff (30/60/120/240/480 giây), concurrency 3. Hạn 300 giây > tạo container (30 giây) + hỏi
+  // trạng thái (≤60 giây) + publish (30 giây) + permalink (30 giây); job hết hạn mà vẫn chạy thì lần retry thấy
+  // `publishing` và bỏ qua. `critical`: handler chỉ ném ở lần cuối khi lỗi bất ngờ (DB…) → thông báo `system_error`.
+  // Hỏi job 0,5 giây để "Đăng ngay" đi ngay.
+  'publish.target': {
+    policy: 'standard',
+    retryLimit: 5,
+    retryDelay: 30,
+    retryBackoff: true,
+    concurrency: 3,
+    expireInSeconds: 300,
+    pollingIntervalSeconds: 0.5,
+    critical: true,
+  },
+  // Module `content` (Story 6.4, AD-13): mỗi 15 phút (giờ VN) enqueue lại target `scheduled` quá giờ 10 phút mà không còn
+  // job sống, và đưa target kẹt `publishing` quá 15 phút về `failed` `PUBLISH_UNKNOWN` (có thể đã lên — không tự đăng
+  // lại). Idempotent; cron chạy lại sau 15 phút → retry 1.
+  'content.requeue': {
+    policy: 'standard',
+    retryLimit: 1,
+    concurrency: 1,
+    expireInSeconds: 120,
+    cron: { expression: '*/15 * * * *', tz: CRON_TZ },
   },
 } as const satisfies { [N in keyof QueuePayloads]: QueueDef }
 

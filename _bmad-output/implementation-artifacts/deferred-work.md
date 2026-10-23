@@ -13,9 +13,6 @@
 - source_spec: `spec-1-3c-fe-hostinger-be-vps.md`
   summary: Dùng `apiUrl()` (web/src/lib/api.ts, có từ Story 4.3 cho đính kèm Hộp thư) cho link `/privacy/*` khi màn quyền riêng tư có (Epic 9).
   evidence: Story 4.3 đã thêm `apiUrl()` theo `API_ORIGIN` và CSP `media-src` cho origin api; `/media/...` không còn dùng (ảnh công khai đi URL Cloudinary). Còn `/privacy/*` chưa có màn nào.
-- source_spec: `spec-1-3c-fe-hostinger-be-vps.md`
-  summary: Header CORS cho lỗi do nginx-api tự sinh (413/502/503/504) để web đọc được JSON lỗi.
-  evidence: Hiện trình duyệt chặn phản hồi đó (không có Allow-Origin) và web báo lỗi mạng; quan trọng khi có upload media (413). Cần map `$http_origin` theo ALLOWED_ORIGINS trong nginx.
 - source_spec: `spec-1-3d-web-chay-trong-docker.md`
   summary: Kiểm nén gzip của asset web qua nginx (Content-Encoding, một Vary) trong smoke-test.
   evidence: gzip đã dời vào container web (`deploy/web-nginx.conf`); không bước nào kiểm.
@@ -78,7 +75,7 @@
   evidence: Đường gửi mới chỉ chạy với Meta giả/fake client. Threads publish lỗi tạm thì retry tạo container mới (container cũ mồ côi, vô hại).
 - source_spec: `spec-4-7-gui-tin-24-gio.md`
   summary: Gửi tin hết giờ / lỗi mạng (không có phản hồi HTTP) hoặc 5xx có thể đã tới Meta → không retry tự động mà ghi `failed` `SEND_UNKNOWN` (hoặc tra lại trước khi retry); Threads tách retry bước publish khỏi bước tạo container.
-  evidence: `deliverMessage` (server/src/modules/inbox/send.ts) coi mọi `TRANSIENT` là retry được — `transientFailure()` của adapter gộp hết giờ, lỗi kết nối và 5xx — nên tin có thể tới khách 2–6 lần; Threads `threads_publish` hết giờ mà đã đăng thì retry tạo container mới và đăng lại. Cần adapter phân biệt "chưa gửi được" (DNS/kết nối bị từ chối) với "không rõ" (hết giờ sau khi gửi) và quyết định sản phẩm (AD-10 hiện ghi retry lỗi tạm). Story 4.5 giảm bớt: echo Messenger (`metadata`) tới trong 5 giây backoff đầu đặt tin `sent` nên lần retry không chiếm lại được; IG/Threads/bình luận và echo tới muộn vẫn có thể gửi trùng.
+  evidence: `deliverMessage` (server/src/modules/inbox/send.ts) coi mọi `TRANSIENT` là retry được — `transientFailure()` của adapter gộp hết giờ, lỗi kết nối và 5xx — nên tin có thể tới khách 2–6 lần; Threads `threads_publish` hết giờ mà đã đăng thì retry tạo container mới và đăng lại. Cần adapter phân biệt "chưa gửi được" (DNS/kết nối bị từ chối) với "không rõ" (hết giờ sau khi gửi) và quyết định sản phẩm (AD-10 hiện ghi retry lỗi tạm). Story 4.5 giảm bớt: echo Messenger (`metadata`) tới trong 5 giây backoff đầu đặt tin `sent` nên lần retry không chiếm lại được; IG/Threads/bình luận và echo tới muộn vẫn có thể gửi trùng. Story 6.4 đã thêm cờ `notSent` ở adapter (`MetaFailure.notSent`: chặn trước khi gửi / không mở được kết nối) — `deliverMessage` có thể chỉ retry khi có cờ này, còn lại `SEND_UNKNOWN`, như `publish.target`.
 - source_spec: `spec-4-5-nhan-dien-echo.md`
   summary: Xác nhận bằng sự kiện Meta thật: echo IG có `app_id`/`metadata` không, bình luận FB/IG của trang và trả lời Threads của tài khoản có về webhook không, IG `messaging_seen` dạng `read.mid`, Business Suite gửi `app_id` riêng.
   evidence: Phân loại echo (`server/src/modules/inbox/echo.ts`) theo tài liệu Meta; echo không `app_id` (bình luận, Threads, có thể IG) chỉ khớp được theo id/nội dung, không khớp thì sau ~15 giây coi là chủ shop trả lời ngoài app (`external_human`) — nếu Meta đổi chữ tin app gửi (vd rút gọn link) thì tin app có thể bị tính là ngoài app và tắt AI.
@@ -182,6 +179,25 @@
 - source_spec: `spec-6-3-sinh-anh-ai.md`
   summary: Ảnh AI đã tính tiền có thể mất hoặc bị tính lại: kho (Cloudinary) lỗi tạm sau khi OpenAI đã trả ảnh → ô `failed IMAGE_FAILED` ngay, ảnh bỏ đi; lời gọi hết giờ sau khi gửi (`maybeBilled`, gateway ghi chi phí ước tính) ném `AI_PROVIDER_ERROR` 502 → job retry gọi OpenAI lần nữa (tối đa 3 lần tính tiền cho một ô).
   evidence: `content/images.ts` `generateImageAsset` (`put` lỗi → `markFailed`, `retryable` coi mọi `AI_PROVIDER_ERROR` ≥500 là thử lại được); `ai/gateway.ts` `runCall` nhánh `maybeBilled`. Hướng sửa: thử `put` lại 1 lần trong job trước khi `failed`; gateway đưa `maybeBilled` vào `details` để job không retry lời gọi có thể đã tính tiền.
-- source_spec: `spec-6-3-sinh-anh-ai.md`
-  summary: Tỉ lệ ảnh tải lên cho Instagram khi đăng (Story 6.4): ảnh dọc từ điện thoại (3:4, 9:16) nằm ngoài khoảng tỉ lệ ảnh feed IG (4:5 – 1,91:1) — cần cắt/đệm bằng biến đổi Cloudinary (vd `c_pad,ar_4:5`) hoặc kiểm tỉ lệ trong `assertPublishable`.
-  evidence: Ảnh AI đã sửa ở review 6.3 (`content/images.ts` `postImageSize`: Cài đặt `1024x1536` → sinh `1024x1024`); ảnh tải lên (`app/media-assets.ts`) giữ nguyên tỉ lệ gốc.
+- source_spec: `spec-6-4-len-lich-va-dang-bai.md`
+  summary: Kiểm bằng Meta / Cloudinary thật luồng đăng bài:
+    - FB `/{page}/photos` nhận `message` (không phải `caption`) và trả `post_id`; `/{page}/feed`; `permalink_url`;
+    - IG container `image_url` có transformation `c_pad,w_,h_,b_white` (Cloudinary giao biến đổi theo yêu cầu — tài khoản bật "strict transformations" sẽ chặn), `status_code`, `media_publish`, `content_publishing_limit`, giới hạn 100 bài/24h;
+    - Threads `IMAGE` / `TEXT`, `status`, `threads_publishing_limit` (250/24h);
+    - hành vi thật khi `media_publish` / `threads_publish` hết giờ (container chuyển `PUBLISHED`?), mã lỗi IG khi hết hạn mức đăng.
+  evidence: Chỉ có test với Meta giả (`server/test/content-publish.test.ts`) và test helper web (`web/src/lib/publish.test.ts`); chưa chạy worker với trang thật, chưa thử `npm run media:check` với URL `c_pad`. Thời gian hỏi container (3 giây × 20) là [ASSUMPTION].
+- source_spec: `spec-6-4-len-lich-va-dang-bai.md`
+  summary: Sửa nội dung / huỷ target đã rời nháp:
+    - target `failed` (`PUBLISH_REJECTED` — câu lỗi bảo "Sửa nội dung rồi đăng lại") chỉ "Đăng lại" được với nội dung cũ, chưa có `failed → draft` hay sửa caption của riêng target đó;
+    - bài lẫn trạng thái (vd 2 trang đã đăng + 1 trang bỏ lịch về nháp) không sửa được nháp vì `updateDraftPost` đòi mọi target `draft`;
+    - chưa có `cancelled` (xoá bài khỏi lịch).
+  evidence: AD-13 chỉ có `failed → scheduled`; Story 6.5 (Lịch nội dung) là chỗ hợp để thêm "Xoá" (`cancel`) và mở sửa từng target không ở `publishing|published|cancelled`.
+- source_spec: `spec-6-4-len-lich-va-dang-bai.md`
+  summary: Job `publish.target` hết hạn (300 giây) trong lúc handler vẫn chạy rồi trả target về `scheduled` (lỗi tạm ở bước container) → không còn job nào chiếm lại cho tới lần cron `content.requeue` kế tiếp (trễ 10–25 phút).
+  evidence: `publish.ts` `retryLater` ném lỗi cho job đã hết hạn (pg-boss bỏ qua); an toàn (không đăng trùng) nhưng trễ. Hiếm vì mỗi lời gọi Meta ≤30 giây. Hướng sửa: `retryLater` enqueue job mới `startAfter` khi `job.signal` đã huỷ.
+- source_spec: `spec-6-4-len-lich-va-dang-bai.md`
+  summary: Deadlock khoá advisory giới hạn/24h khi hai request lên lịch hai bài khác nhau cùng chạm các trang IG/Threads theo thứ tự ngược nhau.
+  evidence: `content/transitions.ts` `transitionPostTargets` gọi `transitionTarget` theo thứ tự `input.targets` (dòng target đã khoá theo id, nhưng `assertDailyLimit` lấy `pg_advisory_xact_lock(publish_limit:<page>)` theo thứ tự body) → Postgres huỷ một bên (40P01 → 500). Hướng sửa: lấy khoá advisory của mọi trang trong request theo `pageId` tăng dần trước vòng lặp (khoá xact lấy lại được trong cùng phiên). Quan trọng hơn khi Epic 7 tự lên lịch chiến dịch song song với chủ shop.
+- source_spec: `spec-6-4-len-lich-va-dang-bai.md`
+  summary: Bài đã lên nhưng target vẫn `failed PUBLISH_UNKNOWN` khi cron `content.requeue` đổi target kẹt `publishing` trước lúc handler cũ ghi `published`.
+  evidence: `content/publish.ts` `markPublished` chỉ nhận `status='publishing'`; `finishPublished` chỉ log khi không cập nhật được. Chủ shop thấy lỗi rồi "Đăng lại" → đăng trùng. Rất hiếm (handler phải chạy >15 phút). Hướng sửa: `markPublished` nhận cả `failed` + `error_code='PUBLISH_UNKNOWN'` cùng `schedule_version` (xoá `error_code`, phát `post_target.published`).

@@ -4,7 +4,15 @@
 // - Token đi trong query `access_token`, kèm `appsecret_proof` = HMAC-SHA256(token, app secret) khi có secret.
 // - Log chỉ path (bỏ query), HTTP status, mã/subcode và fbtrace id; không bao giờ log token, proof, query hay body.
 import { createHmac, timingSafeEqual } from 'node:crypto'
-import { abortedFailure, classifyMetaError, transientFailure, APP_LEVEL_RATE_LIMIT_CODES, type MetaFailure } from './errors.ts'
+import {
+  abortedFailure,
+  classifyMetaError,
+  isConnectPhaseError,
+  notSentFailure,
+  transientFailure,
+  APP_LEVEL_RATE_LIMIT_CODES,
+  type MetaFailure,
+} from './errors.ts'
 import {
   DEFAULT_BLOCK_MS,
   GRAPH_APP_SCOPE,
@@ -201,10 +209,10 @@ export function createMetaClient(options: MetaClientOptions): MetaClient {
     try {
       const decision = await limiter.checkBudget(opts.scope, opts.tier, now())
       if (!decision.ok) {
-        return fail(path, { ok: false, kind: 'RATE_LIMITED', retryAfterMs: decision.retryAfterMs }, `meta call held: rate budget (${decision.reason})`)
+        return fail(path, { ok: false, kind: 'RATE_LIMITED', retryAfterMs: decision.retryAfterMs, notSent: true }, `meta call held: rate budget (${decision.reason})`)
       }
     } catch {
-      return fail(path, transientFailure(), 'meta rate store unavailable')
+      return fail(path, notSentFailure(), 'meta rate store unavailable')
     }
 
     // 2. Gửi.
@@ -222,9 +230,11 @@ export function createMetaClient(options: MetaClientOptions): MetaClient {
         ...(method === 'POST' && form ? { body: form } : method === 'POST' && opts.body ? { body: JSON.stringify(opts.body) } : {}),
         signal,
       })
-    } catch {
-      // Caller huỷ → ABORTED (không cảnh báo). Lỗi mạng / hết giờ: không giữ lỗi gốc (mang URL có token).
+    } catch (err) {
+      // Caller huỷ → ABORTED (không cảnh báo). Lỗi mạng / hết giờ: không giữ lỗi gốc (mang URL có token). Chỉ lỗi ở pha
+      // mở kết nối mới chắc chắn chưa gửi (`notSent`) — hết giờ / đứt giữa chừng có thể Meta đã nhận.
       if (opts.signal?.aborted) return abortedFailure()
+      if (isConnectPhaseError(err)) return fail(path, notSentFailure(), 'meta call failed: connect error')
       return fail(path, transientFailure(), 'meta call failed: network or timeout')
     }
 

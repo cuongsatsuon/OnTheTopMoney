@@ -240,7 +240,7 @@ describe('ngân sách tần suất', () => {
 
     clock = new Date(T0.getTime() + 2 * 60_000)
     for (const tier of ['interactive', 'publish', 'background'] as const) {
-      expect(await client().get('/x', { token: TOKEN, tier, scope: SCOPE })).toEqual({ ok: false, kind: 'RATE_LIMITED', retryAfterMs: 3 * 60_000 })
+      expect(await client().get('/x', { token: TOKEN, tier, scope: SCOPE })).toEqual({ ok: false, kind: 'RATE_LIMITED', retryAfterMs: 3 * 60_000, notSent: true })
     }
     expect(seen).toHaveLength(0)
 
@@ -265,7 +265,7 @@ describe('ngân sách tần suất', () => {
     })
     expect((await rateRows()).find((r) => r.bucket === 'blocked')).toMatchObject({ scope: SCOPE, blocked_until: new Date(T0.getTime() + 5 * 60_000) })
     seen.length = 0
-    expect(await client().get('/x', { token: TOKEN, tier: 'interactive', scope: SCOPE })).toEqual({ ok: false, kind: 'RATE_LIMITED', retryAfterMs: 5 * 60_000 })
+    expect(await client().get('/x', { token: TOKEN, tier: 'interactive', scope: SCOPE })).toEqual({ ok: false, kind: 'RATE_LIMITED', retryAfterMs: 5 * 60_000, notSent: true })
     reply(200, {})
     expect((await client().get('/x', { token: TOKEN, tier: 'interactive', scope: 'page:222' })).ok).toBe(true)
     expect(seen).toHaveLength(1)
@@ -279,7 +279,7 @@ describe('ngân sách tần suất', () => {
     expect((await rateRows()).map((r) => `${r.scope}/${r.bucket}`)).toEqual(['page:222/buc'])
     reply(200, {})
     expect((await client().get('/x', { token: TOKEN, tier: 'background', scope: SCOPE })).ok).toBe(true)
-    expect(await client().get('/x', { token: TOKEN, tier: 'interactive', scope: 'page:222' })).toEqual({ ok: false, kind: 'RATE_LIMITED', retryAfterMs: 3 * 60_000 })
+    expect(await client().get('/x', { token: TOKEN, tier: 'interactive', scope: 'page:222' })).toEqual({ ok: false, kind: 'RATE_LIMITED', retryAfterMs: 3 * 60_000, notSent: true })
   })
 
   it('Threads bị chặn mức app (mã 4) không giữ lời gọi Graph', async () => {
@@ -303,9 +303,9 @@ describe('ngân sách tần suất', () => {
     expect((await rateRows()).filter((r) => r.bucket === 'blocked').map((r) => r.scope)).toEqual(['app:graph', SCOPE])
   })
 
-  it('store lỗi khi kiểm ngân sách → TRANSIENT, không gửi', async () => {
+  it('store lỗi khi kiểm ngân sách → TRANSIENT `notSent`, không gửi', async () => {
     const broken = { get: async () => Promise.reject(new Error('db down')), record: async () => {} }
-    expect(await client({ rateStore: broken }).get('/x', { token: TOKEN, tier: 'interactive', scope: SCOPE })).toEqual({ ok: false, kind: 'TRANSIENT' })
+    expect(await client({ rateStore: broken }).get('/x', { token: TOKEN, tier: 'interactive', scope: SCOPE })).toEqual({ ok: false, kind: 'TRANSIENT', notSent: true })
     expect(seen).toHaveLength(0)
   })
 
@@ -317,7 +317,7 @@ describe('ngân sách tần suất', () => {
 })
 
 describe('mạng lỗi / timeout', () => {
-  it('quá thời hạn → TRANSIENT, không retry', async () => {
+  it('quá thời hạn → TRANSIENT không `notSent` (có thể Meta đã nhận), không retry', async () => {
     handler = () => {} // giữ kết nối, không trả lời
     const started = Date.now()
     expect(await client({ timeoutMs: 200 }).get('/slow', { token: TOKEN, tier: 'interactive', scope: SCOPE })).toEqual({ ok: false, kind: 'TRANSIENT' })
@@ -325,11 +325,12 @@ describe('mạng lỗi / timeout', () => {
     expect(seen).toHaveLength(1)
   })
 
-  it('không kết nối được → TRANSIENT', async () => {
+  it('không kết nối được → TRANSIENT `notSent` (chắc chắn chưa gửi)', async () => {
     const port = await freePort()
     expect(await client({ baseUrl: `http://127.0.0.1:${port}` }).get('/x', { token: TOKEN, tier: 'interactive', scope: SCOPE })).toEqual({
       ok: false,
       kind: 'TRANSIENT',
+      notSent: true,
     })
   })
 

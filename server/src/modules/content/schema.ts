@@ -1,7 +1,8 @@
 // Bảng của module `content` (AD-1, AD-13, AD-14 — Story 6.1): `posts`, `post_targets`, `media_assets`,
 // `post_target_media`. Chỉ `content` ghi; module khác đi qua `content/index.ts`.
 // - Một bài thủ công = 1 `posts` + n `post_targets` (mỗi trang một đích). Caption nằm ở target (giá trị hiệu lực của
-//   trang đó). Cột lịch/lỗi (`scheduled_at`, `schedule_version`, `error_code`, `cancel_reason`) do Story 6.4/6.5 dùng.
+//   trang đó). Cột lịch/lỗi (`scheduled_at`, `schedule_version`, `error_code`, `cancel_reason`) do Story 6.4/6.5 dùng;
+//   Story 6.4 thêm cột đăng (`publishing_at`, `published_at`, `PublishedRef`).
 // - `media_assets` chỉ chứa ảnh bài (không logo, không đính kèm của khách); ảnh gắn vào target qua `post_target_media`.
 // - FK tới `pages`/`posts` `on delete cascade`: trang chỉ bị xoá cứng khi xoá dữ liệu theo yêu cầu (gỡ trang là soft-delete).
 import { CANCEL_REASONS, IMAGE_ERROR_CODES, MEDIA_ASSET_SOURCES, MEDIA_ASSET_STATUSES, POST_SOURCES, POST_TARGET_STATUSES } from '@ottm/shared'
@@ -46,16 +47,28 @@ export const postTargets = pgTable(
     /** Tăng mỗi lần đổi `scheduled_at` hoặc vào/rời `scheduled` (Story 6.4). */
     scheduleVersion: integer('schedule_version').notNull().default(0),
     scheduledAt: timestamp('scheduled_at', { withTimezone: true, precision: 3 }),
-    /** `ErrorCode` khi `failed` (Story 6.4). */
+    /** `ErrorCode` khi `failed` (Story 6.4) — có đúng khi `failed`. */
     errorCode: text('error_code'),
     cancelReason: text('cancel_reason'),
+    /** Lúc job chiếm target (`scheduled → publishing`); cron `content.requeue` dùng để phát hiện target kẹt. */
+    publishingAt: timestamp('publishing_at', { withTimezone: true, precision: 3 }),
+    /** Lúc bài lên trang (`published`). */
+    publishedAt: timestamp('published_at', { withTimezone: true, precision: 3 }),
+    /** `PublishedRef.platformPostId` đã chuẩn hoá (AD-6): FB `{pageId}_{postId}`, IG/Threads media id. Null khi Meta không trả id. */
+    platformPostId: text('platform_post_id'),
+    /** `PublishedRef.permalink` (lấy sau khi đăng, có thể thiếu). */
+    permalink: text('permalink'),
     createdAt: timestamp('created_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
   },
   (t) => [
     unique('post_targets_post_page_unique').on(t.postId, t.pageId),
     index('post_targets_page_idx').on(t.pageId),
+    // Cron `content.requeue` quét `scheduled`/`publishing` theo giờ.
+    index('post_targets_status_scheduled_idx').on(t.status, t.scheduledAt),
     check('post_targets_status_check', sql`${t.status} in (${inList(POST_TARGET_STATUSES)})`),
+    check('post_targets_error_code_check', sql`(${t.status} = 'failed') = (${t.errorCode} is not null)`),
+    check('post_targets_scheduled_at_check', sql`${t.status} <> 'scheduled' or ${t.scheduledAt} is not null`),
     check('post_targets_cancel_reason_check', sql`${t.cancelReason} is null or ${t.cancelReason} in (${inList(CANCEL_REASONS)})`),
   ],
 )

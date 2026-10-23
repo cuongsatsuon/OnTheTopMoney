@@ -17,13 +17,39 @@ export interface PlatformRule {
   hashtagMax: number | null
   /** Bài phải có ít nhất 1 ảnh. */
   mediaRequired: boolean
+  /**
+   * Số bài đăng qua API tối đa trong 24 giờ trượt của một trang (Story 6.4, `PUBLISH_LIMIT_REACHED`); `null` = Meta
+   * không công bố. Server kiểm bảo thủ trên bài của app khi lên lịch; hạn mức thật (gồm bài đăng ngoài app) kiểm lại
+   * bằng API trong job đăng.
+   */
+  dailyPublishMax: number | null
 }
 
-/** Facebook: giới hạn chữ của bài Page; Instagram: 2.200 ký tự, 30 hashtag, bắt buộc ảnh; Threads: 500 ký tự. */
+/**
+ * Facebook: giới hạn chữ của bài Page; Instagram: 2.200 ký tự, 30 hashtag, bắt buộc ảnh, 100 bài API/24h; Threads: 500
+ * ký tự, 250 bài/24h (tài liệu Meta "Content Publishing" / "Threads Posts").
+ */
 export const PLATFORM_RULES: Record<Platform, PlatformRule> = {
-  facebook: { captionMax: 63_206, hashtagMax: null, mediaRequired: false },
-  instagram: { captionMax: 2_200, hashtagMax: 30, mediaRequired: true },
-  threads: { captionMax: 500, hashtagMax: null, mediaRequired: false },
+  facebook: { captionMax: 63_206, hashtagMax: null, mediaRequired: false, dailyPublishMax: null },
+  instagram: { captionMax: 2_200, hashtagMax: 30, mediaRequired: true, dailyPublishMax: 100 },
+  threads: { captionMax: 500, hashtagMax: null, mediaRequired: false, dailyPublishMax: 250 },
+}
+
+/** Khung tỉ lệ ảnh feed Instagram (rộng / cao): dọc nhất 4:5, ngang nhất 1,91:1. */
+export const INSTAGRAM_ASPECT = { min: 4 / 5, max: 1.91 } as const
+
+/**
+ * Ảnh có vừa khung feed Instagram không (Story 6.4): `pad_tall` = dọc hơn 4:5 (ảnh điện thoại 3:4, 9:16), `pad_wide` =
+ * ngang hơn 1,91:1. Ngoài khung thì lúc đăng ảnh được ĐỆM nền trắng vào khung gần nhất (không cắt — giữ trọn sản
+ * phẩm); xem trước IG ở Soạn bài hiện đúng như vậy. Kích thước không hợp lệ → `ok` (không đoán).
+ */
+export function instagramImageFit(width: number, height: number): 'ok' | 'pad_tall' | 'pad_wide' {
+  if (!(width > 0 && height > 0)) return 'ok'
+  const ratio = width / height
+  // Sai số làm tròn của ảnh đúng 4:5 (vd 1080×1350) không được tính là ngoài khung.
+  if (ratio < INSTAGRAM_ASPECT.min - 1e-3) return 'pad_tall'
+  if (ratio > INSTAGRAM_ASPECT.max + 1e-3) return 'pad_wide'
+  return 'ok'
 }
 
 /** Caption dài nhất lưu được (nháp) — lớn nhất trong các nền tảng; luật riêng từng nền tảng chỉ chặn khi lên lịch. */
@@ -204,7 +230,12 @@ export const PostTargetDto = z.object({
   /** Khoá lạc quan (AD-13) — tăng mỗi lần target đổi. */
   version: z.number().int().nonnegative(),
   scheduledAt: IsoDateTime.nullable(),
+  /** `ErrorCode` khi `failed` (Story 6.4: `PUBLISH_*`, `PAGE_DISCONNECTED`, luật nền tảng lúc đăng…). */
   errorCode: ErrorCode.nullable(),
+  /** Lúc bài lên trang (`published`). */
+  publishedAt: IsoDateTime.nullable(),
+  /** Đường dẫn bài trên nền tảng ("Xem bài"); có thể thiếu cả khi đã đăng (Meta không trả). */
+  permalink: z.string().nullable(),
 })
 export type PostTargetDto = z.infer<typeof PostTargetDto>
 
@@ -218,6 +249,50 @@ export const PostDto = z.object({
   updatedAt: IsoDateTime,
 })
 export type PostDto = z.infer<typeof PostDto>
+
+/* ---------- Lên lịch và đăng (Story 6.4, AD-13) ---------- */
+
+/**
+ * Hành động của chủ shop trên target (bảng chuyển trạng thái AD-13): `schedule` nháp → đã lên lịch (lên lịch / đăng
+ * ngay), `reschedule` đổi giờ bài đã lên lịch, `unschedule` bỏ lịch (về nháp, sửa lại được), `retry` "Đăng lại" bài lỗi.
+ */
+export const TARGET_ACTIONS = ['schedule', 'reschedule', 'unschedule', 'retry'] as const
+export const TargetAction = z.enum(TARGET_ACTIONS)
+export type TargetAction = z.infer<typeof TargetAction>
+
+/** Lên lịch xa nhất [ASSUMPTION]: chặn gõ nhầm năm. */
+export const SCHEDULE_MAX_AHEAD_MS = 366 * 24 * 60 * 60_000
+
+/**
+ * Body `POST /api/v1/posts/:id/targets/transition` — một hành động cho một hoặc nhiều target của bài, tất cả hoặc không.
+ * `scheduledAt` (ISO UTC; FE đổi từ giờ VN): bắt buộc với mọi hành động trừ `unschedule`; `null` = đăng ngay. `version`
+ * = khoá lạc quan của từng target (AD-13).
+ */
+export const TransitionTargetsRequest = z
+  .object({
+    action: TargetAction,
+    scheduledAt: IsoDateTime.nullable().optional(),
+    targets: z
+      .array(z.object({ id: z.uuid(), version: z.number().int().nonnegative() }).strict())
+      .min(1, 'Chọn ít nhất 1 trang')
+      .max(POST_TARGETS_MAX, `Tối đa ${POST_TARGETS_MAX} trang`),
+  })
+  .strict()
+  .superRefine((body, ctx) => {
+    const seen = new Set<string>()
+    body.targets.forEach((t, i) => {
+      if (seen.has(t.id)) ctx.addIssue({ code: 'custom', path: ['targets', i, 'id'], message: 'Trang bị chọn hai lần' })
+      seen.add(t.id)
+    })
+    if (body.action === 'unschedule' && body.scheduledAt !== undefined) {
+      ctx.addIssue({ code: 'custom', path: ['scheduledAt'], message: 'Bỏ lịch không cần thời gian' })
+    }
+    if (body.action !== 'unschedule' && body.scheduledAt === undefined) {
+      ctx.addIssue({ code: 'custom', path: ['scheduledAt'], message: 'Chọn thời gian đăng' })
+    }
+  })
+export type TransitionTargetsRequest = z.input<typeof TransitionTargetsRequest>
+export type ParsedTransitionTargetsRequest = z.output<typeof TransitionTargetsRequest>
 
 /* ---------- Viết caption bằng AI (Story 6.2, AD-7, AD-21) ---------- */
 

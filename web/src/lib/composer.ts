@@ -415,13 +415,17 @@ export function imageFailureText(code: ImageErrorCode): string {
 
 export const postKey = (id: string) => ['posts', id] as const
 
-/** Nháp đang mở; `null` → không tải. */
-export function usePost(id: string | null) {
+/**
+ * Bài đang mở; `null` → không tải. `poll` (Story 6.4): khoảng hỏi lại theo dữ liệu hiện tại (còn trang đang đăng → hỏi
+ * định kỳ phòng lỡ sự kiện realtime), `false` = không hỏi.
+ */
+export function usePost(id: string | null, poll?: (post: PostDto | undefined) => number | false) {
   return useQuery({
     queryKey: postKey(id ?? ''),
     queryFn: ({ signal }) => apiFetch(`/posts/${id}`, { schema: PostDto, signal }),
     enabled: id !== null,
     retry: false,
+    ...(poll ? { refetchInterval: (q: { state: { data: PostDto | undefined } }) => poll(q.state.data) } : {}),
   })
 }
 

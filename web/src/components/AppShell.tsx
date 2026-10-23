@@ -28,6 +28,7 @@ import { useLogout } from '../lib/session'
 import { errorMessageOf } from '../lib/error-messages'
 import { useNeedsHumanCount } from '../lib/inbox'
 import { useNotificationToasts, useNotifications } from '../lib/notifications'
+import { usePublishedToasts } from '../lib/publish'
 import { WELCOME_PATH, shouldOpenWelcome, welcomeOpenedThisLoad } from '../lib/onboarding'
 import { useRealtimeStatus } from '../lib/realtime'
 import { isPaletteShortcut, shortcutLabel } from '../lib/search'
@@ -345,6 +346,8 @@ export default function AppShell() {
   }, [pathname, realPages.data, navigate])
   useNotificationToasts(notify)
   useAiBudgetToasts(notify)
+  // Story 6.4: toast "Đã đăng lên <trang>" khi job đăng xong (SSE `post_target.published`).
+  usePublishedToasts(notify)
   return (
     <div className="flex h-full">
       <Sidebar />

@@ -818,6 +818,7 @@ Trình duyệt ──https──> app.example.com  (Hostinger: web/dist + .htacc
    | Trong mẫu | Thay bằng |
    |---|---|
    | `api.example.com` (server_name, đường chứng chỉ, redirect) | host của `PUBLIC_BASE_URL` |
+   | `https://app.example.com` (`map $ottm_api_cors_allowed`) | origin web `WEB_BASE_URL` (mỗi origin web một dòng) |
    | `127.0.0.1:3000` (`upstream ottm_api_upstream`) | `127.0.0.1:<API_HOST_PORT>` |
    | `/var/www/letsencrypt` (khối cổng 80) | thư mục webroot certbot, chỉ khi dùng `certbot certonly --webroot` |
 
@@ -825,6 +826,7 @@ Trình duyệt ──https──> app.example.com  (Hostinger: web/dist + .htacc
    cd ~/OnTheTopMoney
    sudo cp deploy/nginx-api.conf.example /etc/nginx/sites-available/ottm-api
    sudo sed -i 's/api\.example\.com/<host-api-của-bạn>/g' /etc/nginx/sites-available/ottm-api
+   sudo sed -i 's/app\.example\.com/<host-web-của-bạn>/g' /etc/nginx/sites-available/ottm-api
    # API_HOST_PORT khác mặc định → sửa tay 127.0.0.1:3000 trong file
    sudo ln -s ../sites-available/ottm-api /etc/nginx/sites-enabled/ottm-api
    sudo nginx -t && sudo systemctl reload nginx
@@ -832,7 +834,10 @@ Trình duyệt ──https──> app.example.com  (Hostinger: web/dist + .htacc
 
    Mẫu này: `/healthz`, `/api`, `/webhooks`, `/oauth`, `/privacy` → api (SSE `/api/v1/stream` không đệm);
    `/` và đường lạ → JSON 404 (host api không phục vụ trang web); CSP `default-src 'none'`;
-   **không** thêm header `Access-Control-*` ở nginx (api tự đặt — thêm `*` ở nginx sẽ làm hỏng đăng nhập). Tên
+   **không** ghi đè header `Access-Control-*` của api (api tự đặt — thêm `*` ở nginx sẽ làm hỏng đăng nhập); chỉ lỗi do
+   nginx tự sinh (413 ảnh quá lớn, 502/503/504) được gắn `Access-Control-Allow-Origin` của đúng origin web để web đọc
+   được lỗi thay vì "Không kết nối được máy chủ". Ảnh bài `POST /api/v1/media-assets` nhận tới 11 MB (như file kho
+   kiến thức). Tên
    map/upstream có tiền tố `ottm_api_` nên cài song song được với site cùng VPS lúc chuyển chế độ.
 5. Lên bản như mục 2 (`docker compose up -d --build`) — với `COMPOSE_PROFILES` trống compose không build/chạy service
    `web`, chỉ BE. Container web còn lại từ chế độ VPS **không** tự mất: dừng + xoá bằng tay

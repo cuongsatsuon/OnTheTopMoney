@@ -182,6 +182,7 @@ jobs:
               -e '/^[[:space:]]*listen \[::\]:443/d' \
               -e 's/^\([[:space:]]*\)listen 443 ssl http2;/\1listen 8081;/' \
               -e 's/api\.example\.com/localhost/g' \
+              -e 's/app\.example\.com/localhost:5173/g' \
               -e "s/127\.0\.0\.1:3000;/127.0.0.1:$CI_API_PORT;/" \
               nginx-api.conf.example > "$conf"
           if grep -nE '^[^#]*(location[^{]*/media|alias)' "$conf"; then echo "mẫu nginx-api còn phục vụ /media"; exit 1; fi

@@ -8,6 +8,8 @@
 # TLS khác mẫu cùng VPS (tiền tố ottm_api_) nên hai site cài cùng lúc được (lúc chuyển chế độ).
 #
 #   api.example.com          → host của PUBLIC_BASE_URL. Có ở: server_name, đường chứng chỉ, redirect.
+#   https://app.example.com  → origin web (WEB_BASE_URL, phải nằm trong ALLOWED_ORIGINS). Có ở: map $ottm_api_cors_allowed
+#                              (mỗi origin web một dòng nếu có nhiều).
 #   127.0.0.1:3000           → 127.0.0.1:API_HOST_PORT (api chỉ nghe trên loopback)
 #   /var/www/letsencrypt     → thư mục webroot cho certbot (chỉ khi dùng `certbot certonly --webroot`)
 #
@@ -16,7 +18,9 @@
 # Hành vi phải giữ (CI `nginx -t` mẫu này; runbook mục 8.5 kiểm tay bằng curl):
 #   /healthz, /api, /api/*, /webhooks, /webhooks/*, /oauth, /oauth/*, /privacy, /privacy/*  → api
 #   /, đường lạ (kể cả /media/* — ảnh nằm trên Cloudinary) → JSON 404 {"error":{"code":"NOT_FOUND",…}} (host này không phục vụ trang web)
-#   CORS của /api/v1/* do api tự đặt (ALLOWED_ORIGINS) — nginx KHÔNG thêm/ghi đè header Access-Control-*
+#   CORS của /api/v1/* do api tự đặt (ALLOWED_ORIGINS) — nginx KHÔNG ghi đè header Access-Control-* của api; chỉ lỗi
+#   do nginx tự sinh (413/502/503/504 — không qua api) được gắn Access-Control-Allow-Origin/Credentials cho origin web,
+#   để web đọc được JSON lỗi thay vì "lỗi mạng"
 #   mọi response (kể cả lỗi) có CSP, HSTS, X-Content-Type-Options, Referrer-Policy, X-Frame-Options, Permissions-Policy
 #   SSE /api/v1/stream không đệm, không nén; đường api không bao giờ nén
 #   502/503/504 do nginx sinh trên đường api → JSON {"error":{"code":"INTERNAL","message":"api unavailable"}};
@@ -50,6 +54,26 @@ map $upstream_http_cache_control $ottm_api_cache_control {
 map $upstream_http_referrer_policy $ottm_api_referrer_policy {
     ""      "strict-origin-when-cross-origin";
     default "";
+}
+
+# CORS cho lỗi do nginx tự sinh (413 ảnh quá lớn, 502/503/504 lúc api khởi động lại): không có header Access-Control-*
+# thì trình duyệt chặn phản hồi và web chỉ thấy lỗi mạng. Chỉ origin web được phép (giống ALLOWED_ORIGINS của api); api
+# đã tự đặt Allow-Origin (mọi phản hồi /api/v1 của api, kể cả lỗi) → chuỗi rỗng = nginx không thêm cái thứ hai.
+map $http_origin $ottm_api_cors_allowed {
+    default                  "";
+    "https://app.example.com" $http_origin;
+}
+map $upstream_http_access_control_allow_origin $ottm_api_cors_origin {
+    ""      $ottm_api_cors_allowed;
+    default "";
+}
+map $ottm_api_cors_origin $ottm_api_cors_credentials {
+    ""      "";
+    default "true";
+}
+map $ottm_api_cors_origin $ottm_api_cors_vary {
+    ""      "";
+    default "Origin";
 }
 
 # ---------------------------------------------------------------- api (docker compose, chỉ nghe trên loopback)
@@ -104,6 +128,10 @@ server {
     add_header X-Frame-Options "DENY" always;
     add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()" always;
     add_header Cache-Control $ottm_api_cache_control always;
+    # CORS chỉ cho lỗi do nginx sinh (map $ottm_api_cors_origin rỗng khi api đã tự đặt) — xem chú thích các map ở trên.
+    add_header Access-Control-Allow-Origin $ottm_api_cors_origin always;
+    add_header Access-Control-Allow-Credentials $ottm_api_cors_credentials always;
+    add_header Vary $ottm_api_cors_vary always;
 
     # Không nén: đường api (nhất là SSE) không bao giờ bị nén/gom, kể cả khi nginx.conf chung bật gzip.
     gzip off;
@@ -153,9 +181,10 @@ server {
         proxy_pass http://ottm_api_upstream;
     }
 
-    # Tải file lên (Story 5.2 file kho kiến thức ≤10 MB gửi nguyên bytes; Story 3.1 logo base64 ~2,8 MB): body lớn
-    # hơn mức chung 2 MB. api tự giới hạn theo từng route. Đặt TRƯỚC location `/api` (regex khớp theo thứ tự).
-    location ~ ^/api/v1/(knowledge-items/(group|page)/[0-9a-f-]+/files|brand-profiles/(group|page)/[0-9a-f-]+/logo)$ {
+    # Tải file lên (Story 5.2 file kho kiến thức ≤10 MB gửi nguyên bytes; Story 3.1 logo base64 ~2,8 MB; Story 6.1 ảnh bài
+    # ≤10 MB `POST /api/v1/media-assets` — ảnh điện thoại thường 2–6 MB): body lớn hơn mức chung 2 MB. api tự giới hạn
+    # theo từng route. Đặt TRƯỚC location `/api` (regex khớp theo thứ tự).
+    location ~ ^/api/v1/(media-assets|knowledge-items/(group|page)/[0-9a-f-]+/files|brand-profiles/(group|page)/[0-9a-f-]+/logo)$ {
         client_max_body_size 11m;
         proxy_pass http://ottm_api_upstream;
     }

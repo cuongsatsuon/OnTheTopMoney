@@ -188,6 +188,43 @@ export function incomingTransformation(request: Pick<PutImageRequest, 'toSrgb' |
   return parts.length ? parts.join(',') : undefined
 }
 
+export interface ImageFit {
+  /** Tỉ lệ rộng/cao nhỏ nhất (ảnh dọc hơn → đệm hai bên). */
+  minAspect?: number
+  /** Tỉ lệ rộng/cao lớn nhất (ảnh ngang hơn → đệm trên dưới). */
+  maxAspect?: number
+  /** Rộng tối đa (px) của ảnh giao đi; lớn hơn → thu nhỏ giữ tỉ lệ. */
+  maxWidth?: number
+}
+
+/**
+ * URL giao ảnh công khai đã biến đổi theo yêu cầu của nơi nhận (Story 6.4: Instagram chỉ nhận tỉ lệ 4:5–1,91:1, IG /
+ * Threads rộng ≤1440 px): chèn transformation Cloudinary (biến đổi khi giao, bản gốc giữ nguyên) sau `/image/upload/`.
+ * - Ngoài khung tỉ lệ → `c_pad,w_,h_,b_white` (đệm nền trắng, không cắt mất phần nào của ảnh), cùng lúc thu nhỏ.
+ * - Chỉ quá rộng → `c_limit,w_`.
+ * - Đã vừa, hoặc URL không phải ảnh `upload` của Cloudinary → trả nguyên URL.
+ */
+export function fitImageUrl(url: string, size: { width: number; height: number }, fit: ImageFit): string {
+  const { width: w, height: h } = size
+  const marker = '/image/upload/'
+  const at = url.indexOf(marker)
+  if (at === -1 || !(w > 0 && h > 0)) return url
+  let cw = w
+  let ch = h
+  const ratio = w / h
+  if (fit.minAspect !== undefined && ratio < fit.minAspect - 1e-3) cw = Math.round(h * fit.minAspect)
+  else if (fit.maxAspect !== undefined && ratio > fit.maxAspect + 1e-3) ch = Math.round(w / fit.maxAspect)
+  const padded = cw !== w || ch !== h
+  if (fit.maxWidth !== undefined && cw > fit.maxWidth) {
+    ch = Math.round((ch * fit.maxWidth) / cw)
+    cw = fit.maxWidth
+  }
+  const t = padded ? `c_pad,w_${cw},h_${ch},b_white` : cw !== w ? `c_limit,w_${cw}` : null
+  if (!t) return url
+  const head = url.slice(0, at + marker.length)
+  return `${head}${t}/${url.slice(at + marker.length)}`
+}
+
 const NOT_CONFIGURED: MediaFailure = { ok: false, kind: 'MEDIA_NOT_CONFIGURED' }
 const notConfigured = async (): Promise<MediaFailure> => ({ ...NOT_CONFIGURED })
 

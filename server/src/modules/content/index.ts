@@ -8,6 +8,20 @@ export const MODULE = 'content'
 export { createPost, getPost, updateDraftPost, type CreatePostInput } from './posts.ts'
 // Luật nền tảng phía server (cùng bảng `packages/shared` với FE) — gọi trước mọi chuyển tới `scheduled`.
 export { assertPublishable } from './publishable.ts'
+// Lên lịch và đăng (Story 6.4, AD-13): chuyển trạng thái do chủ shop bấm; job `publish.target`; cron `content.requeue`.
+export { transitionPostTargets, transitionTarget, type TargetTransition, type TransitionDeps } from './transitions.ts'
+export {
+  CONTAINER_POLL_MAX,
+  CONTAINER_POLL_MS,
+  PUBLISH_RATE_DEFER_MAX_MS,
+  PublishRetryableError,
+  handlePublishJob,
+  parsePublishJobData,
+  publishTarget,
+  type PublishDeps,
+  type PublishOutcome,
+} from './publish.ts'
+export { PUBLISHING_STUCK_MS, REQUEUE_OVERDUE_MS, requeueTargets, type RequeueDeps, type RequeueResult } from './requeue.ts'
 // Ảnh bài (AD-14): kiểm bytes trước khi tải lên kho công khai, ghi `media_assets` sau.
 export { POST_IMAGE_VALIDATION, recordMediaAsset, toGeneratedImageDto, toMediaAssetDto, validatePostImage } from './media.ts'
 // Viết caption bằng AI theo hồ sơ từng trang (Story 6.2) — chạy trong request, không lưu bài.

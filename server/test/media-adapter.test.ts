@@ -5,7 +5,7 @@ import { pino } from 'pino'
 import { Writable } from 'node:stream'
 import { describe, expect, it } from 'vitest'
 import { createFakeCloudinary, FAKE_JPEG, FAKE_PNG, FAKE_WEBP, FAKE_DELIVERY_BASE_URL } from '../src/adapters/media/fake.ts'
-import { classifyStatus, createMediaStores, incomingTransformation, MEDIA_MAX_BYTES, signParams, type MediaConfig } from '../src/adapters/media/index.ts'
+import { classifyStatus, createMediaStores, fitImageUrl, incomingTransformation, MEDIA_MAX_BYTES, signParams, type MediaConfig } from '../src/adapters/media/index.ts'
 import { ConfigError, parseEnv, parseMediaEnv } from '../src/platform/config/index.ts'
 import { createLogger } from '../src/platform/log/index.ts'
 import { runMediaCheck } from '../scripts/lib/media-check.ts'
@@ -131,6 +131,34 @@ describe('adapters/media — MediaStore (công khai)', () => {
     const { fake, stores } = setup()
     fake.failNext(404)
     expect(await stores.publicStore.delete('ottm-test/public/x')).toEqual({ ok: true })
+  })
+})
+
+describe('adapters/media — fitImageUrl (URL giao đã biến đổi, Story 6.4)', () => {
+  const URL = 'https://res.cloudinary.com/demo/image/upload/v17/ottm/public/abc.jpg'
+  const IG = { minAspect: 4 / 5, maxAspect: 1.91, maxWidth: 1440 }
+
+  it('ảnh dọc 3:4 → đệm trắng hai bên vào khung 4:5, thu nhỏ rộng ≤1440', () => {
+    expect(fitImageUrl(URL, { width: 3024, height: 4032 }, IG)).toBe(
+      'https://res.cloudinary.com/demo/image/upload/c_pad,w_1440,h_1800,b_white/v17/ottm/public/abc.jpg',
+    )
+  })
+
+  it('ảnh 9:16 nhỏ → đệm giữ cỡ; ảnh 3:1 → đệm trên dưới về 1,91:1', () => {
+    expect(fitImageUrl(URL, { width: 720, height: 1280 }, IG)).toContain('/upload/c_pad,w_1024,h_1280,b_white/v17/')
+    expect(fitImageUrl(URL, { width: 1200, height: 400 }, IG)).toContain('/upload/c_pad,w_1200,h_628,b_white/v17/')
+  })
+
+  it('vừa khung: giữ nguyên; chỉ quá rộng → c_limit; đúng 4:5 (1080×1350) không bị đệm', () => {
+    expect(fitImageUrl(URL, { width: 1024, height: 1024 }, IG)).toBe(URL)
+    expect(fitImageUrl(URL, { width: 1080, height: 1350 }, IG)).toBe(URL)
+    expect(fitImageUrl(URL, { width: 2048, height: 2048 }, IG)).toContain('/upload/c_limit,w_1440/v17/')
+    expect(fitImageUrl(URL, { width: 2048, height: 4096 }, { maxWidth: 1440 })).toContain('/upload/c_limit,w_1440/v17/')
+  })
+
+  it('URL không phải ảnh upload Cloudinary / kích thước hỏng → trả nguyên URL', () => {
+    expect(fitImageUrl('https://example.test/a.jpg', { width: 300, height: 900 }, IG)).toBe('https://example.test/a.jpg')
+    expect(fitImageUrl(URL, { width: 0, height: 0 }, IG)).toBe(URL)
   })
 })
 

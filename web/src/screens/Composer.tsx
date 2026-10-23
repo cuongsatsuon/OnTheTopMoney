@@ -4,23 +4,32 @@
 // theo hồ sơ từng trang (`POST /posts/compose`, nút Dừng huỷ request); tab báo lỗi riêng (chưa có hồ sơ…) và đánh dấu
 // cụm vi phạm; nút AI khoá theo khoá OpenAI / hạn mức / mã lỗi, vẫn soạn tay được. Story 6.3: "Tạo ảnh AI" (và "Tạo bằng
 // AI" khi bật "Kèm 4 ảnh AI") sinh 4 ảnh bằng job; ô ảnh đổi dần qua realtime (đang tạo → ảnh, hoặc "Không tạo được ảnh
-// này" + "Thử mô tả khác"), caption không bị ảnh hưởng. Lên lịch / đăng (6.4) chưa bật.
+// này" + "Thử mô tả khác"), caption không bị ảnh hưởng. Story 6.4: "Lên lịch" (ngày giờ theo giờ VN) / "Đăng ngay" lưu nháp
+// rồi chuyển mọi trang sang `scheduled`; bài đã rời nháp chỉ xem được — mỗi tab có nhãn trạng thái (đã lên lịch, đang
+// đăng, đã đăng + "Xem bài", lỗi + lý do), footer có "Bỏ lịch" / "Đổi giờ" / "Đăng lại". Xem trước IG đệm trắng ảnh
+// ngoài khung 4:5–1,91:1 như lúc đăng.
 import {
   AlertCircle,
   Bookmark,
   CalendarClock,
+  CalendarX,
+  CheckCircle2,
   ChevronDown,
   ChevronRight,
+  Clock,
   Copy,
+  ExternalLink,
   Globe,
   Heart,
   ImageOff,
   Images,
+  Loader2,
   MessageCircle,
   MoreHorizontal,
   PenSquare,
   RefreshCw,
   Repeat2,
+  RotateCcw,
   Save,
   Scissors,
   Send,
@@ -34,7 +43,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import type { ComposeGoal, ComposeLength, ComposeReviseAction, ImageStyle, MediaAssetDto, PageDto } from '@ottm/shared'
+import type { ComposeGoal, ComposeLength, ComposeReviseAction, ImageStyle, MediaAssetDto, PageDto, PostDto, PostTargetDto, TargetAction } from '@ottm/shared'
 import { AiLockHint } from '../components/AiLockHint'
 import { Content } from '../components/AppShell'
 import { Skeleton } from '../components/Skeleton'
@@ -118,9 +127,21 @@ import {
 import { toUiPage, usePages } from '../lib/connections'
 import { useGroups } from '../lib/groups'
 import { markViolations } from '../lib/profiles'
-
-/** Lên lịch / Đăng ngay mở ở Story 6.4 — tới lúc đó chỉ lưu nháp. */
-const SCHEDULE_SOON = 'Sắp có: lên lịch và đăng bài. Hiện bạn lưu nháp trước.'
+import {
+  IN_FLIGHT_POLL_MS,
+  defaultScheduleInput,
+  hasInFlight,
+  igPreviewFit,
+  isLocked,
+  scheduleInputIssue,
+  scheduledToast,
+  targetRefs,
+  targetStatusView,
+  transitionErrorMessage,
+  useTransitionTargets,
+  vnToIso,
+  type StatusTone,
+} from '../lib/publish'
 
 /* ---------- Màn hình ---------- */
 
@@ -130,8 +151,10 @@ export default function Composer() {
   const postId = params.get(POST_PARAM)
   const pagesQuery = usePages()
   const groupsQuery = useGroups()
-  const postQuery = usePost(postId)
+  // Còn trang đang chờ tới lượt / đang đăng → hỏi lại định kỳ (SSE `post_target.*` vẫn là đường chính).
+  const postQuery = usePost(postId, (p) => (hasInFlight(p) ? IN_FLIGHT_POLL_MS : false))
   const save = useSavePost()
+  const transition = useTransitionTargets()
   const upload = useUploadPostImage()
   const compose = useComposeCaptions()
   const generateImages = useGenerateImages()
@@ -169,6 +192,14 @@ export default function Composer() {
   const [withImages, setWithImages] = useState(true)
   const imageDescRef = useRef<HTMLInputElement>(null)
   const generatedQuery = useGeneratedImages(genIds)
+  /** Ô ngày / giờ đăng (giờ VN) — dùng cho Lên lịch, Đổi giờ, Đăng lại. */
+  const [when, setWhen] = useState(() => defaultScheduleInput(Date.now()))
+  /** "Bây giờ" cho kiểm giờ đăng, cập nhật mỗi 30 giây (không gọi `Date.now()` trong lúc render). */
+  const [nowMs, setNowMs] = useState(() => Date.now())
+  useEffect(() => {
+    const timer = setInterval(() => setNowMs(Date.now()), 30_000)
+    return () => clearInterval(timer)
+  }, [])
 
   // Khoá nút AI (UX-DR2): khoá OpenAI → hạn mức → mã khoá của lần gọi trước. Mã lần trước chỉ còn hiệu lực khi khoá /
   // hạn mức chưa đổi (realtime làm cũ query) — đổi rồi thì để trạng thái mới quyết định.
@@ -236,6 +267,23 @@ export default function Composer() {
   const grouped = groupList.map((g) => ({ group: g, pages: allPages.filter((p) => p.groupId === g.id) })).filter((x) => x.pages.length > 0)
   const ungrouped = allPages.filter((p) => !p.groupId || !groupList.some((g) => g.id === p.groupId))
   const loading = pagesQuery.isPending || (postId !== null && postQuery.isPending)
+  // Story 6.4: bài có trang đã rời nháp (đã lên lịch / đang đăng / đã đăng / lỗi) → chỉ xem; nhãn trạng thái theo trang.
+  const post = postId ? postQuery.data : undefined
+  const locked = isLocked(post)
+  const targetOf = (pageId: string): PostTargetDto | undefined => post?.targets.find((t) => t.pageId === pageId)
+  const activeTarget = activePage ? targetOf(activePage.id) : undefined
+  const scheduledRefs = post ? targetRefs(post, ['scheduled']) : []
+  const failedRefs = post ? targetRefs(post, ['failed']) : []
+  const offline = targets.filter((p) => p.connectionStatus === 'disconnected')
+  const publishBlock = !targets.length
+    ? 'Chọn trang đích để đăng'
+    : tabsWithIssues.length
+      ? 'Sửa các tab có dấu đỏ (chưa đúng luật nền tảng) trước khi đăng'
+      : offline.length
+        ? `${offline.map((p) => p.name).join(', ')} đã mất kết nối — bỏ chọn hoặc kết nối lại trước khi đăng`
+        : null
+  const whenIssue = scheduleInputIssue(when.date, when.time, nowMs)
+  const publishing = save.isPending || transition.isPending
 
   const togglePage = (id: string) =>
     setSelected((s) => {
@@ -374,60 +422,157 @@ export default function Composer() {
     })
   }
 
-  function saveDraft() {
-    if (!targets.length) return
+  /** Lưu nháp (lần đầu `POST`, sau đó `PUT`) rồi đặt `?bai=`; `then` chạy tiếp với bài vừa lưu (Lên lịch / Đăng ngay). */
+  function persist(then: (saved: PostDto) => void) {
+    if (!targets.length || locked) return
     save.mutate(
       { id: postId, body: buildSaveBody(idea, targets, drafts) },
       {
-        onSuccess: (post) => {
+        onSuccess: (saved) => {
           // Đánh dấu đã nạp TRƯỚC khi đổi `?bai=` để không nạp lại (giữ kho ảnh, nhãn AI của phiên đang soạn).
-          setLoadedKey(post.id)
-          if (post.id !== postId) {
+          setLoadedKey(saved.id)
+          if (saved.id !== postId) {
             setParams(
               (p) => {
-                p.set(POST_PARAM, post.id)
+                p.set(POST_PARAM, saved.id)
                 p.delete('idea')
                 return p
               },
               { replace: true },
             )
           }
-          notify(`Đã lưu nháp cho ${post.targets.length} trang`)
+          then(saved)
         },
         onError: (err) => notify(composerErrorMessage(err)),
       },
     )
   }
 
+  function saveDraft() {
+    persist((saved) => notify(`Đã lưu nháp cho ${saved.targets.length} trang`))
+  }
+
+  /** Giờ đã chọn (ISO) hoặc `null` + báo lỗi khi ô ngày giờ chưa hợp lệ. */
+  function chosenTime(): string | null {
+    const at = vnToIso(when.date, when.time)
+    if (whenIssue || !at) {
+      notify(whenIssue ?? 'Chọn ngày và giờ đăng')
+      return null
+    }
+    return at
+  }
+
+  /** Một hành động trên các trang của bài đang mở (AD-13: tất cả hoặc không). */
+  function act(postIdToUse: string, action: TargetAction, refs: { id: string; version: number }[], scheduledAt: string | null, done: (p: PostDto) => string) {
+    if (!refs.length) return
+    transition.mutate(
+      { postId: postIdToUse, body: action === 'unschedule' ? { action, targets: refs } : { action, scheduledAt, targets: refs } },
+      { onSuccess: (p) => notify(done(p)), onError: (err) => notify(transitionErrorMessage(err, allPages)) },
+    )
+  }
+
+  /** "Lên lịch" (giờ đã chọn) / "Đăng ngay": lưu nháp rồi chuyển mọi trang sang `scheduled`. */
+  function schedule(now: boolean) {
+    if (publishBlock || running || publishing) return
+    const at = now ? null : chosenTime()
+    if (!now && !at) return
+    persist((saved) => act(saved.id, 'schedule', targetRefs(saved, ['draft']), at, () => scheduledToast(saved.targets.length, at)))
+  }
+
+  function reschedule() {
+    const at = chosenTime()
+    if (post && at) act(post.id, 'reschedule', scheduledRefs, at, () => scheduledToast(scheduledRefs.length, at))
+  }
+
+  function unschedule() {
+    if (post) act(post.id, 'unschedule', scheduledRefs, null, (p) => (isLocked(p) ? `Đã bỏ lịch ${scheduledRefs.length} trang` : 'Đã bỏ lịch — bài trở về nháp, sửa được'))
+  }
+
+  /** "Đăng lại" các trang lỗi: giờ đã chọn, hoặc ngay. */
+  function retry(now: boolean) {
+    const at = now ? null : chosenTime()
+    if (post && (now || at)) act(post.id, 'retry', failedRefs, at, () => scheduledToast(failedRefs.length, at))
+  }
+
+  const whenInputs = (
+    <>
+      <Input
+        type="date"
+        value={when.date}
+        onChange={(e) => setWhen((w) => ({ ...w, date: e.target.value }))}
+        className="w-[150px]"
+        aria-label="Ngày đăng (giờ Việt Nam)"
+        aria-invalid={!!whenIssue}
+      />
+      <Input
+        type="time"
+        value={when.time}
+        onChange={(e) => setWhen((w) => ({ ...w, time: e.target.value }))}
+        className="w-[110px]"
+        aria-label="Giờ đăng (giờ Việt Nam)"
+        aria-invalid={!!whenIssue}
+      />
+    </>
+  )
+
   const footer = (
     <div className="sticky bottom-0 z-10 -mx-6 mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-border bg-surface px-6 py-3">
       <div className="text-[13px] text-muted-foreground">
-        {targets.length ? (
+        {locked && post ? (
+          <PostSummary post={post} />
+        ) : targets.length ? (
           <>
             Bài cho <b className="text-foreground">{targets.length} trang</b>
             {tabsWithIssues.length > 0 && <span className="text-danger"> · {tabsWithIssues.length} trang chưa đúng luật nền tảng</span>}
+            {offline.length > 0 && <span className="text-danger"> · {offline.length} trang mất kết nối</span>}
             {postId && ' · đã có bản nháp'}
           </>
         ) : (
           'Chọn trang đích để bắt đầu'
         )}
+        {(!locked || scheduledRefs.length > 0 || failedRefs.length > 0) && whenIssue && <div className="text-xs text-danger">{whenIssue}</div>}
       </div>
-      <div className="flex flex-wrap items-center gap-2">
-        <Button icon={<Save size={15} />} disabled={!targets.length || save.isPending} onClick={saveDraft}>
-          {save.isPending ? 'Đang lưu…' : 'Lưu nháp'}
-        </Button>
-        <span className="mx-1 h-6 w-px bg-border" />
-        <span title={SCHEDULE_SOON} className="flex flex-wrap items-center gap-2">
-          <Input type="date" disabled defaultValue="" className="w-[150px]" aria-label="Ngày đăng" />
-          <Input type="time" disabled defaultValue="19:00" className="w-[110px]" aria-label="Giờ đăng" />
-          <Button icon={<CalendarClock size={15} />} disabled>
-            Lên lịch
+      {locked ? (
+        <div className="flex flex-wrap items-center gap-2">
+          {(scheduledRefs.length > 0 || failedRefs.length > 0) && whenInputs}
+          {scheduledRefs.length > 0 && (
+            <>
+              <Button icon={<CalendarX size={15} />} disabled={publishing} onClick={unschedule}>
+                Bỏ lịch
+              </Button>
+              <Button icon={<CalendarClock size={15} />} disabled={publishing || !!whenIssue} onClick={reschedule}>
+                Đổi giờ
+              </Button>
+            </>
+          )}
+          {failedRefs.length > 0 && (
+            <>
+              <Button icon={<RotateCcw size={15} />} disabled={publishing || !!whenIssue} onClick={() => retry(false)}>
+                Đăng lại lúc này
+              </Button>
+              <Button variant="primary" icon={<Send size={15} />} disabled={publishing} onClick={() => retry(true)}>
+                Đăng lại ngay
+              </Button>
+            </>
+          )}
+        </div>
+      ) : (
+        <div className="flex flex-wrap items-center gap-2">
+          <Button icon={<Save size={15} />} disabled={!targets.length || publishing} onClick={saveDraft}>
+            {save.isPending ? 'Đang lưu…' : 'Lưu nháp'}
           </Button>
-          <Button variant="primary" icon={<Send size={15} />} disabled>
-            Đăng ngay
-          </Button>
-        </span>
-      </div>
+          <span className="mx-1 h-6 w-px bg-border" />
+          {whenInputs}
+          <span title={publishBlock ?? (running ? 'Đợi AI viết xong' : undefined)} className="flex flex-wrap items-center gap-2">
+            <Button icon={<CalendarClock size={15} />} disabled={!!publishBlock || !!whenIssue || running || publishing} onClick={() => schedule(false)}>
+              Lên lịch
+            </Button>
+            <Button variant="primary" icon={<Send size={15} />} disabled={!!publishBlock || running || publishing} onClick={() => schedule(true)}>
+              {transition.isPending ? 'Đang gửi…' : 'Đăng ngay'}
+            </Button>
+          </span>
+        </div>
+      )}
     </div>
   )
 
@@ -443,7 +588,8 @@ export default function Composer() {
         {/* (a) Thiết lập */}
         <Card>
           <CardHeader title="Thiết lập" subtitle="Chọn trang đích và mô tả bài viết" />
-          <div className="space-y-5 p-4">
+          {/* Bài đã rời nháp: khoá mọi ô / nút của cột (fieldset `disabled`). */}
+          <fieldset disabled={locked} className="min-w-0 space-y-5 p-4">
             <div>
               <div className="mb-1.5 flex items-center justify-between">
                 <span className="text-[13px] font-medium">Đăng lên</span>
@@ -563,7 +709,7 @@ export default function Composer() {
                 </p>
               )}
             </div>
-          </div>
+          </fieldset>
         </Card>
 
         {/* (b) Nội dung */}
@@ -593,6 +739,7 @@ export default function Composer() {
                       {p.name}
                       {tabsWithIssues.some((t) => t.id === p.id) && <AlertCircle size={13} className="text-danger" aria-label="Chưa đúng luật nền tảng" />}
                       {notes[p.id] && 'errorCode' in notes[p.id]! && <AlertCircle size={13} className="text-amber-600" aria-label="AI chưa viết được cho trang này" />}
+                      <TargetStatusIcon target={targetOf(p.id)} />
                     </span>
                   ),
                 }))}
@@ -600,112 +747,122 @@ export default function Composer() {
                 onChange={setActiveTab}
               />
 
-              {emptyTabs.length > 0 && emptyTabs.length < targets.length && (
-                <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-slate-50 px-3 py-2 text-[13px]">
-                  <span>{emptyTabs.length} trang chưa có nội dung.</span>
-                  <div className="flex gap-2">
-                    {activeDraft.caption.trim() && (
-                      <Button size="sm" icon={<Copy size={13} />} onClick={copyToEmpty}>
-                        Chép sang trang còn trống
+              {locked && (
+                <p className="mt-3 rounded-md border border-border bg-slate-50 px-3 py-2 text-[13px] text-muted-foreground">
+                  Bài đã lên lịch hoặc đã đăng nên không sửa được nội dung.
+                  {scheduledRefs.length > 0 && ' Bấm "Bỏ lịch" ở cuối trang để đưa các trang chưa đăng về nháp rồi sửa.'}
+                </p>
+              )}
+              {activeTarget && activeTarget.status !== 'draft' && <TargetStatusBar target={activeTarget} />}
+
+              <fieldset disabled={locked} className="min-w-0">
+                {emptyTabs.length > 0 && emptyTabs.length < targets.length && (
+                  <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-slate-50 px-3 py-2 text-[13px]">
+                    <span>{emptyTabs.length} trang chưa có nội dung.</span>
+                    <div className="flex gap-2">
+                      {activeDraft.caption.trim() && (
+                        <Button size="sm" icon={<Copy size={13} />} onClick={copyToEmpty}>
+                          Chép sang trang còn trống
+                        </Button>
+                      )}
+                      <AiLockHint locked={lock.locked} hint={lock.hint} link={lock.link} align="end">
+                        <Button variant="ai" size="sm" onClick={() => runCompose(emptyTabs)} disabled={lock.locked || running || !idea.trim()}>
+                          Viết bằng AI cho {emptyTabs.length} trang
+                        </Button>
+                      </AiLockHint>
+                    </div>
+                  </div>
+                )}
+
+                <TabEditor
+                  page={activePage}
+                  draft={activeDraft}
+                  note={notes[activePage.id] ?? null}
+                  busy={busy?.pageId === activePage.id}
+                  onStop={stop}
+                  onChange={(c) => setCaption(activePage.id, c)}
+                  onRetry={!lock.locked && !running && idea.trim() ? () => runCompose([activePage]) : null}
+                />
+                <AiLockHint locked={lock.locked} hint={lock.hint} link={lock.link} align="start" className="mt-2 flex">
+                  <div className={cn('flex flex-wrap gap-1.5', !lock.locked && 'mt-2')}>
+                    <AiQuick icon={<RefreshCw size={13} />} onClick={() => revise('rewrite')} disabled={running || lock.locked || !idea.trim()}>
+                      Viết lại
+                    </AiQuick>
+                    <AiQuick icon={<Scissors size={13} />} onClick={() => revise('shorter')} disabled={running || lock.locked || !activeDraft.caption.trim()}>
+                      Ngắn hơn
+                    </AiQuick>
+                    <AiQuick icon={<Megaphone size={13} />} onClick={() => revise('cta')} disabled={running || lock.locked || !activeDraft.caption.trim()}>
+                      Thêm CTA
+                    </AiQuick>
+                  </div>
+                </AiLockHint>
+
+                <div className="mt-6">
+                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <h4 className="text-sm font-semibold">Ảnh</h4>
+                      <p className="text-xs text-muted-foreground">Bấm một ảnh để dùng cho {activePage.name} · mỗi trang 1 ảnh</p>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button size="sm" icon={<Upload size={14} />} onClick={() => fileRef.current?.click()} disabled={upload.isPending}>
+                        {upload.isPending ? 'Đang tải ảnh…' : 'Tải ảnh lên'}
                       </Button>
-                    )}
+                      <input ref={fileRef} type="file" accept={IMAGE_ACCEPT} className="hidden" onChange={(e) => onUpload(e.target.files)} />
+                    </div>
+                  </div>
+                  <div className="mb-3 flex flex-wrap items-end gap-2">
+                    <Field label="Mô tả ảnh" className="min-w-[200px] flex-1">
+                      <Input
+                        ref={imageDescRef}
+                        value={imageDesc}
+                        onChange={(e) => setImageDesc(e.target.value)}
+                        placeholder="Để trống: AI vẽ theo ý tưởng bài"
+                        maxLength={1000}
+                      />
+                    </Field>
+                    <Field label="Phong cách" className="w-[150px]">
+                      <Select options={IMAGE_STYLE_OPTIONS} value={imageStyle} onChange={(e) => setImageStyle(e.target.value as ImageStyle)} />
+                    </Field>
                     <AiLockHint locked={lock.locked} hint={lock.hint} link={lock.link} align="end">
-                      <Button variant="ai" size="sm" onClick={() => runCompose(emptyTabs)} disabled={lock.locked || running || !idea.trim()}>
-                        Viết bằng AI cho {emptyTabs.length} trang
+                      <Button variant="ai" size="sm" className="h-9" icon={<Sparkles size={14} />} disabled={!canGenerateImages} onClick={() => startImages(imageDesc)}>
+                        {imagesBusy ? 'AI đang tạo ảnh…' : genIds.length > 0 ? 'Tạo lại ảnh' : 'Tạo ảnh AI'}
                       </Button>
                     </AiLockHint>
                   </div>
-                </div>
-              )}
-
-              <TabEditor
-                page={activePage}
-                draft={activeDraft}
-                note={notes[activePage.id] ?? null}
-                busy={busy?.pageId === activePage.id}
-                onStop={stop}
-                onChange={(c) => setCaption(activePage.id, c)}
-                onRetry={!lock.locked && !running && idea.trim() ? () => runCompose([activePage]) : null}
-              />
-              <AiLockHint locked={lock.locked} hint={lock.hint} link={lock.link} align="start" className="mt-2 flex">
-                <div className={cn('flex flex-wrap gap-1.5', !lock.locked && 'mt-2')}>
-                  <AiQuick icon={<RefreshCw size={13} />} onClick={() => revise('rewrite')} disabled={running || lock.locked || !idea.trim()}>
-                    Viết lại
-                  </AiQuick>
-                  <AiQuick icon={<Scissors size={13} />} onClick={() => revise('shorter')} disabled={running || lock.locked || !activeDraft.caption.trim()}>
-                    Ngắn hơn
-                  </AiQuick>
-                  <AiQuick icon={<Megaphone size={13} />} onClick={() => revise('cta')} disabled={running || lock.locked || !activeDraft.caption.trim()}>
-                    Thêm CTA
-                  </AiQuick>
-                </div>
-              </AiLockHint>
-
-              <div className="mt-6">
-                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <h4 className="text-sm font-semibold">Ảnh</h4>
-                    <p className="text-xs text-muted-foreground">Bấm một ảnh để dùng cho {activePage.name} · mỗi trang 1 ảnh</p>
-                  </div>
-                  <div className="flex gap-2">
-                    <Button size="sm" icon={<Upload size={14} />} onClick={() => fileRef.current?.click()} disabled={upload.isPending}>
-                      {upload.isPending ? 'Đang tải ảnh…' : 'Tải ảnh lên'}
-                    </Button>
-                    <input ref={fileRef} type="file" accept={IMAGE_ACCEPT} className="hidden" onChange={(e) => onUpload(e.target.files)} />
-                  </div>
-                </div>
-                <div className="mb-3 flex flex-wrap items-end gap-2">
-                  <Field label="Mô tả ảnh" className="min-w-[200px] flex-1">
-                    <Input
-                      ref={imageDescRef}
-                      value={imageDesc}
-                      onChange={(e) => setImageDesc(e.target.value)}
-                      placeholder="Để trống: AI vẽ theo ý tưởng bài"
-                      maxLength={1000}
-                    />
-                  </Field>
-                  <Field label="Phong cách" className="w-[150px]">
-                    <Select options={IMAGE_STYLE_OPTIONS} value={imageStyle} onChange={(e) => setImageStyle(e.target.value as ImageStyle)} />
-                  </Field>
-                  <AiLockHint locked={lock.locked} hint={lock.hint} link={lock.link} align="end">
-                    <Button variant="ai" size="sm" className="h-9" icon={<Sparkles size={14} />} disabled={!canGenerateImages} onClick={() => startImages(imageDesc)}>
-                      {imagesBusy ? 'AI đang tạo ảnh…' : genIds.length > 0 ? 'Tạo lại ảnh' : 'Tạo ảnh AI'}
-                    </Button>
-                  </AiLockHint>
-                </div>
-                {tiles.length === 0 && !upload.isPending ? (
-                  <div className="flex items-center gap-2 rounded-md border border-dashed border-border px-3 py-4 text-[13px] text-muted-foreground">
-                    <ImageOff size={16} /> Chưa có ảnh. Tạo ảnh bằng AI hoặc tải ảnh của bạn lên (PNG, JPEG, WebP · tối đa 10MB).
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-4 gap-2">
-                    {upload.isPending && <div className="aspect-square animate-pulse rounded-md bg-slate-100" aria-label="Đang tải ảnh" />}
-                    {tiles.map((tile, i) => (
-                      <ImageTileView
-                        key={tile.kind === 'image' ? tile.asset.id : tile.id}
-                        tile={tile}
-                        index={i}
-                        pageName={activePage.name}
-                        chosen={tile.kind === 'image' && activeDraft.mediaIds.includes(tile.asset.id)}
-                        onChoose={(id) => setDrafts((d) => assignImage(d, activePage.id, id))}
-                        onRetry={retryImageDescription}
-                      />
-                    ))}
-                  </div>
-                )}
-                {activeImage && (
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    {targets.length > 1 && (
-                      <Button size="sm" icon={<Images size={14} />} onClick={() => setDrafts((d) => applyImageToAll(d, targetIds, [activeImage.id]))}>
-                        Dùng ảnh này cho mọi trang
+                  {tiles.length === 0 && !upload.isPending ? (
+                    <div className="flex items-center gap-2 rounded-md border border-dashed border-border px-3 py-4 text-[13px] text-muted-foreground">
+                      <ImageOff size={16} /> Chưa có ảnh. Tạo ảnh bằng AI hoặc tải ảnh của bạn lên (PNG, JPEG, WebP · tối đa 10MB).
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-4 gap-2">
+                      {upload.isPending && <div className="aspect-square animate-pulse rounded-md bg-slate-100" aria-label="Đang tải ảnh" />}
+                      {tiles.map((tile, i) => (
+                        <ImageTileView
+                          key={tile.kind === 'image' ? tile.asset.id : tile.id}
+                          tile={tile}
+                          index={i}
+                          pageName={activePage.name}
+                          chosen={tile.kind === 'image' && activeDraft.mediaIds.includes(tile.asset.id)}
+                          onChoose={(id) => setDrafts((d) => assignImage(d, activePage.id, id))}
+                          onRetry={retryImageDescription}
+                        />
+                      ))}
+                    </div>
+                  )}
+                  {activeImage && (
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {targets.length > 1 && (
+                        <Button size="sm" icon={<Images size={14} />} onClick={() => setDrafts((d) => applyImageToAll(d, targetIds, [activeImage.id]))}>
+                          Dùng ảnh này cho mọi trang
+                        </Button>
+                      )}
+                      <Button size="sm" icon={<X size={14} />} onClick={() => setDrafts((d) => clearImage(d, activePage.id))}>
+                        Bỏ ảnh khỏi trang này
                       </Button>
-                    )}
-                    <Button size="sm" icon={<X size={14} />} onClick={() => setDrafts((d) => clearImage(d, activePage.id))}>
-                      Bỏ ảnh khỏi trang này
-                    </Button>
-                  </div>
-                )}
-              </div>
+                    </div>
+                  )}
+                </div>
+              </fieldset>
             </div>
           )}
         </Card>
@@ -731,7 +888,9 @@ export default function Composer() {
             ) : activePage && activeDraft && (activeDraft.caption.trim() || activeImage) ? (
               <>
                 {activePage.platform === 'facebook' && <FacebookPreview page={toUiPage(activePage)} caption={activeDraft.caption} image={activeImage?.url} />}
-                {activePage.platform === 'instagram' && <InstagramPreview page={toUiPage(activePage)} caption={activeDraft.caption} image={activeImage?.url} />}
+                {activePage.platform === 'instagram' && (
+                  <InstagramPreview page={toUiPage(activePage)} caption={activeDraft.caption} image={activeImage?.url} fit={igPreviewFit(activeImage)} />
+                )}
                 {activePage.platform === 'threads' && <ThreadsPreview page={toUiPage(activePage)} caption={activeDraft.caption} image={activeImage?.url} />}
               </>
             ) : (
@@ -919,6 +1078,62 @@ function WritingSkeleton({ onStop, count }: { onStop: () => void; count: number 
   )
 }
 
+const TONE_CLASS: Record<StatusTone, string> = {
+  muted: 'border-border bg-slate-50 text-muted-foreground',
+  info: 'border-primary/30 bg-primary-soft text-primary',
+  success: 'border-emerald-300 bg-emerald-50 text-emerald-800',
+  danger: 'border-danger/40 bg-danger-soft text-danger-foreground',
+}
+
+/** Biểu tượng trạng thái trên tab trang (bài đã rời nháp). */
+function TargetStatusIcon({ target }: { target: PostTargetDto | undefined }) {
+  if (!target || target.status === 'draft') return null
+  const label = targetStatusView(target).label
+  if (target.status === 'published') return <CheckCircle2 size={13} className="text-emerald-600" aria-label={label} />
+  if (target.status === 'failed') return <AlertCircle size={13} className="text-danger" aria-label={label} />
+  if (target.status === 'publishing') return <Loader2 size={13} className="animate-spin text-primary" aria-label={label} />
+  return <Clock size={13} className="text-primary" aria-label={label} />
+}
+
+/** Dải trạng thái của trang đang mở: đã lên lịch giờ…, đang đăng, đã đăng + "Xem bài", lỗi + lý do. */
+function TargetStatusBar({ target }: { target: PostTargetDto }) {
+  const view = targetStatusView(target)
+  return (
+    <div className={cn('mt-3 flex flex-wrap items-center gap-2 rounded-md border px-3 py-2 text-[13px]', TONE_CLASS[view.tone])} role={view.tone === 'danger' ? 'alert' : 'status'}>
+      <TargetStatusIcon target={target} />
+      <span className="font-medium">{view.label}</span>
+      {view.detail && <span className="flex-1">{view.detail}</span>}
+      {target.status === 'published' && target.permalink && (
+        <a href={target.permalink} target="_blank" rel="noreferrer" className="ml-auto inline-flex items-center gap-1 font-medium underline underline-offset-2">
+          Xem bài <ExternalLink size={12} />
+        </a>
+      )}
+    </div>
+  )
+}
+
+/** Tóm tắt trạng thái các trang của bài đã rời nháp (footer). */
+function PostSummary({ post }: { post: PostDto }) {
+  const count = (status: PostTargetDto['status']) => post.targets.filter((t) => t.status === status).length
+  const parts = [
+    [count('published'), 'đã đăng'],
+    [count('scheduled') + count('publishing'), 'chờ đăng'],
+    [count('failed'), 'lỗi'],
+    [count('draft'), 'nháp'],
+  ].filter(([n]) => (n as number) > 0)
+  return (
+    <>
+      Bài cho <b className="text-foreground">{post.targets.length} trang</b>
+      {parts.map(([n, label]) => (
+        <span key={label as string} className={label === 'lỗi' ? 'text-danger' : undefined}>
+          {' '}
+          · {n} {label}
+        </span>
+      ))}
+    </>
+  )
+}
+
 function CaptionText({ text, clamp }: { text: string; clamp?: boolean }) {
   return <p className={cn('text-[13px] leading-relaxed whitespace-pre-line', clamp && 'line-clamp-6')}>{text}</p>
 }
@@ -1016,7 +1231,11 @@ function FacebookPreview({ page, caption, image }: { page: Page; caption: string
   )
 }
 
-function InstagramPreview({ page, caption, image }: { page: Page; caption: string; image?: string | undefined }) {
+/**
+ * Xem trước Instagram: ảnh ngoài khung 4:5–1,91:1 hiện đệm trắng trong khung gần nhất (đúng như lúc đăng — server đệm
+ * bằng Cloudinary, không cắt), kèm câu giải thích.
+ */
+function InstagramPreview({ page, caption, image, fit = 'ok' }: { page: Page; caption: string; image?: string | undefined; fit?: 'ok' | 'pad_tall' | 'pad_wide' }) {
   return (
     <div className="overflow-hidden rounded-lg border border-border bg-white">
       <div className="flex items-center gap-2.5 px-3 py-2.5">
@@ -1029,7 +1248,18 @@ function InstagramPreview({ page, caption, image }: { page: Page; caption: strin
         <MoreHorizontal size={18} />
       </div>
       {image ? (
-        <img src={image} alt="" className="aspect-square w-full object-cover" />
+        <>
+          <img
+            src={image}
+            alt=""
+            className={cn('w-full bg-white', fit === 'ok' ? 'aspect-square object-cover' : 'object-contain', fit === 'pad_tall' && 'aspect-[4/5]', fit === 'pad_wide' && 'aspect-[1.91/1]')}
+          />
+          {fit !== 'ok' && (
+            <p className="bg-slate-50 px-3 py-1.5 text-[11px] text-muted-foreground">
+              Instagram chỉ nhận ảnh tỉ lệ 4:5 – 1,91:1 — ảnh sẽ được thêm viền trắng {fit === 'pad_tall' ? 'hai bên' : 'trên dưới'}, không bị cắt.
+            </p>
+          )}
+        </>
       ) : (
         <div className="flex aspect-square w-full flex-col items-center justify-center gap-1 bg-slate-100 text-xs text-muted-foreground">
           <ImageOff size={20} />

@@ -30,6 +30,12 @@ export interface MetaFailure {
   status?: number
   /** Chỉ với `RATE_LIMITED`: chờ ít nhất chừng này mili giây rồi mới gọi lại. */
   retryAfterMs?: number
+  /**
+   * Request CHẮC CHẮN chưa rời máy (Story 6.4): bị chặn tần suất trước khi gửi, store tần suất lỗi, hoặc không mở được
+   * kết nối (DNS, bị từ chối, hết giờ kết nối). Không có cờ này thì lỗi tạm có thể đã tới Meta (hết giờ sau khi gửi,
+   * đứt giữa chừng, 5xx, phản hồi không đọc được) — bước tạo bài không được retry mù.
+   */
+  notSent?: true
 }
 
 /** Cặp `mã/subcode` — xét TRƯỚC mã chính. */
@@ -120,6 +126,33 @@ export function classifyMetaError(httpStatus: number, body: unknown): MetaFailur
 /** Lỗi mạng / hết giờ / phản hồi không đọc được. */
 export function transientFailure(status?: number): MetaFailure {
   return status === undefined ? { ok: false, kind: 'TRANSIENT' } : { ok: false, kind: 'TRANSIENT', status }
+}
+
+/** Lỗi tạm xảy ra trước khi request rời máy (store tần suất lỗi, không mở được kết nối). */
+export function notSentFailure(): MetaFailure {
+  return { ok: false, kind: 'TRANSIENT', notSent: true }
+}
+
+/**
+ * Mã lỗi của Node/undici chỉ xảy ra ở pha MỞ kết nối (chưa gửi byte nào của request): DNS, bị từ chối, không tới được
+ * mạng, hết giờ kết nối. Lỗi khác (đứt kết nối `ECONNRESET`/`UND_ERR_SOCKET`, hết giờ chung) có thể đã gửi xong request.
+ */
+const CONNECT_PHASE_CODES: ReadonlySet<string> = new Set([
+  'ENOTFOUND',
+  'EAI_AGAIN',
+  'ECONNREFUSED',
+  'ENETUNREACH',
+  'EHOSTUNREACH',
+  'UND_ERR_CONNECT_TIMEOUT',
+])
+
+/** Lỗi `fetch` ném ra có chắc là chưa gửi request không (xem `CONNECT_PHASE_CODES`; mã nằm ở `cause`). */
+export function isConnectPhaseError(err: unknown): boolean {
+  for (let e: unknown = err, depth = 0; e && typeof e === 'object' && depth < 4; e = (e as { cause?: unknown }).cause, depth++) {
+    const code = (e as { code?: unknown }).code
+    if (typeof code === 'string' && CONNECT_PHASE_CODES.has(code)) return true
+  }
+  return false
 }
 
 /** Caller tự huỷ lời gọi. */

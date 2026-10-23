@@ -163,7 +163,7 @@ describe('lưu / nạp nháp', () => {
   })
 
   it('nạp PostDto → state; bỏ target của trang không còn; kho ảnh không trùng', () => {
-    const t = (pageId: string, caption: string, media: MediaAssetDto[]) => ({ id: id(70 + caption.length), pageId, status: 'draft' as const, caption, media, version: 0, scheduledAt: null, errorCode: null })
+    const t = (pageId: string, caption: string, media: MediaAssetDto[]) => ({ id: id(70 + caption.length), pageId, status: 'draft' as const, caption, media, version: 0, scheduledAt: null, errorCode: null, publishedAt: null, permalink: null })
     const post: PostDto = {
       id: id(60),
       source: 'manual',

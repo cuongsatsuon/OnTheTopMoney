@@ -155,7 +155,8 @@ export function buildApp({ sql, db, logger, http = {}, loginLimiter, health, eve
   registerKnowledgeItems(app, { db, media: mediaStores, jobs })
   // Soạn bài (Story 6.1): ảnh bài lên kho công khai + nháp nhiều trang (một cửa tạo `content.createPost`).
   registerMediaAssets(app, { db, media: mediaStores, ...(clock ? { now: clock } : {}) })
-  registerPosts(app, { db })
+  // Story 6.4: lên lịch / đăng (enqueue `publish.target` cùng transaction → cần `jobs`).
+  registerPosts(app, { db, jobs, ...(clock ? { now: clock } : {}) })
   // Hộp thư (Story 4.3): hội thoại, tin, đính kèm (đọc từ kho riêng tư); Story 4.7: gửi tin (cần `events` + `jobs`).
   registerInbox(app, { db, media: mediaStores, events, jobs })
   // Khách hàng (Story 4.9): danh sách, hồ sơ, lịch sử, gộp (cần `events`), tóm tắt AI (cần `events` + `jobs`).

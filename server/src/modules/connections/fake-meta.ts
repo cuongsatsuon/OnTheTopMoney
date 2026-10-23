@@ -10,6 +10,8 @@
 // `#_` như Threads thật; dữ liệu: 1 tài khoản Threads.
 // Story 4.7 (gửi tin từ Hộp thư, dev): Send API `POST /me/messages` trả `message_id` giả (nhắn riêng: kèm `recipient_id`
 // giả), trả lời bình luận `POST /{comment}/comments|replies` trả id giả; Threads tạo + publish container trả id giả.
+// Story 6.4 (đăng bài, dev): FB `POST /{page}/feed|photos`, IG `POST /{ig}/media|media_publish` trả id giả; container giả
+// (`fake_container_*`) luôn `FINISHED` khi hỏi trạng thái.
 import { randomBytes } from 'node:crypto'
 import { META_LOGIN_SCOPES, THREADS_LOGIN_SCOPES } from '@ottm/shared'
 import type { MetaResult } from '../../adapters/meta/index.ts'
@@ -48,6 +50,12 @@ const variantOfToken = (token: unknown, kind: 'SHORT' | 'LONG'): Variant | null 
 }
 
 const rejected = (code = 190): MetaResult => ({ ok: false, kind: code === 190 ? 'TOKEN_INVALID' : 'REJECTED', code, status: 400 })
+
+/** `GET /fake_container_*` (IG `status_code`, Threads `status`) → `FINISHED`; lời gọi khác → `null`. */
+function fakeContainerStatus(call: FakeMetaCall): MetaResult | null {
+  if (call.method !== 'GET' || !/^\/?fake_container_/.test(call.path)) return null
+  return { ok: true, data: { status_code: 'FINISHED', status: 'FINISHED' } }
+}
 
 export function fakeGranularScopes(variant: Variant): GranularScope[] {
   const pageIds = [FAKE_PAGES.beauty.id, FAKE_PAGES.home.id]
@@ -134,12 +142,22 @@ export function program(graph: FakeMetaClient, now: () => Date = () => new Date(
     const recipientId = typeof recipient?.id === 'string' ? recipient.id : `FAKE_PSID_${rand()}`
     return { ok: true, data: { recipient_id: recipientId, message_id: `m_fake_${rand()}` } }
   })
-  // Trả lời bình luận (`/{comment}/comments` FB, `/{comment}/replies` IG): path theo id → bắt ở fallback.
+  // Trả lời bình luận (`/{comment}/comments` FB, `/{comment}/replies` IG) và đăng bài (Story 6.4): path theo id → bắt ở
+  // fallback.
   graph.setFallback((call: FakeMetaCall) => {
     if (call.method === 'POST' && /\/(comments|replies)$/.test(call.path)) {
       return pageToken(call) ? { ok: true, data: { id: `fake_reply_${rand()}` } } : rejected()
     }
-    return { ok: true, data: {} }
+    const publish = call.method === 'POST' ? /^\/?([^/]+)\/(feed|photos|media|media_publish)$/.exec(call.path) : null
+    if (publish) {
+      if (!pageToken(call)) return rejected()
+      const [, owner, edge] = publish
+      if (edge === 'feed') return { ok: true, data: { id: `${owner}_fake_post_${rand()}` } }
+      if (edge === 'photos') return { ok: true, data: { id: `fake_photo_${rand()}`, post_id: `${owner}_fake_post_${rand()}` } }
+      if (edge === 'media') return { ok: true, data: { id: `fake_container_${rand()}` } }
+      return { ok: true, data: { id: `fake_ig_media_${rand()}` } }
+    }
+    return fakeContainerStatus(call) ?? { ok: true, data: {} }
   })
 
   for (const page of [FAKE_PAGES.beauty, FAKE_PAGES.home]) {
@@ -243,6 +261,8 @@ export function programThreads(threads: FakeMetaClient, now: () => Date = () => 
   threads.on('POST', '/me/threads_publish', (call: FakeMetaCall) =>
     threadsVariantOf(call.options.token, 'LONG') ? { ok: true, data: { id: `fake_threads_reply_${rand()}` } } : rejected(),
   )
+  // Story 6.4: trạng thái container giả khi đăng bài.
+  threads.setFallback((call: FakeMetaCall) => fakeContainerStatus(call) ?? { ok: true, data: {} })
 
   // Story 2.4: làm mới token dài hạn (`th_refresh_token`). Token không phải token dài hạn hợp lệ → 190 TOKEN_INVALID.
   threads.on('GET', '/refresh_access_token', (call: FakeMetaCall) => {

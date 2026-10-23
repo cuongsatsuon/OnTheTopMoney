@@ -1,6 +1,6 @@
 // Bài và đích từng trang (Story 6.1, AD-13). `createPost` là cửa DUY NHẤT tạo `posts` + `post_targets` (Soạn bài;
 // Epic 7 tạo slot chiến dịch cũng qua đây). Nháp thủ công sửa bằng `updateDraftPost` (thay toàn bộ đích) khi mọi
-// target còn `draft`; lên lịch/đăng/huỷ là việc của `transitionTarget` (Story 6.4).
+// target còn `draft`; lên lịch/đăng là việc của `transitionTarget` (`transitions.ts`, Story 6.4).
 // Nháp được lưu cả khi còn vi phạm luật nền tảng — luật chỉ chặn khi lên lịch (`assertPublishable`).
 import type { ErrorCode, ParsedSavePostRequest, PostDto, PostSource, PostTargetDto, PostTargetStatus } from '@ottm/shared'
 import { and, asc, eq, inArray, notInArray, sql } from 'drizzle-orm'
@@ -146,6 +146,8 @@ export async function getPost(db: DbExecutor, postId: string): Promise<PostDto |
         version: t.version,
         scheduledAt: t.scheduledAt?.toISOString() ?? null,
         errorCode: (t.errorCode as ErrorCode | null) ?? null,
+        publishedAt: t.publishedAt?.toISOString() ?? null,
+        permalink: t.permalink,
       }),
     ),
     createdAt: post.createdAt.toISOString(),

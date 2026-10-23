@@ -20,6 +20,7 @@ export {
   BOSS_SCHEMA,
   createBoss,
   ensureQueues,
+  hasLiveJob,
   isFinalAttempt,
   startWorkers,
   type CreateBossOptions,

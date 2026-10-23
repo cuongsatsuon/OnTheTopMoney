@@ -1,9 +1,10 @@
 // Tạo pg-boss và đồng bộ queue/cron từ registry (chỉ worker gọi `ensureQueues`).
+import { sql } from 'drizzle-orm'
 import { PgBoss, type Job, type JobWithMetadata } from 'pg-boss'
 import type { DbExecutor } from '../db/index.ts'
 import { isEventEnvelope, type EventPublisher } from '../events/index.ts'
 import type { Logger } from '../log/index.ts'
-import { QUEUES, validateRegistry, type QueueRegistry } from './queues.ts'
+import { QUEUES, validateRegistry, type QueueName, type QueueRegistry } from './queues.ts'
 
 export const BOSS_SCHEMA = 'pgboss'
 /** Queue nội bộ của pg-boss (vd `__pgboss__send-it` cho cron) — không thuộc registry. */
@@ -156,4 +157,16 @@ async function reportExhausted(
     // Không che lỗi gốc của job.
     log.error({ err }, 'không phát được job.failed')
   }
+}
+
+/**
+ * Còn job "sống" (chờ, chờ retry, đang chạy) của queue `name` mà `data` chứa `match` (jsonb `@>`) không — cho cron vá
+ * job bị mất (Story 6.4 `content.requeue`). Chỉ tầng jobs biết bảng của pg-boss.
+ */
+export async function hasLiveJob(db: DbExecutor, name: QueueName, match: Record<string, string | number>): Promise<boolean> {
+  const rows = await db.execute(sql`
+    select 1 from ${sql.raw(BOSS_SCHEMA)}.job
+    where name = ${name} and state in ('created', 'retry', 'active') and data @> ${JSON.stringify(match)}::jsonb
+    limit 1`)
+  return rows.length > 0
 }

@@ -18,7 +18,7 @@ import {
   runTokenCheck,
   subscribePage,
 } from '../modules/connections/index.ts'
-import { gcOrphanMedia, handleImageGenerateJob } from '../modules/content/index.ts'
+import { gcOrphanMedia, handleImageGenerateJob, handlePublishJob, requeueTargets } from '../modules/content/index.ts'
 import {
   handleContactSummaryJob,
   handleEchoMatchJob,
@@ -216,6 +216,20 @@ try {
       'content.media_gc': async () => {
         const result = await gcOrphanMedia({ db: dbHandle.db, media, log: logger.child({ component: 'media_gc' }) })
         if (result.deleted > 0 || result.fileErrors > 0) logger.info(result, 'content: đã dọn ảnh bài không gắn bài')
+      },
+      // Story 6.4: đăng một target (FB feed/photos; IG, Threads container → publish). Chỉ lỗi tạm chắc chắn chưa tạo bài ném
+      // lại (target đã về `scheduled`); không rõ Meta đã nhận → `PUBLISH_UNKNOWN`. `job.signal` chỉ huỷ bước chuẩn bị.
+      'publish.target': async (job) => {
+        const result = await handlePublishJob(
+          { db: dbHandle.db, events, jobs, cipher, graph, threads, log: logger.child({ component: 'publish_target' }) },
+          job as JobWithMetadata<unknown>,
+        )
+        logger.debug({ jobId: job.id, result }, 'publish.target')
+      },
+      // Story 6.4: enqueue lại target quá giờ mất job; target kẹt `publishing` → `PUBLISH_UNKNOWN`.
+      'content.requeue': async () => {
+        const result = await requeueTargets({ db: dbHandle.db, events, jobs })
+        if (result.requeued > 0 || result.stuck > 0) logger.warn(result, 'content: vá lịch đăng')
       },
       // Story 4.7: tin kẹt `sending` quá 15 phút → `failed` `SEND_UNKNOWN`.
       'inbox.send_sweep': async () => {
