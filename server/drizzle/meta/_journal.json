@@ -183,6 +183,13 @@
       "when": 1792785317717,
       "tag": "0025_amused_cobalt_man",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1792785961359,
+      "tag": "0026_material_vermin",
+      "breakpoints": true
     }
   ]
 }

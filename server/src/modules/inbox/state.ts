@@ -12,7 +12,9 @@
 //   "đã trả lời" khi xét khách còn chờ.
 // - Story 5.4: quyết định của lượt AI trả lời áp qua `applyAutoreplyDecision` (`autoreply.ts`, cùng khoá luồng + khoá
 //   lạc quan theo `state_version` và tin khách mới nhất); triage đóng cổng ở `ai` không còn đi qua `applyTriageDecision`.
-import type { ConversationAction, ConversationState, HandoffReason, SendErrorCode, StateChangeReason } from '@ottm/shared'
+// - Story 5.6: `handoff` lý do tạm đóng (`resumableHandoff`) — chủ shop chưa trả lời (trả lời / Tiếp quản luôn đưa sang
+//   `human`) — được lượt AI kế tiếp đưa về `ai` (`autoreply.ts`). Tin AI gửi lỗi phía gửi có lý do riêng `AI_SEND_FAILED`.
+import { HANDOFF_REASON_KIND, type ConversationAction, type ConversationState, type HandoffReason, type SendErrorCode, type StateChangeReason } from '@ottm/shared'
 import { and, desc, eq, isNull, ne, or, sql } from 'drizzle-orm'
 import type { Db, DbExecutor } from '../../platform/db/index.ts'
 import type { EventPublisher } from '../../platform/events/index.ts'
@@ -25,7 +27,17 @@ export interface TriageState {
   channel: 'dm' | 'comment'
   state: ConversationState
   stateVersion: number
+  /** Lý do của lần chuyển trạng thái cuối (Story 5.6: `handoff` tạm đóng mới khôi phục được). */
+  stateReason: StateChangeReason | null
   aiEnabled: boolean
+}
+
+/**
+ * `handoff` lý do tạm đóng (AD-9: `transient`) — AI được chạy lại ở tin khách kế tiếp khi cổng mở lại (Story 5.6). Chủ
+ * shop trả lời / Tiếp quản luôn đưa hội thoại sang `human`, nên còn `handoff` nghĩa là người chưa trả lời từ lúc chuyển.
+ */
+export function resumableHandoff(state: string, reason: string | null): boolean {
+  return state === 'handoff' && reason !== null && HANDOFF_REASON_KIND[reason as HandoffReason] === 'transient'
 }
 
 /** Trạng thái hiện tại để autoreply quyết định; `null` khi hội thoại không còn. */
@@ -36,6 +48,7 @@ export async function getTriageState(db: Db, conversationId: string): Promise<Tr
       channel: conversations.channel,
       state: conversations.state,
       stateVersion: conversations.stateVersion,
+      stateReason: conversations.stateReason,
       aiEnabled: conversations.aiEnabled,
     })
     .from(conversations)
@@ -47,6 +60,7 @@ export async function getTriageState(db: Db, conversationId: string): Promise<Tr
         channel: row.channel as 'dm' | 'comment',
         state: row.state as ConversationState,
         stateVersion: row.stateVersion,
+        stateReason: (row.stateReason as StateChangeReason | null) ?? null,
         aiEnabled: row.aiEnabled,
       }
     : null
@@ -268,9 +282,12 @@ export const AI_TYPING_TTL_MS = 120_000
 /** Mốc chờ khi về tay người: giữ mốc cũ, else từ tin khách cuối (AD-9). */
 export const waitingFrom = (conv: ConversationRow, now: Date): Date => conv.waitingSince ?? conv.lastCustomerMessageAt ?? now
 
-/** Lý do chuyển người khi tin AI không gửi được: ngoài cửa sổ → `OUTSIDE_24H` (chủ ý); còn lại → sự cố phía gửi (tạm đóng). */
+/**
+ * Lý do chuyển người khi tin AI không gửi được: ngoài cửa sổ → `OUTSIDE_24H`; còn lại → sự cố phía gửi `AI_SEND_FAILED`
+ * (Story 5.6; trước dùng `AI_PROVIDER_ERROR`, nay lý do đó tự chạy lại). Cả hai chủ ý: AI không tự quay lại.
+ */
 export function aiSendFailureReason(code: SendErrorCode): HandoffReason {
-  return code === 'OUTSIDE_24H' || code === 'PRIVATE_REPLY_INVALID' || code === 'PRIVATE_REPLY_USED' ? 'OUTSIDE_24H' : 'AI_PROVIDER_ERROR'
+  return code === 'OUTSIDE_24H' || code === 'PRIVATE_REPLY_INVALID' || code === 'PRIVATE_REPLY_USED' ? 'OUTSIDE_24H' : 'AI_SEND_FAILED'
 }
 
 /**

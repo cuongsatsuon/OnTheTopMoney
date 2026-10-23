@@ -201,6 +201,7 @@ export const TEST_REASON_TEXT: Record<HandoffReason, string> = {
   NON_TEXT_MESSAGE: 'khách gửi nội dung AI chưa đọc được',
   OUTSIDE_24H: 'đã quá 24 giờ kể từ tin cuối của khách',
   OTHER_COMMENTER: 'có người khác bình luận trong luồng',
+  AI_SEND_FAILED: 'không gửi được tin AI cho khách',
 }
 
 export interface TestBubble {

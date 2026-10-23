@@ -11,9 +11,12 @@
 // mọi tin cần trả lời đã xoá/ẩn hoặc đích đã gỡ → `superseded` (`removed`), không ghi gì.
 // Tin AI không tới được khách (job gửi, cron kẹt `sending`, `canSend` lúc áp) khi hội thoại còn `ai` → `handoff`
 // (`state.ts` `onAiMessageFailed`) để khách không chờ trong im lặng.
+// Story 5.6 (AD-9): ảnh chụp và áp quyết định nhận cả `handoff` tạm đóng (`resumableHandoff`). Có tin AI để gửi / AI trả
+// lời → `handoff → ai` (`GATE_OPEN`) trước, rồi áp như `ai`; không tin mà đích là `human` / chủ ý → chuyển thẳng; vẫn tạm
+// đóng → `unchanged`, không ghi gì.
 // Không log nội dung tin.
-import type { ConversationState, HandoffReason, MessageDelivery, Platform, SendErrorCode, StateChangeReason } from '@ottm/shared'
-import { and, desc, eq, gt, inArray, isNotNull, isNull, or, sql } from 'drizzle-orm'
+import { HANDOFF_REASON_KIND, type ConversationState, type HandoffReason, type MessageDelivery, type Platform, type SendErrorCode, type StateChangeReason } from '@ottm/shared'
+import { and, desc, eq, gt, inArray, isNotNull, isNull, ne, or, sql } from 'drizzle-orm'
 import { bossDbFor, type DbExecutor } from '../../platform/db/index.ts'
 import type { JobSender } from '../../platform/jobs/index.ts'
 import type { ReplyTurn } from '../ai/index.ts'
@@ -21,7 +24,16 @@ import { getPage } from '../pages/index.ts'
 import { getConversation, listMessages } from './queries.ts'
 import { messageAttachments, conversations, messages } from './schema.ts'
 import { canSend, type CanSendOptions, type SendCheck } from './send.ts'
-import { aiSendFailureReason, effectiveMessage, lockConversation, transition, waitingFrom, type ConversationRow, type StateDeps } from './state.ts'
+import {
+  aiSendFailureReason,
+  effectiveMessage,
+  lockConversation,
+  resumableHandoff,
+  transition,
+  waitingFrom,
+  type ConversationRow,
+  type StateDeps,
+} from './state.ts'
 import { replyTurns } from './suggest.ts'
 
 /** Số dòng tin đọc để dựng bản ghi hội thoại / tìm tin khách chưa trả lời. */
@@ -73,6 +85,13 @@ export interface AutoreplyTurn {
   channel: 'dm' | 'comment'
   state: ConversationState
   stateVersion: number
+  /** Lý do của lần chuyển trạng thái cuối — Story 5.6: `handoff` tạm đóng thì lượt được chạy để khôi phục. */
+  stateReason: StateChangeReason | null
+  /**
+   * Id tin `system` cuối (lần chuyển trạng thái cuối, uuidv7 theo thứ tự ghi); `null` khi chưa có. Story 5.6: tin khách có
+   * id lớn hơn = tin tới SAU khi vào `handoff` — chỉ tin như vậy mới khôi phục được.
+   */
+  stateChangeId: string | null
   aiEnabled: boolean
   /** Id tin khách mới nhất (thứ tự ghi) — khoá lạc quan; `null` khi chưa có tin khách. */
   lastInboundId: string | null
@@ -82,6 +101,8 @@ export interface AutoreplyTurn {
   turns: ReplyTurn[]
   /** Hội thoại `comment`: caption bài (Story 5.5). */
   postText: string | null
+  /** Bình luận của người khác chưa ai trả lời (sau tin outbound hiệu lực cuối) — Story 5.6: không khôi phục khi còn. */
+  othersPending: boolean
   /** Hội thoại `comment` mà job `inbox.fetch_post_text` chưa chạy xong — lượt có thể chờ caption một chút (Story 5.5). */
   postTextPending: boolean
 }
@@ -105,6 +126,7 @@ export async function readAutoreplyTurn(db: DbExecutor, conversationId: string):
   const [row] = await db
     .select({
       stateVersion: conversations.stateVersion,
+      stateReason: conversations.stateReason,
       contactIdentityId: conversations.contactIdentityId,
       platformPostId: conversations.platformPostId,
       postTextFetchedAt: conversations.postTextFetchedAt,
@@ -131,10 +153,12 @@ export async function readAutoreplyTurn(db: DbExecutor, conversationId: string):
     .orderBy(desc(messages.id))
     .limit(TURN_SCAN_MESSAGES)
   const trailing: typeof recent = []
+  let othersPending = false
   for (const m of recent) {
     if (m.direction === 'outbound') break
     const own = m.senderIdentityId === null || m.senderIdentityId === row!.contactIdentityId
     if (m.removal === null && own) trailing.push(m)
+    else if (m.removal === null) othersPending = true
   }
   trailing.reverse()
   const counts = new Map<string, number>()
@@ -147,6 +171,13 @@ export async function readAutoreplyTurn(db: DbExecutor, conversationId: string):
     for (const r of rows) counts.set(r.messageId, r.n)
   }
 
+  const [changed] = await db
+    .select({ id: messages.id })
+    .from(messages)
+    .where(and(eq(messages.conversationId, conversationId), eq(messages.origin, 'system')))
+    .orderBy(desc(messages.id))
+    .limit(1)
+
   const history = await listMessages(db, conversationId, { limit: TURN_SCAN_MESSAGES })
   return {
     conversationId,
@@ -155,10 +186,13 @@ export async function readAutoreplyTurn(db: DbExecutor, conversationId: string):
     channel: conv.channel,
     state: conv.state,
     stateVersion: row!.stateVersion,
+    stateReason: (row!.stateReason as StateChangeReason | null) ?? null,
+    stateChangeId: changed?.id ?? null,
     aiEnabled: conv.aiEnabled,
     lastInboundId,
     pending: trailing.map((m) => ({ id: m.id, text: m.text, attachmentCount: counts.get(m.id) ?? 0, createdAt: m.createdAt })),
     turns: replyTurns(history.items, conv.contact.id),
+    othersPending,
     postText: conv.post?.text ?? null,
     postTextPending: conv.channel === 'comment' && row!.platformPostId !== null && row!.postTextFetchedAt === null,
   }
@@ -218,14 +252,20 @@ export interface AutoreplyExpected {
 export interface AutoreplyApplyInput {
   /** Tin AI gửi theo thứ tự (câu trả lời / câu chuyển tiếp). Rỗng = không gửi gì. */
   messages: readonly { mode: MessageDelivery; text: string }[]
-  /** `null` = giữ `ai` (AI vừa trả lời). `human` cho lý do không áp dụng; `handoff` cho tạm đóng / chủ ý (AD-9). */
+  /**
+   * `null` = giữ / về `ai` (AI vừa trả lời). `human` cho lý do không áp dụng; `handoff` cho tạm đóng / chủ ý (AD-9). Ảnh
+   * chụp `handoff` tạm đóng mà đích vẫn tạm đóng, không tin → `unchanged` (Story 5.6).
+   */
   transition: { to: 'handoff' | 'human'; reasonCode: HandoffReason } | null
 }
 
 export type AutoreplyApplyResult =
   | { applied: true; messageIds: string[]; state: 'ai' | 'handoff' | 'human'; reasonCode: StateChangeReason | null }
-  /** `removed` (Story 5.5): bình luận AI định trả lời đã bị xoá / ẩn trước khi áp. */
-  | { applied: false; reason: 'missing' | 'superseded' | 'removed' }
+  /**
+   * `removed` (Story 5.5): bình luận AI định trả lời đã bị xoá / ẩn trước khi áp. `unchanged` (Story 5.6): hội thoại
+   * `handoff` tạm đóng mà quyết định vẫn tạm đóng — giữ nguyên, không ghi tin `system` mới.
+   */
+  | { applied: false; reason: 'missing' | 'superseded' | 'removed' | 'unchanged' }
 
 export async function applyAutoreplyDecision(
   deps: AutoreplyApplyDeps,
@@ -235,11 +275,36 @@ export async function applyAutoreplyDecision(
 ): Promise<AutoreplyApplyResult> {
   const now = deps.now?.() ?? new Date()
   return deps.db.transaction(async (tx): Promise<AutoreplyApplyResult> => {
-    const conv = await lockConversation(tx, conversationId)
+    let conv = await lockConversation(tx, conversationId)
     if (!conv) return { applied: false, reason: 'missing' }
     // Tiếp quản / người gửi tin / bật-tắt giữa lượt (tăng `state_version`), hoặc khách nhắn thêm → lượt sau lo.
-    if (conv.state !== 'ai' || conv.stateVersion !== expected.stateVersion) return { applied: false, reason: 'superseded' }
+    const resuming = resumableHandoff(conv.state, conv.stateReason)
+    if ((conv.state !== 'ai' && !resuming) || conv.stateVersion !== expected.stateVersion) return { applied: false, reason: 'superseded' }
+    // Story 5.6: vẫn tạm đóng (hạn mức / khoá / nhà cung cấp / ngoài giờ) → giữ `handoff` như cũ.
+    if (resuming && input.messages.length === 0 && input.transition?.to === 'handoff' && HANDOFF_REASON_KIND[input.transition.reasonCode] === 'transient') {
+      return { applied: false, reason: 'unchanged' }
+    }
     if ((await latestInboundId(tx, conv.id, conv.contactIdentityId)) !== expected.lastInboundId) return { applied: false, reason: 'superseded' }
+    // Story 5.6 (review): người khác bình luận trong luồng lúc lượt khôi phục đang nghĩ — triage bỏ qua tin đó vì hội thoại
+    // còn `handoff` (không tăng `state_version`) → không kéo hội thoại khỏi "Cần xử lý". Tin trước `lastInboundId` đã được
+    // ảnh chụp xét (`othersPending`).
+    if (resuming && conv.channel === 'comment') {
+      const [other] = await tx
+        .select({ id: messages.id })
+        .from(messages)
+        .where(
+          and(
+            eq(messages.conversationId, conv.id),
+            eq(messages.origin, 'customer'),
+            isNull(messages.removal),
+            isNotNull(messages.senderIdentityId),
+            ne(messages.senderIdentityId, conv.contactIdentityId),
+            gt(messages.id, expected.lastInboundId),
+          ),
+        )
+        .limit(1)
+      if (other) return { applied: false, reason: 'superseded' }
+    }
     // Đã có tin outbound hiệu lực ghi sau tin khách đó (lượt khác chạy chồng khi job quá hạn, người trả lời không đổi
     // `state_version`) → tin khách đã được trả lời, không gửi lần hai.
     const [answered] = await tx
@@ -262,6 +327,13 @@ export async function applyAutoreplyDecision(
     for (const m of input.messages) checks.push(await autoreplySendCheck(tx, conv.id, m.mode, { now }))
     if (checks.some((c) => !c.ok && c.code === COMMENT_REMOVED)) return { applied: false, reason: 'removed' }
 
+    // Story 5.6: AI trả lời / gửi câu chuyển tiếp → hội thoại về `ai` trước (tin `system` đứng trước tin AI). Không tin
+    // mà đích là `human` / chủ ý → chuyển thẳng từ `handoff` ở dưới.
+    if (resuming && (input.messages.length > 0 || input.transition === null)) {
+      const version = await transition(tx, deps, conv, { to: 'ai', reasonCode: 'GATE_OPEN', waitingSince: null }, now)
+      const placed = conv.lastMessageAt > now ? conv.lastMessageAt : now
+      conv = { ...conv, state: 'ai', stateVersion: version, stateReason: 'GATE_OPEN', waitingSince: null, lastMessageAt: placed }
+    }
     const at = conv.lastMessageAt > now ? conv.lastMessageAt : now
     const messageIds: string[] = []
     let refused: SendErrorCode | null = null

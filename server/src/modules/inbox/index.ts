@@ -17,6 +17,8 @@
 // gõ", tin AI gửi lỗi → `handoff`, "Gửi lại" tin AI.
 // Story 5.5: AI trả lời bình luận — tin cần trả lời chỉ của khách hội thoại, cửa sổ gửi của AI (`autoreplySendCheck`:
 // bình luận đã xoá/ẩn thì AI không gửi), huỷ tin AI khi bình luận bị gỡ trước lúc gửi.
+// Story 5.6: `handoff` tạm đóng khôi phục được (`resumableHandoff`) — ảnh chụp lượt và áp quyết định nhận cả trạng thái
+// này (`handoff → ai` `GATE_OPEN`); tin AI gửi lỗi phía gửi → `AI_SEND_FAILED`.
 export const MODULE = 'inbox'
 
 export {
@@ -139,6 +141,7 @@ export {
   applyTriageDecision,
   applyUserAction,
   getTriageState,
+  resumableHandoff,
   type ApplyTriageResult,
   type StateDeps,
   type TriageDecision,

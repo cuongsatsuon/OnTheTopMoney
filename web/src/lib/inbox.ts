@@ -458,10 +458,11 @@ export const REASON_TEXT: Record<StateChangeReason, string> = {
   AI_OFF: 'AI trả lời chưa bật cho trang này — bạn trả lời khách nhé',
   CHANNEL_OFF: 'AI không trả lời kênh này — bạn trả lời khách nhé',
   CONFIG_MISSING: 'AI còn thiếu cấu hình cho trang này — bạn trả lời khách nhé',
-  OUTSIDE_HOURS: 'Ngoài giờ AI trả lời — chuyển cho bạn',
-  OPENAI_KEY_UNAVAILABLE: 'Khoá OpenAI chưa dùng được — chuyển cho bạn',
-  AI_BUDGET_EXCEEDED: 'Đã hết hạn mức AI tháng này — chuyển cho bạn',
-  AI_PROVIDER_ERROR: 'AI đang gặp sự cố — chuyển cho bạn',
+  // Lý do tạm đóng (Story 5.6): khắc phục xong thì tin kế tiếp của khách đưa hội thoại về AI nếu bạn chưa trả lời.
+  OUTSIDE_HOURS: 'Ngoài giờ AI trả lời — chuyển cho bạn; tới giờ, AI trả lời lại từ tin kế tiếp của khách',
+  OPENAI_KEY_UNAVAILABLE: 'Khoá OpenAI chưa dùng được — chuyển cho bạn; sửa khoá xong, AI trả lời lại từ tin kế tiếp của khách',
+  AI_BUDGET_EXCEEDED: 'Đã hết hạn mức AI tháng này — chuyển cho bạn; tăng hạn mức xong, AI trả lời lại từ tin kế tiếp của khách',
+  AI_PROVIDER_ERROR: 'AI đang gặp sự cố — chuyển cho bạn; AI thử lại ở tin kế tiếp của khách',
   KEYWORD: 'Khách nhắc tới từ khoá cần bạn xử lý',
   CUSTOMER_ASKED_HUMAN: 'Khách muốn nói chuyện với người thật',
   AI_UNCERTAIN: 'AI chưa chắc câu trả lời — chuyển cho bạn',
@@ -469,11 +470,12 @@ export const REASON_TEXT: Record<StateChangeReason, string> = {
   NON_TEXT_MESSAGE: 'Khách gửi nội dung AI chưa đọc được',
   OUTSIDE_24H: 'Đã quá 24 giờ kể từ tin cuối của khách',
   OTHER_COMMENTER: 'Người khác bình luận trong luồng — AI chỉ trả lời khách của hội thoại, bạn trả lời họ nhé',
+  AI_SEND_FAILED: 'Không gửi được tin AI cho khách — bạn kiểm tra và trả lời nhé',
   HUMAN_REPLIED: 'Bạn đã trả lời — AI tạm dừng ở hội thoại này',
   TAKEOVER: 'Bạn đã tiếp quản — AI tạm dừng ở hội thoại này',
   AI_REENABLED: 'Đã bật lại AI cho hội thoại này',
   MARKED_DONE: 'Đã đánh dấu xong',
-  // Story 5.4: tin đầu của hội thoại mới cũng qua đây (triage → ai), không chỉ lúc AI chạy lại (5.6).
+  // Story 5.4: tin đầu của hội thoại mới (triage → ai); Story 5.6: AI chạy lại sau khi khắc phục (handoff → ai).
   GATE_OPEN: 'AI đang trả lời hội thoại này',
 }
 

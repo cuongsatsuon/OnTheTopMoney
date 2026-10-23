@@ -47,6 +47,7 @@ const HANDOFF_REASON_TEXT: Partial<Record<StateChangeReason, string>> = {
   AI_BUDGET_EXCEEDED: 'Đã dùng hết hạn mức AI tháng này.',
   OPENAI_KEY_UNAVAILABLE: 'Khoá OpenAI chưa dùng được.',
   AI_PROVIDER_ERROR: 'AI đang gặp sự cố.',
+  AI_SEND_FAILED: 'Không gửi được tin AI cho khách.',
   CONFIG_MISSING: 'AI còn thiếu cấu hình cho trang này.',
 }
 

@@ -556,7 +556,7 @@ describe('lượt chạy: đua', () => {
 
 describe('tin AI gửi lỗi, Gửi lại', () => {
   it.each([
-    ['RECIPIENT_UNAVAILABLE', 'AI_PROVIDER_ERROR'],
+    ['RECIPIENT_UNAVAILABLE', 'AI_SEND_FAILED'],
     ['OUTSIDE_WINDOW', 'OUTSIDE_24H'],
   ] as const)('Meta %s → tin failed, hội thoại handoff %s', async (kind, reason) => {
     const g = await group()
@@ -580,7 +580,7 @@ describe('tin AI gửi lỗi, Gửi lại', () => {
     await runAutoreply(deps(), id)
     await handle.sql`update messages set status = 'sending', sending_at = now() - interval '20 minutes' where origin = 'app_ai'`
     expect(await sweepStuckSending({ db: handle.db, events })).toBe(1)
-    expect(await conv(id)).toMatchObject({ state: 'handoff', state_reason: 'AI_PROVIDER_ERROR' })
+    expect(await conv(id)).toMatchObject({ state: 'handoff', state_reason: 'AI_SEND_FAILED' })
   })
 
   it('Gửi lại tin AI lỗi → pending + job mới; chủ shop gửi = human HUMAN_REPLIED, tắt AI', async () => {

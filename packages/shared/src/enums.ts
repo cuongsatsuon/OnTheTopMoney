@@ -63,14 +63,16 @@ export const HANDOFF_REASONS = [
   'OUTSIDE_24H',
   // Story 5.5 (review): người khác bình luận trong luồng AI đang trả lời — AI không trả lời họ, chuyển chủ shop.
   'OTHER_COMMENTER',
+  // Story 5.6: tin AI không tới được khách vì lỗi phía gửi (khác cửa sổ gửi) — trước dùng chung `AI_PROVIDER_ERROR`.
+  'AI_SEND_FAILED',
 ] as const
 export const HandoffReason = z.enum(HANDOFF_REASONS)
 export type HandoffReason = z.infer<typeof HandoffReason>
 
 /**
  * Loại của từng lý do (AD-9) — bảng DUY NHẤT: `not_applicable` → `human` (không vào handoff); `transient` → `handoff`
- * tạm đóng (khắc phục xong thì tin khách kế tiếp đưa về `ai`); `sticky` → `handoff` chủ ý. Thử AI (5.3) và lượt chạy
- * thật (5.4) cùng đọc bảng này.
+ * tạm đóng (khắc phục xong thì tin khách kế tiếp đưa về `ai` — Story 5.6); `sticky` → `handoff` chủ ý. Thử AI (5.3),
+ * lượt chạy thật (5.4) và khôi phục (5.6) cùng đọc bảng này.
  */
 export const HANDOFF_REASON_KIND: Record<HandoffReason, HandoffKind | 'not_applicable'> = {
   AI_OFF: 'not_applicable',
@@ -87,6 +89,8 @@ export const HANDOFF_REASON_KIND: Record<HandoffReason, HandoffKind | 'not_appli
   NON_TEXT_MESSAGE: 'sticky',
   OUTSIDE_24H: 'sticky',
   OTHER_COMMENTER: 'sticky',
+  // Sticky: cổng không biết sự cố gửi đã hết chưa, tin `SEND_UNKNOWN` có thể đã tới khách (Story 5.6).
+  AI_SEND_FAILED: 'sticky',
 }
 
 export const STATE_CHANGE_REASONS = [

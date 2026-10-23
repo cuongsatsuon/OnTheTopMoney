@@ -40,6 +40,7 @@ export {
   saveAutoreplyConfig,
   setAutoreplyUseOwn,
   autoreplyRunSources,
+  capKnowledge,
   autoreplyTestSources,
   type AutoreplyRunSources,
   type AutoreplyTestSources,

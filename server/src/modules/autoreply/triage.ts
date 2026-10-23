@@ -3,14 +3,25 @@
 //   - hội thoại `triage` → cổng 1–5 (`gates.ts`) → `inbox.applyTriageDecision` (khoá lạc quan theo `state_version`):
 //     không áp dụng → `human`; tạm đóng → `handoff`; mở → `ai` (`GATE_OPEN`) rồi enqueue `autoreply.run` trễ 4 giây;
 //   - hội thoại đã `ai` → enqueue `autoreply.run` trễ 4 giây (stately: đang có job chờ thì tin này đi chung lượt đó);
-//   - trạng thái khác (`human`, `handoff`, `done`) → bỏ qua. `handoff` tạm đóng quay lại `ai` là Story 5.6.
+//   - `handoff` lý do tạm đóng (Story 5.6, AD-9) mà tin là của chính khách → cổng 1–5: còn tạm đóng → bỏ qua (không job,
+//     không ghi gì); mở / không áp dụng → enqueue `autoreply.run` trễ 4 giây — lượt chạy đưa `handoff → ai` khi AI có gì
+//     để gửi, hoặc `→ human` khi AI không còn áp dụng. Khôi phục CHỈ do tin khách: khắc phục hạn mức / khoá không quét
+//     lại hội thoại cũ (tránh trả lời tin cũ ngoài cửa sổ gửi);
+//   - trạng thái khác (`human`, `handoff` chủ ý, `done`) → bỏ qua.
 //   - Story 5.5 (review, vượt spec theo yêu cầu chủ dự án): bình luận của NGƯỜI KHÁC (không phải khách của hội thoại)
 //     tới hội thoại `triage`/`ai` mà cổng mở → `handoff` `OTHER_COMMENTER`, không chạy AI: AI chỉ trả lời khách của
 //     hội thoại, tin người khác phải vào "Cần xử lý" cho chủ shop (trước 5.5 các tin này nằm ở `human`).
 // - `conversation.state_changed` sang `ai` với `AI_REENABLED` (chủ shop bật lại AI) → enqueue run NGAY: khách đang chờ
 //   thì AI trả lời tin chờ sẵn; không chờ thì lượt chạy tự `skipped`.
 // Idempotent: áp chỉ khi đúng `state_version`; enqueue trùng bị queue stately bỏ.
-import { getTriageState, applyTriageDecision, isOtherCommenter, type TriageDecision, type TriageState } from '../inbox/index.ts'
+import {
+  applyTriageDecision,
+  getTriageState,
+  isOtherCommenter,
+  resumableHandoff,
+  type TriageDecision,
+  type TriageState,
+} from '../inbox/index.ts'
 import { getPage } from '../pages/index.ts'
 import { isEventEnvelope } from '../../platform/events/index.ts'
 import { HANDOFF_REASON_KIND } from '@ottm/shared'
@@ -47,6 +58,18 @@ async function routeOtherCommenter(deps: TriageDeps, initial: TriageState): Prom
   return 'stale'
 }
 
+/**
+ * Tin khách mới ở `handoff` tạm đóng (Story 5.6): cổng 1–5 còn đóng tạm thời → `skipped`; ngược lại hẹn lượt chạy (lượt
+ * tự quyết `→ ai` / `→ human` / giữ nguyên dưới khoá lạc quan). Tin của người khác trong luồng → `skipped`.
+ */
+async function resumeHandoff(deps: TriageDeps, state: TriageState, messageId: unknown): Promise<TriageOutcome> {
+  if (typeof messageId === 'string' && (await isOtherCommenter(deps.db, messageId))) return 'skipped'
+  const decision = await decideTriage(deps, state)
+  if (decision.to === 'handoff') return 'skipped'
+  await enqueueAutoreplyRun(deps, state.conversationId)
+  return 'queued'
+}
+
 export async function handleTriageEvent(deps: TriageDeps, data: unknown): Promise<TriageOutcome> {
   if (!isEventEnvelope(data)) return 'ignored'
   if (data.event === 'conversation.state_changed') {
@@ -69,6 +92,7 @@ export async function handleTriageEvent(deps: TriageDeps, data: unknown): Promis
     await enqueueAutoreplyRun(deps, conversationId)
     return 'queued'
   }
+  if (resumableHandoff(state.state, state.stateReason)) return resumeHandoff(deps, state, messageId)
   if (state.state !== 'triage') return 'skipped'
   const decision = await decideTriage(deps, state)
   const result = await applyTriageDecision(deps, conversationId, state.stateVersion, decision)

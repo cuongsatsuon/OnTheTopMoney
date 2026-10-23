@@ -102,7 +102,9 @@ describe('handoffNote (UX-DR5)', () => {
     expect(handoffNote({ state: 'handoff', stateReason: 'CUSTOMER_ASKED_HUMAN', waitingSince: '2026-10-23T03:18:00.000Z' }, now)).toBe(
       'Khách muốn nói chuyện với người thật · khách chờ 12 phút',
     )
-    expect(handoffNote({ state: 'handoff', stateReason: 'AI_BUDGET_EXCEEDED', waitingSince: null }, now)).toBe('Đã hết hạn mức AI tháng này — chuyển cho bạn')
+    expect(handoffNote({ state: 'handoff', stateReason: 'AI_BUDGET_EXCEEDED', waitingSince: null }, now)).toBe(
+      'Đã hết hạn mức AI tháng này — chuyển cho bạn; tăng hạn mức xong, AI trả lời lại từ tin kế tiếp của khách',
+    )
   })
   it('bình luận (Story 5.5): câu lý do riêng cho OUTSIDE_24H / CHANNEL_OFF; DM giữ câu chung', () => {
     expect(handoffNote({ state: 'handoff', stateReason: 'OUTSIDE_24H', waitingSince: null, channel: 'comment' }, now)).toBe(

@@ -121,18 +121,24 @@
 - source_spec: `spec-5-4-ai-tu-tra-loi.md`
   summary: Kiểm bằng trình duyệt + Meta/OpenAI thật luồng AI tự trả lời: chip "AI đang trả lời" kèm chấm đang gõ, bong bóng "AI đang trả lời…", tin tím "AI trả lời", ghi chú chuyển người, "Gửi lại" tin AI lỗi; đo p95 NFR1 (webhook → `sent_at`) bằng câu SQL trong spec.
   evidence: Chỉ có test Postgres thật + OpenAI/Meta giả (`server/test/autoreply-run.test.ts`) và test helper web; chưa chạy worker thật với `autoreply.run` stately trễ 4 giây, chưa có số đo độ trễ thật.
-- source_spec: `spec-5-4-ai-tu-tra-loi.md`
-  summary: Kho kiến thức vượt 40k token SAU khi bật (file trích xong muộn) — lượt chạy thật không chặn, prompt vẫn nhét toàn bộ.
-  evidence: `profiles.autoreplyRunSources` (server/src/modules/profiles/autoreply.ts) không kiểm `KNOWLEDGE_MAX_TOKENS`; 5.2 chặn lúc lưu/bật và lúc thêm FAQ, nhưng job trích file kết thúc sau khi bật có thể đẩy tổng vượt ngưỡng (vượt tối đa một file). Cần quyết định: cắt kho, chuyển người (lý do nào), hay chỉ cảnh báo ở màn cấu hình.
-- source_spec: `spec-5-4-ai-tu-tra-loi.md`
-  summary: Tin AI không gửi được vì sự cố phía gửi (`SEND_FAILED`, `RECIPIENT_UNAVAILABLE`, `PAGE_DISCONNECTED`, `SEND_UNKNOWN`…) đang dùng lý do `AI_PROVIDER_ERROR` ("AI đang gặp sự cố") — chưa có lý do riêng "Không gửi được tin AI".
-  evidence: `aiSendFailureReason` (server/src/modules/inbox/state.ts); thêm lý do mới cần đổi `HandoffReason` (shared + CHECK `state_reason`/`reason_code`, migration) và câu ở `REASON_TEXT`. Bong bóng tin vẫn hiện đúng lỗi gửi theo mã.
-- source_spec: `spec-5-4-ai-tu-tra-loi.md`
-  summary: Lượt `autoreply.run` quá `expireInSeconds` (300 giây) ở lần thử cuối không chuyển người — hội thoại có thể kẹt `ai` không ai trả lời.
-  evidence: Fallback `handoff` `AI_PROVIDER_ERROR` chỉ chạy trong `catch` của `runAutoreply` (server/src/modules/autoreply/run.ts); pg-boss 12 hết hạn thì đánh `failed` + abort `job.signal` mà handler không nghe signal. Hiếm vì 2 lời gọi OpenAI ≤ 240 giây. Sửa: truyền `job.signal` vào `decideReply`, hoặc cron quét hội thoại `ai` có run `outcome is null` quá hạn → `handoff`.
 - source_spec: `spec-5-5-ai-tra-loi-binh-luan.md`
   summary: Kiểm bằng trình duyệt + Meta/OpenAI thật luồng AI trả lời bình luận: hai tin (công khai + nhắn riêng) với structured output `privateReply` thật, nhắn riêng IG qua token Fanpage nguồn, trả lời Threads, nhãn "AI trả lời công khai" / "AI nhắn riêng" ở khung Thử AI, câu lý do bình luận ở Hộp thư.
   evidence: Chỉ có test Postgres thật + OpenAI/Meta giả (`server/test/autoreply-comment.test.ts`) và test helper web; chưa chạy worker thật, chưa đo thời gian chờ caption thật (`POST_TEXT_WAIT_MS` 10 giây [ASSUMPTION]).
 - source_spec: `spec-5-5-ai-tra-loi-binh-luan.md`
   summary: Bình luận bị ẩn (chủ shop ẩn, hoặc Facebook tự ẩn theo bộ lọc từ khoá / số điện thoại) thì AI không trả lời và hội thoại giữ `ai` — không vào "Cần xử lý".
   evidence: Story 5.5 coi bình luận đã xoá/ẩn là "đã gỡ": tin cần trả lời bỏ qua tin `removal` khác null (`inbox/autoreply.ts` `readAutoreplyTurn`), `autoreplySendCheck` chặn trả lời công khai dưới gốc đã ẩn. Hợp với ẩn tay / spam, nhưng shop bật "ẩn bình luận có số điện thoại" thì khách để lại SĐT không ai thấy trong "Cần xử lý". Cần quyết định sản phẩm (vd ẩn → `handoff` lý do riêng, hoặc chỉ nhắn riêng) và cần sự kiện thật để biết ẩn tự động có về webhook `feed` `hide` không.
+- source_spec: `spec-5-6-ai-dung-va-chay-lai.md`
+  summary: Kiểm bằng trình duyệt + OpenAI thật luồng dừng/chạy lại: hết hạn mức → hội thoại mới vào "Cần xử lý" với ghi chú "Đã hết hạn mức AI…"; tăng hạn mức / sửa khoá rồi khách nhắn → ghi chú "AI đang trả lời hội thoại này", chip "AI đang trả lời" và tin AI hiện qua realtime; câu "Không gửi được tin AI cho khách".
+  evidence: Chỉ có test Postgres thật + OpenAI/Meta giả (`server/test/autoreply-resume.test.ts`) và test helper web; chưa chạy worker thật với hạn mức / khoá thật.
+- source_spec: `spec-5-6-ai-dung-va-chay-lai.md`
+  summary: `handoff` tạm đóng giữ lý do cũ khi nguyên nhân đổi sang lý do tạm đóng khác (vd vào lúc `OUTSIDE_HOURS`, tới giờ thì hết hạn mức) — ghi chú ở Hộp thư có thể lỗi thời cho tới khi AI chạy lại.
+  evidence: Spec 5.6 chọn không ghi tin `system` / thông báo mới khi lượt khôi phục vẫn tạm đóng (`run.ts` `stillClosed`, `applyAutoreplyDecision` `unchanged`) để không dồn ghi chú mỗi tin khách. Nếu chủ shop phản ánh, cập nhật `state_reason` tại chỗ (không tăng `state_version`, không tin `system`) hoặc chỉ khi lý do đổi.
+- source_spec: `spec-5-6-ai-dung-va-chay-lai.md`
+  summary: Hết hạn mức / khoá lỗi giữa giờ cao điểm sinh một thông báo `ai_handoff` cho MỖI hội thoại mới vào "Cần xử lý" — có thể dồn hàng chục thông báo cùng lý do.
+  evidence: `notifications.draftFor` báo mọi `conversation.state_changed` sang `handoff` (dedupe theo phiên bản). Banner hạn mức / khoá đã có ở web; cân nhắc gộp thông báo tạm đóng theo lý do trong một khoảng thời gian.
+- source_spec: `spec-5-6-ai-dung-va-chay-lai.md`
+  summary: Chủ shop trả lời ngoài app (bình luận FB/IG, DM IG — echo không có `app_id`) rồi khách nhắn tiếp trong ~15–20 giây → lượt khôi phục `handoff → ai` không thấy tin của chủ shop, AI trả lời chen.
+  evidence: `ingestEcho` (server/src/modules/inbox/echo.ts) hoãn echo tác giả `unknown` qua `inbox.echo_match` 5 giây × 3 trước khi ghi `external_human` + `applyHumanReply`; trong lúc đó hội thoại vẫn `handoff` tạm đóng, `applyAutoreplyDecision` chỉ thấy tin outbound đã ghi. Cùng cửa sổ có ở hội thoại `ai` từ 5.4 nhưng ở `handoff` chủ shop được kỳ vọng trả lời nên dễ gặp hơn. Hướng sửa: lượt khôi phục bỏ qua khi còn job `inbox.echo_match` chờ cho luồng, hoặc ghi dấu "echo chờ khớp" lên hội thoại.
+- source_spec: `spec-5-6-ai-dung-va-chay-lai.md`
+  summary: Dữ liệu trước 5.6: hội thoại `handoff` `AI_PROVIDER_ERROR` do tin AI gửi lỗi (trước khi có `AI_SEND_FAILED`) nay thành khôi phục được — AI có thể chạy lại ở tin khách kế tiếp dù tin `SEND_UNKNOWN` có thể đã tới khách.
+  evidence: Migration `0026_material_vermin.sql` chỉ đổi CHECK, không đổi `state_reason` cũ. Chỉ đáng sửa nếu đã có dữ liệu thật từ 5.4/5.5: cập nhật `state_reason='AI_SEND_FAILED'` cho hội thoại `handoff` `AI_PROVIDER_ERROR` có tin `app_ai` `failed` (mã khác cửa sổ) ngay trước tin `system` cuối.

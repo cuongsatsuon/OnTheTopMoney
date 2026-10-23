@@ -24,7 +24,7 @@ import { getGroup, getPage, listGroups, listPages } from '../pages/index.ts'
 import { autoreplyValues, getAutoreplyRow, upsertAutoreplyRow } from './autoreply-row.ts'
 import { scriptForIndustry, scriptFromBrand } from './autoreply-template.ts'
 import { getPageConfigState, onGroupProfileSaved, resolveEffective, setUseOwn } from './inheritance.ts'
-import { assertKnowledgeFits, tooLarge } from './knowledge.ts'
+import { assertKnowledgeFits, knowledgeTokens, tooLarge } from './knowledge.ts'
 import { listReadyKnowledge, readyKnowledgeTokens, type ReadyKnowledgeEntry } from './knowledge-row.ts'
 import type { ProfileOwner } from './row.ts'
 import { assertOwnerExists, getProfile } from './service.ts'
@@ -223,25 +223,45 @@ export interface AutoreplyRunSources {
   source: ConfigSource
   /** Hồ sơ hiệu lực `resolveEffective(page,'brand')`; `null` = chưa có (vẫn trả lời theo kịch bản + kho). */
   brand: BrandProfileDto | null
-  /** Văn bản kho `ready` của CHỦ cấu hình hiệu lực (nhóm khi trang theo nhóm). */
+  /** Văn bản kho `ready` của CHỦ cấu hình hiệu lực (nhóm khi trang theo nhóm), cắt theo `KNOWLEDGE_MAX_TOKENS`. */
   knowledge: ReadyKnowledgeEntry[]
+  /** Số mục kho bị bỏ vì tổng vượt giới hạn (Story 5.6) — để log, 0 khi vừa. */
+  knowledgeDropped: number
   pageName: string
 }
 
 /**
+ * Giữ các mục theo thứ tự hiển thị tới khi tổng chạm `KNOWLEDGE_MAX_TOKENS`, bỏ phần còn lại (Story 5.6). Kho chỉ vượt
+ * lúc chạy qua cửa sổ đua của 5.2 (file trích xong đúng lúc bật) — prompt vẫn trong giới hạn AD-16 thay vì nhét hết.
+ */
+export function capKnowledge(entries: readonly ReadyKnowledgeEntry[], max = KNOWLEDGE_MAX_TOKENS): { kept: ReadyKnowledgeEntry[]; dropped: number } {
+  const kept: ReadyKnowledgeEntry[] = []
+  let total = 0
+  for (const e of entries) {
+    const tokens = knowledgeTokens(e.title, e.text)
+    if (total + tokens > max) continue
+    total += tokens
+    kept.push(e)
+  }
+  return { kept, dropped: entries.length - kept.length }
+}
+
+/**
  * Nguồn cho lượt chạy thật: cấu hình hiệu lực qua `resolveEffective` (không có → ném `CONFIG_MISSING`), kho kiến thức
- * của đúng chủ cấu hình đó. Không chặn kho vượt giới hạn ở đây — đã chặn lúc bật/lưu (Story 5.2).
+ * của đúng chủ cấu hình đó. Kho vượt giới hạn (hiếm — đã chặn lúc bật/lưu ở Story 5.2) thì cắt bớt (`capKnowledge`).
  */
 export async function autoreplyRunSources(db: DbExecutor, pageId: string): Promise<AutoreplyRunSources> {
   const effective = await resolveEffective<AutoreplyConfigDto>(db, pageId, 'autoreply')
   const page = await getPage(db, pageId)
   const brand = await effectiveOrNull<BrandProfileDto>(db, pageId, 'brand')
   const kbOwner: ProfileOwner = { ownerType: effective.source.ownerType, ownerId: effective.source.ownerId }
+  const { kept, dropped } = capKnowledge(await listReadyKnowledge(db, kbOwner))
   return {
     config: effective.config,
     source: effective.source,
     brand: brand?.config ?? null,
-    knowledge: await listReadyKnowledge(db, kbOwner),
+    knowledge: kept,
+    knowledgeDropped: dropped,
     pageName: page?.name ?? effective.source.name,
   }
 }

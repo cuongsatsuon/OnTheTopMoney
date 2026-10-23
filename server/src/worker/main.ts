@@ -147,6 +147,7 @@ try {
         logger.debug({ jobId: job.id, result }, 'autoreply.triage')
       },
       // Story 5.4: một lượt AI trả lời (stately theo hội thoại). Lỗi bất ngờ ném để retry; lần cuối chuyển người.
+      // Story 5.6: `job.signal` (huỷ khi quá hạn) đi theo `job` xuống gateway; lượt cũng khôi phục `handoff` tạm đóng.
       'autoreply.run': async (job) => {
         const result = await handleRunJob(
           { db: dbHandle.db, events, jobs, cipher, log: logger.child({ component: 'autoreply_run' }) },
