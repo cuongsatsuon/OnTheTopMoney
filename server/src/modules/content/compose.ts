@@ -7,6 +7,7 @@
 import {
   AI_OUTPUT_MAX_CHARS,
   PLATFORM_RULES,
+  type AiFeature,
   type BrandProfileDto,
   type ComposeCaptionResult,
   type ComposeCaptionsResponse,
@@ -26,7 +27,7 @@ export const COMPOSE_CONCURRENCY = 3
  * Mã lỗi khiến các trang CHƯA bắt đầu dừng luôn (cùng mã, không gọi AI): thiếu / hỏng khoá OpenAI, hết hạn mức, chưa
  * cấu hình mã hoá — lỗi toàn cục, gọi tiếp chỉ lặp lại cùng lỗi.
  */
-const STOP_CODES: ReadonlySet<ErrorCode> = new Set<ErrorCode>([
+export const AI_STOP_CODES: ReadonlySet<ErrorCode> = new Set<ErrorCode>([
   'OPENAI_KEY_MISSING',
   'OPENAI_KEY_INVALID',
   'OPENAI_KEY_RESTRICTED',
@@ -78,13 +79,13 @@ export async function composeCaptions(
         continue
       }
       try {
-        results[job.index] = await composeOne(deps, input, job.page, job.brand, signal)
+        results[job.index] = await composeCaptionForPage(deps, job.page, job.brand, input, signal)
       } catch (err) {
         // Dừng (client đóng kết nối) → ném lên cho `runAbortable`; lỗi khác chỉ là lỗi của trang này.
         if (signal.aborted) throw err
         const code: ErrorCode | null = err instanceof AppError ? err.code : isAbortError(err) ? 'AI_PROVIDER_ERROR' : null
         if (!code) throw err
-        if (STOP_CODES.has(code)) stopCode ??= code
+        if (AI_STOP_CODES.has(code)) stopCode ??= code
         results[job.index] = { pageId: job.page.id, status: 'error', errorCode: code }
       }
     }
@@ -93,13 +94,20 @@ export async function composeCaptions(
   return { results }
 }
 
-/** Một trang: prompt theo hồ sơ + nền tảng → gateway → hậu kiểm, sinh lại một lần nếu vi phạm. */
-async function composeOne(
+/** Nội dung cần viết cho một trang: ý tưởng, mục tiêu, độ dài, yêu cầu sửa (nếu có). */
+export type ComposeBrief = Pick<ParsedComposeCaptionsRequest, 'topic' | 'goal' | 'length'> & { revise?: ParsedComposeCaptionsRequest['revise'] }
+
+/**
+ * Một trang: prompt theo hồ sơ + nền tảng → gateway → hậu kiểm, sinh lại một lần nếu vi phạm. Dùng chung cho Soạn bài
+ * (`compose_caption`) và slot chiến dịch (Story 7.2, `campaign_generate`, `ref` = target). Lỗi gateway ném lên.
+ */
+export async function composeCaptionForPage(
   deps: ComposeDeps,
-  input: ParsedComposeCaptionsRequest,
   page: PageDto,
   brand: BrandProfileDto,
-  signal: AbortSignal,
+  brief: ComposeBrief,
+  signal: AbortSignal | undefined,
+  call: { feature: AiFeature; ref?: string } = { feature: 'compose_caption' },
 ): Promise<ComposeCaptionResult> {
   const rule = PLATFORM_RULES[page.platform]
   // Giới hạn chữ của AI: luật nền tảng nhưng không quá trần caption của AI (Facebook cho 63.206 — caption AI vẫn ≤ 2.200).
@@ -107,22 +115,23 @@ async function composeOne(
   const prompt = buildComposePrompt(brand, {
     platform: page.platform,
     pageName: page.name,
-    topic: input.topic,
-    goal: input.goal,
-    length: input.length,
+    topic: brief.topic,
+    goal: brief.goal,
+    length: brief.length,
     maxChars,
-    revise: input.revise ?? null,
+    revise: brief.revise ?? null,
   })
   const checkBrand: CheckBrand = { bannedWords: brand.bannedWords, allowedDomains: brand.allowedDomains }
   const generate = async (note = '') =>
     (
       await generateText(deps, {
-        feature: 'compose_caption',
+        feature: call.feature,
         pageId: page.id,
+        ...(call.ref ? { ref: call.ref } : {}),
         instructions: prompt.instructions,
         input: note ? `${prompt.input}\n\n${note}` : prompt.input,
         maxOutputTokens: prompt.maxOutputTokens,
-        signal,
+        ...(signal ? { signal } : {}),
       })
     ).text.trim()
   const check = (text: string) => checkOutput(text, { brand: checkBrand, kind: 'caption', maxChars, platform: page.platform })

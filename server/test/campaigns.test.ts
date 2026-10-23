@@ -32,6 +32,7 @@ afterAll(async () => {
   await handle.close()
 })
 beforeEach(async () => {
+  await handle.sql`delete from posts`
   await handle.sql`delete from campaigns`
   await handle.sql`delete from page_config_state`
   await handle.sql`delete from brand_profiles`
@@ -173,9 +174,9 @@ describe('POST / GET / PUT /api/v1/campaigns', () => {
     const res = await api('GET', `/api/v1/campaigns/${c.id}`)
     expect(res.statusCode).toBe(200)
     expect(CampaignDto.parse(res.json())).toEqual(c)
-    // Chưa tạo bài / slot nào (Story 7.2+).
-    const [row] = await handle.sql<{ n: number }[]>`select count(*)::int as n from posts`
-    expect(row!.n).toBe(0)
+    // Story 7.2: lưu nháp dựng sẵn 7 bài xem trước (chi tiết ở `campaigns-preview.test.ts`).
+    const [row] = await handle.sql<{ n: number }[]>`select count(*)::int as n from post_targets where campaign_id = ${c.id}`
+    expect(row!.n).toBe(7)
   })
 
   it('chọn từng trang + "Tự đăng" + ngày bắt đầu hôm nay theo giờ VN (ngày UTC vẫn là hôm qua) → 201', async () => {

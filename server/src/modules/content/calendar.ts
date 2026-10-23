@@ -53,6 +53,7 @@ export async function listCalendar(db: DbExecutor, range: CalendarRange): Promis
       aiMedia,
       thumbnail,
       source: posts.source,
+      campaignId: postTargets.campaignId,
     })
     .from(postTargets)
     .innerJoin(posts, eq(posts.id, postTargets.postId))
@@ -82,8 +83,7 @@ export async function listCalendar(db: DbExecutor, range: CalendarRange): Promis
       // Slot chiến dịch luôn do AI sinh (Epic 7); bài tay: caption AI hoặc ảnh AI (UX-DR10).
       ai: r.source === 'campaign' || r.aiCaption || r.aiMedia,
       source: r.source as PostSource,
-      // Cột `campaign_id` có ở Epic 7.
-      campaignId: null,
+      campaignId: r.campaignId,
       title: calendarTitle(r.caption),
       thumbnailUrl: r.thumbnail,
     }),

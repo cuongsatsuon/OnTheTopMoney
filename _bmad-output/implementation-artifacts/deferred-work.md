@@ -217,13 +217,28 @@
   evidence: Chỉ có test API (Postgres thật, `server/test/campaigns.test.ts`) và test helper web (`web/src/lib/campaigns.test.ts`); chưa chạy UI (dev không có mật khẩu mẫu).
 - source_spec: `spec-7-1-wizard-chien-dich.md`
   summary: Ước tính chi phí AI thật ở cột Tóm tắt của wizard. Đã bỏ số giả "~700đ/bài"; hướng làm: tính theo model đang chọn bằng `ai.estimateTextCost` / `estimateImageCost` × số bài / số bài có ảnh.
-  evidence: Chưa có lời gọi `campaign_generate` nào để biết số token thật mỗi bài. Làm khi Story 7.2 sinh bài xem trước.
+  evidence: Story 7.2 đã có lời gọi `campaign_generate` thật (ghi `ai_usage` với `ref` = target cho caption, `ref` = ô ảnh cho ảnh của slot), nên đo được chi phí thật của 7 bài xem trước. Chưa làm vì AC 7.2 không cần; hướng làm: cộng `ai_usage` theo `ref` của slot xem trước, nhân theo tổng bài / bài có ảnh ở cột Tóm tắt (hoặc ước tính bằng `estimateTextCost` / `estimateImageCost` khi chưa có bài xem trước).
 - source_spec: `spec-7-1-wizard-chien-dich.md`
   summary: Danh sách chiến dịch nháp. Nháp chỉ mở lại được qua `/chien-dich/tao?id=<id>`; `/chien-dich` (tab "Bản nháp") vẫn chạy dữ liệu mẫu; chưa xoá được nháp.
   evidence: Danh sách chiến dịch + read-model tiến độ thuộc Story 7.3, xoá thuộc Story 7.5. Story 7.1 chỉ lưu và đọc từng nháp.
 - source_spec: `spec-7-1-wizard-chien-dich.md`
   summary: Trang chọn được (`GET /campaigns/page-options`) không tự cập nhật khi hồ sơ thương hiệu đổi, vì lưu hồ sơ không phát sự kiện realtime. Chỉ `page.*` làm cũ danh sách này.
   evidence: Wizard mở lâu có thể vẫn thấy "Chưa có hồ sơ thương hiệu" dù vừa tạo hồ sơ ở tab khác. Server vẫn kiểm lại khi lưu, nên không lưu sai.
-- source_spec: `spec-7-1-wizard-chien-dich.md`
-  summary: Hai tab cùng sửa một nháp chiến dịch → lần lưu sau đè im lặng lần lưu trước (`PUT /campaigns/:id` thay toàn bộ, không điều kiện phiên bản).
-  evidence: `campaigns/drafts.ts` `updateCampaignDraft` khoá dòng (`for update`) nên hai lần lưu không đan nhau, nhưng không so `updatedAt` gửi lên. Chỉ ảnh hưởng nháp của một chủ shop mở hai tab. Hướng sửa: body/`If-Match` mang `updatedAt` đã đọc, khác → 409 `VERSION_CONFLICT`, wizard báo "Nháp đã đổi ở tab khác — tải lại".
+- source_spec: `spec-7-2-xem-truoc-7-bai.md`
+  summary: Kiểm bằng trình duyệt bước 4 wizard `/chien-dich/tao?id=` với khoá OpenAI + Cloudinary thật và worker:
+    - 7 thẻ "AI đang viết…" → bài có caption, thẻ có ảnh qua "Đang tạo ảnh…";
+    - Sửa / Lưu, Xoá ("Đã bỏ n bài"), Tạo lại (khoá khi thiếu khoá / hết hạn mức);
+    - quay lại bước 3 đổi giờ đăng → bài không khớp được viết lại; hai tab lưu nháp → câu "Nháp đã đổi ở tab khác".
+  evidence: Chỉ có test API (Postgres thật, `server/test/campaigns-preview.test.ts`) và test helper web (`web/src/lib/campaigns.test.ts`); chưa chạy UI (dev không có mật khẩu mẫu).
+- source_spec: `spec-7-2-xem-truoc-7-bai.md`
+  summary: Slot xem trước kẹt `planned` nếu job `campaigns.preview` / `content.image.generate` mất hẳn (không phải lỗi — lỗi đã về `pending_approval` kèm mã). Bước 4 khi đó hiện "AI đang viết…" mãi và hỏi lại 5 giây; "Tạo lại" chỉ mở cho `pending_approval`.
+  evidence: `content/slots.ts` chỉ rời `planned` khi job chạy xong; ô ảnh chờ quá 15 phút đọc ra `failed` ở `GET /media-assets/generated` nhưng không đẩy slot. Hướng sửa (7.4 dùng chung): cron `campaigns.generate_window` coi slot `planned` có ô ảnh `pending` quá `IMAGE_PENDING_MS` là `IMAGE_FAILED`, và enqueue lại slot chưa sinh.
+- source_spec: `spec-7-2-xem-truoc-7-bai.md`
+  summary: Job ảnh luôn đẩy slot sang `pending_approval` khi ảnh xong. Chế độ "Tự đăng" (7.4) cần đích `scheduled` qua `assertPublishable`, nên phải truyền chế độ vào `settleSlotImage` hoặc để `campaigns` chuyển tiếp.
+  evidence: `content` không đọc `campaigns` (AD-1); bài xem trước (7.2) luôn chờ duyệt nên chưa cần.
+- source_spec: `spec-7-2-xem-truoc-7-bai.md`
+  summary: Bước 4 chỉ sửa được caption của bài xem trước, chưa đổi / bỏ / thêm ảnh. Muốn ảnh khác thì phải "Tạo lại" (viết lại cả caption).
+  evidence: AC 7.2 chỉ nêu sửa / xoá / tạo lại. Hành động `edit` của `transitionTarget` chỉ nhận `caption`; "Bài chờ duyệt" (7.4) nên có sửa ảnh cùng hành động này.
+- source_spec: `spec-7-2-xem-truoc-7-bai.md`
+  summary: Job `campaigns.preview` lấy danh sách slot cần sinh (`listSlotsToGenerate`) sau khi đã nhả khoá `FOR SHARE` của dòng chiến dịch. Lưu nháp chen vào giữa thì slot mới được sinh theo kế hoạch cũ: `withImage` không có trong map nên thành `false` (cả trang Instagram), mục tiêu là mục tiêu cũ.
+  evidence: `campaigns/preview.ts` `runPreview`: `withImage.get(...) ?? false`. Cửa sổ chỉ dài một câu truy vấn, và lượt job do lần lưu enqueue sẽ bỏ qua slot đã sinh. Hướng sửa: đọc `todo` trong cùng transaction `FOR SHARE`, hoặc slot không có trong kế hoạch thì bỏ qua để lượt sau sinh.

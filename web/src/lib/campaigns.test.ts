@@ -1,6 +1,16 @@
 // Story 7.1 phía web: form wizard → body, nạp lại nháp, trang chọn được (chế độ nhóm tự loại), tóm tắt (tổng bài, lịch
 // nhiệt, bài có ảnh — Instagram luôn có ảnh), lỗi validate (web + server) → đúng bước + dưới ô, Phạm vi → đích ban đầu.
-import { CampaignDto, SaveCampaignRequest, campaignImageRatio, campaignPostsOnDay, type CampaignPageOption, type PageDto } from '@ottm/shared'
+// Story 7.2: bước 4 xem trước (bài đang viết / đang tạo ảnh / sẵn sàng / đã bỏ, giờ VN, ghi chú theo mã lỗi, hành động
+// được phép), `baseUpdatedAt`, SSE `post_target.*` làm cũ xem trước.
+import {
+  CampaignDto,
+  SaveCampaignRequest,
+  campaignImageRatio,
+  campaignPostsOnDay,
+  type CampaignPageOption,
+  type CampaignSlotDto,
+  type PageDto,
+} from '@ottm/shared'
 import { describe, expect, it } from 'vitest'
 import { ApiError } from './api'
 import { hintInvalidates } from './realtime'
@@ -10,13 +20,20 @@ import {
   addDaysKey,
   autoName,
   buildCampaignBody,
+  campaignPreviewKey,
   dailyPlan,
   dayLabel,
   formFromCampaign,
   hasInstagram,
   initialForm,
   planTotals,
+  previewView,
   serverCampaignErrors,
+  slotCanCancel,
+  slotCanEdit,
+  slotNote,
+  slotPhase,
+  slotWhen,
   splitEven,
   stepHasErrors,
   targetPages,
@@ -201,5 +218,61 @@ describe('lỗi → bước + dưới ô', () => {
     expect(serverCampaignErrors(pageErr, body)).toEqual({ fields: {}, pages: { [IG.id]: 'Trang đã mất kết nối — kết nối lại để chọn' }, step: 2 })
     expect(serverCampaignErrors(new ApiError('VERSION_CONFLICT', 409, 'x'), body)).toBeNull()
     expect(serverCampaignErrors(new ApiError('VALIDATION_FAILED', 400, 'x', [{ path: ['khac'], message: 'x' }]), body)).toBeNull()
+  })
+})
+
+/* ---------- Xem trước 7 bài đầu (Story 7.2) ---------- */
+
+const slot = (over: Partial<CampaignSlotDto>): CampaignSlotDto => ({
+  id: '0190a000-0000-7000-8000-0000000000c1',
+  postId: '0190a000-0000-7000-8000-0000000000d1',
+  pageId: '0190a000-0000-7000-8000-0000000000e1',
+  slotAt: '2026-10-26T04:30:00.000Z',
+  topic: 'Mẹo hay',
+  status: 'pending_approval',
+  caption: 'Bài AI',
+  aiCaption: true,
+  media: [],
+  imagePending: false,
+  version: 2,
+  errorCode: null,
+  ...over,
+})
+
+describe('xem trước 7 bài đầu', () => {
+  it('danh sách: bỏ bài đã xoá (đếm "Đã bỏ"), còn bài `planned` → đang viết; pha thẻ: viết / ảnh / sẵn sàng', () => {
+    const writing = slot({ id: 'a', status: 'planned', caption: '', aiCaption: false })
+    const imaging = slot({ id: 'b', status: 'planned', imagePending: true })
+    const ready = slot({ id: 'c' })
+    const failed = slot({ id: 'd', caption: '', errorCode: 'AI_PROVIDER_ERROR' })
+    const removed = slot({ id: 'e', status: 'cancelled' })
+    const view = previewView([writing, imaging, ready, failed, removed])
+    expect(view.shown.map((s) => s.id)).toEqual(['a', 'b', 'c', 'd'])
+    expect(view.removed).toBe(1)
+    expect(view.generating).toBe(true)
+    expect(previewView([ready, removed]).generating).toBe(false)
+    expect([writing, imaging, ready, failed].map(slotPhase)).toEqual(['writing', 'image', 'ready', 'ready'])
+  })
+
+  it('giờ VN của slot; ghi chú theo mã (hậu kiểm, ảnh lỗi, thiếu hồ sơ, hết hạn mức); hành động được phép', () => {
+    expect(slotWhen('2026-10-26T04:30:00.000Z')).toBe('T2, 26/10 · 11:30')
+    expect(slotWhen('2026-10-25T17:30:00.000Z')).toBe('T2, 26/10 · 00:30')
+    expect(slotNote(null)).toBeNull()
+    expect(slotNote('AI_POLICY_BLOCKED')).toContain('Điều cần tránh')
+    expect(slotNote('IMAGE_REJECTED')).toContain('openai từ chối mô tả này.')
+    expect(slotNote('CONFIG_MISSING')).toContain('chưa có hồ sơ thương hiệu')
+    expect(slotNote('AI_BUDGET_EXCEEDED')).toBeTruthy()
+    expect([slotCanEdit(slot({})), slotCanCancel(slot({}))]).toEqual([true, true])
+    expect([slotCanEdit(slot({ status: 'planned' })), slotCanCancel(slot({ status: 'planned' }))]).toEqual([false, true])
+    expect([slotCanEdit(slot({ status: 'cancelled' })), slotCanCancel(slot({ status: 'cancelled' }))]).toEqual([false, false])
+  })
+
+  it('PUT mang `baseUpdatedAt` khi có (POST thì không); SSE `post_target.updated` làm cũ xem trước', () => {
+    const form = initialForm({ kind: 'page', id: FB.id }, [], NOW)
+    const active = activePages(form, PAGES, OPTIONS)
+    expect(buildCampaignBody(form, active, 'Tên', '2026-10-24T01:00:00.000Z').baseUpdatedAt).toBe('2026-10-24T01:00:00.000Z')
+    expect('baseUpdatedAt' in buildCampaignBody(form, active, 'Tên')).toBe(false)
+    expect(SaveCampaignRequest.safeParse({ ...buildCampaignBody(form, active, 'Tên', 'hôm qua') }).success).toBe(false)
+    expect(hintInvalidates(campaignPreviewKey('x')[0], 'post_target', 'post_target.updated')).toBe(true)
   })
 })

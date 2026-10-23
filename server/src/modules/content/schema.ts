@@ -3,6 +3,9 @@
 // - Một bài thủ công = 1 `posts` + n `post_targets` (mỗi trang một đích). Caption nằm ở target (giá trị hiệu lực của
 //   trang đó). Cột lịch/lỗi (`scheduled_at`, `schedule_version`, `error_code`, `cancel_reason`) do Story 6.4/6.5 dùng;
 //   Story 6.4 thêm cột đăng (`publishing_at`, `published_at`, `PublishedRef`); Story 6.5 thêm `ai_caption`.
+// - Story 7.2: slot chiến dịch (1 post : 1 target) có `campaign_id` + `slot_at` (giờ dự kiến ban đầu, bất biến) và khoá
+//   duy nhất `(campaign_id, page_id, slot_at)`; `held` do `campaigns` bật/tắt qua `content` (AD-15) — job đăng bỏ qua
+//   target `held`. `campaign_id` KHÔNG có FK: `content` không biết bảng `campaigns` (AD-1).
 // - `media_assets` chỉ chứa ảnh bài (không logo, không đính kèm của khách); ảnh gắn vào target qua `post_target_media`.
 // - FK tới `pages`/`posts` `on delete cascade`: trang chỉ bị xoá cứng khi xoá dữ liệu theo yêu cầu (gỡ trang là soft-delete).
 import { CANCEL_REASONS, IMAGE_ERROR_CODES, MEDIA_ASSET_SOURCES, MEDIA_ASSET_STATUSES, POST_SOURCES, POST_TARGET_STATUSES } from '@ottm/shared'
@@ -44,6 +47,12 @@ export const postTargets = pgTable(
     caption: text('caption').notNull().default(''),
     /** Caption do AI viết (Story 6.5, nhãn "AI tạo" — UX-DR10); web gửi theo nhãn của tab Soạn bài. */
     aiCaption: boolean('ai_caption').notNull().default(false),
+    /** Chiến dịch của slot (Story 7.2); `null` với bài tay. Không FK (AD-1). */
+    campaignId: uuid('campaign_id'),
+    /** Giờ dự kiến ban đầu của slot — bất biến; kéo thả chỉ đổi `scheduled_at` (AD-13). Có ⇔ có `campaign_id`. */
+    slotAt: timestamp('slot_at', { withTimezone: true, precision: 3 }),
+    /** Giữ không đăng (AD-15): bài xem trước của chiến dịch nháp, chiến dịch tạm dừng. Job `publish.target` bỏ qua. */
+    held: boolean('held').notNull().default(false),
     /** Khoá lạc quan (AD-13): tăng mỗi lần target đổi. */
     version: integer('version').notNull().default(0),
     /** Tăng mỗi lần đổi `scheduled_at` hoặc vào/rời `scheduled` (Story 6.4). */
@@ -69,7 +78,13 @@ export const postTargets = pgTable(
     // Cron `content.requeue` quét `scheduled`/`publishing` theo giờ.
     index('post_targets_status_scheduled_idx').on(t.status, t.scheduledAt),
     check('post_targets_status_check', sql`${t.status} in (${inList(POST_TARGET_STATUSES)})`),
-    check('post_targets_error_code_check', sql`(${t.status} = 'failed') = (${t.errorCode} is not null)`),
+    // `failed` luôn kèm mã; Story 7.2: slot `pending_approval` được kèm mã (AI lỗi, ảnh lỗi, hậu kiểm chặn — AD-15).
+    check(
+      'post_targets_error_code_check',
+      sql`(${t.status} <> 'failed' or ${t.errorCode} is not null) and (${t.errorCode} is null or ${t.status} in ('failed', 'pending_approval'))`,
+    ),
+    unique('post_targets_slot_unique').on(t.campaignId, t.pageId, t.slotAt),
+    check('post_targets_slot_check', sql`(${t.campaignId} is null) = (${t.slotAt} is null)`),
     check('post_targets_scheduled_at_check', sql`${t.status} <> 'scheduled' or ${t.scheduledAt} is not null`),
     check('post_targets_cancel_reason_check', sql`${t.cancelReason} is null or ${t.cancelReason} in (${inList(CANCEL_REASONS)})`),
     // Story 6.5: huỷ luôn kèm lý do, và chỉ target `cancelled` có lý do.

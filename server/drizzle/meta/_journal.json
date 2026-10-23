@@ -225,6 +225,13 @@
       "when": 1792796828925,
       "tag": "0031_regular_makkari",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1792798477294,
+      "tag": "0032_sweet_steve_rogers",
+      "breakpoints": true
     }
   ]
 }

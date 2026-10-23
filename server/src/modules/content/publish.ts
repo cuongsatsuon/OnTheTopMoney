@@ -112,7 +112,7 @@ async function markFailed(deps: PublishDeps, target: TargetRow, from: 'scheduled
       .where(and(eq(postTargets.id, target.id), eq(postTargets.status, from), eq(postTargets.scheduleVersion, target.scheduleVersion)))
       .returning({ version: postTargets.version })
     if (!row) return false
-    await deps.events.publishEvent(tx, 'post_target.failed', { id: target.id, pageId: target.pageId, campaignId: null, errorCode: code, version: row.version })
+    await deps.events.publishEvent(tx, 'post_target.failed', { id: target.id, pageId: target.pageId, campaignId: target.campaignId, errorCode: code, version: row.version })
     return true
   })
   if (failed) deps.log?.warn({ targetId: target.id, pageId: target.pageId, errorCode: code }, 'content: đăng bài lỗi')
@@ -142,7 +142,7 @@ async function markPublished(deps: PublishDeps, target: TargetRow, ref: Publishe
       .where(and(eq(postTargets.id, target.id), eq(postTargets.status, 'publishing')))
       .returning({ version: postTargets.version })
     if (!row) return false
-    await deps.events.publishEvent(tx, 'post_target.published', { id: target.id, pageId: target.pageId, campaignId: null, version: row.version })
+    await deps.events.publishEvent(tx, 'post_target.published', { id: target.id, pageId: target.pageId, campaignId: target.campaignId, version: row.version })
     return true
   })
 }
@@ -324,7 +324,8 @@ export interface PublishOptions {
 export async function publishTarget(deps: PublishDeps, data: PublishJobData, opts: PublishOptions): Promise<PublishOutcome> {
   const now = deps.now?.() ?? new Date()
   const [target] = await deps.db.select().from(postTargets).where(eq(postTargets.id, data.targetId))
-  if (!target || target.status !== 'scheduled' || target.scheduleVersion !== data.scheduleVersion) return 'skipped'
+  // `held` (AD-13, AD-15: bài xem trước / chiến dịch tạm dừng) → bỏ qua im lặng; chỉ `releaseCampaignTargets` enqueue lại.
+  if (!target || target.status !== 'scheduled' || target.scheduleVersion !== data.scheduleVersion || target.held) return 'skipped'
 
   const page = await getPage(deps.db, target.pageId)
   if (!page) return markFailed(deps, target, 'scheduled', 'PAGE_REMOVED')
@@ -340,7 +341,9 @@ export async function publishTarget(deps: PublishDeps, data: PublishJobData, opt
   const [claimed] = await deps.db
     .update(postTargets)
     .set({ status: 'publishing' satisfies PostTargetStatus, publishingAt: now, version: sql`${postTargets.version} + 1`, updatedAt: sql`now()` })
-    .where(and(eq(postTargets.id, target.id), eq(postTargets.status, 'scheduled'), eq(postTargets.scheduleVersion, data.scheduleVersion)))
+    .where(
+      and(eq(postTargets.id, target.id), eq(postTargets.status, 'scheduled'), eq(postTargets.scheduleVersion, data.scheduleVersion), eq(postTargets.held, false)),
+    )
     .returning()
   if (!claimed) return 'skipped'
 

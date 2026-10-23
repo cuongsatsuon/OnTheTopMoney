@@ -2,9 +2,12 @@
 // lượng, trang đích + tần suất, chủ đề + tỉ lệ, tỉ lệ ảnh AI, khung giờ đăng, chế độ duyệt. Schema ở đây là nguồn DUY
 // NHẤT: FE kiểm sớm (báo dưới ô), server kiểm lại khi lưu (tổng tỉ lệ = 100% — AD-15 "kiểm phía server").
 // Helper thuần (`campaignPostsOnDay`, `campaignImageRatio`) dùng cho tóm tắt ở wizard và cho việc tạo slot (7.2/7.3).
+// Story 7.2: luật slot chung `campaignSlots` (ngày/giờ, chủ đề theo tỉ lệ, slot nào có ảnh) — nguồn DUY NHẤT cho 7 bài
+// xem trước và phần slot còn lại lúc "Bắt đầu" (7.3), để hai lần tạo trùng khoá `(campaign_id, page_id, slot_at)`.
 import { z } from 'zod'
-import { POST_TARGETS_MAX } from './content.ts'
-import { CampaignFrequency, CampaignGoal, CampaignMode, CampaignStatus, type Platform } from './enums.ts'
+import { MediaAssetDto, POST_CAPTION_MAX, POST_TARGETS_MAX } from './content.ts'
+import { CampaignFrequency, CampaignGoal, CampaignMode, CampaignStatus, PostTargetStatus, type Platform } from './enums.ts'
+import { ErrorCode } from './errors.ts'
 
 const IsoDateTime = z.iso.datetime({ offset: false })
 
@@ -35,6 +38,80 @@ export function campaignPostsOnDay(frequency: CampaignFrequency, dayIndex: numbe
 /** Tỉ lệ (%) bài có ảnh AI của một trang: Instagram luôn cần ảnh (100%); Facebook/Threads theo cấu hình. */
 export function campaignImageRatio(platform: Platform, imageRatio: number): number {
   return platform === 'instagram' ? 100 : imageRatio
+}
+
+/** Số bài xem trước ở bước 4 wizard (AD-15). */
+export const CAMPAIGN_PREVIEW_COUNT = 7
+
+/** Đầu vào của luật slot: cấu hình chiến dịch + nền tảng từng trang (theo thứ tự lưu). */
+export interface CampaignSlotPlanInput {
+  startDate: string
+  durationDays: number
+  /** `HH:MM` giờ VN. */
+  postTimes: readonly string[]
+  defaultFrequency: CampaignFrequency
+  topics: readonly { name: string; share: number }[]
+  imageRatio: number
+  pages: readonly { pageId: string; platform: Platform; frequency: CampaignFrequency | null }[]
+}
+
+export interface CampaignSlot {
+  pageId: string
+  /** ISO UTC — giờ dự kiến ban đầu, bất biến (AD-13). */
+  slotAt: string
+  topic: string
+  /** Slot cần ảnh AI (Instagram luôn cần). */
+  withImage: boolean
+}
+
+/** Bài thứ `k` (0-based, đếm theo trang) có ảnh không với tỉ lệ `ratio`% — dồn ảnh về đầu (70% → bài 0, 1, 2 có; 3 không). */
+export function campaignSlotHasImage(ratio: number, k: number): boolean {
+  return Math.ceil(((k + 1) * ratio) / 100) > Math.ceil((k * ratio) / 100)
+}
+
+/**
+ * Slot của chiến dịch theo thứ tự đăng (giờ rồi thứ tự trang), tối đa `limit` slot đầu:
+ * - ngày 0…N−1, mỗi trang `campaignPostsOnDay` bài vào khung giờ chỉ số `⌊i·T/n⌋` (n bài trên T khung giờ);
+ * - chủ đề chia vòng có trọng số (smooth weighted round-robin) theo tỉ lệ, trên thứ tự chung — 10 slot với 40/30/20/10
+ *   ra đúng 4/3/2/1 và xen kẽ nhau;
+ * - ảnh: `campaignImageRatio` của trang, đếm bài theo từng trang (`campaignSlotHasImage`).
+ * Thuần, xác định: cùng cấu hình → cùng danh sách (7.3 tạo phần còn lại không trùng 7 bài xem trước).
+ */
+export function campaignSlots(plan: CampaignSlotPlanInput, limit = Number.POSITIVE_INFINITY): CampaignSlot[] {
+  const times = [...plan.postTimes].sort()
+  const raw: { pageId: string; slotAt: string; pageIndex: number }[] = []
+  for (let day = 0; day < plan.durationDays; day++) {
+    const date = new Date(Date.parse(`${plan.startDate}T00:00:00.000Z`) + day * 24 * 60 * 60_000).toISOString().slice(0, 10)
+    plan.pages.forEach((p, pageIndex) => {
+      const n = campaignPostsOnDay(p.frequency ?? plan.defaultFrequency, day, times.length)
+      for (let i = 0; i < n; i++) {
+        const time = times[Math.floor((i * times.length) / n)]!
+        raw.push({ pageId: p.pageId, pageIndex, slotAt: new Date(`${date}T${time}:00.000+07:00`).toISOString() })
+      }
+    })
+  }
+  raw.sort((a, b) => (a.slotAt === b.slotAt ? a.pageIndex - b.pageIndex : a.slotAt < b.slotAt ? -1 : 1))
+
+  const weights = plan.topics.map((t) => Math.max(0, t.share))
+  const total = weights.reduce((n, w) => n + w, 0)
+  const current = weights.map(() => 0)
+  const nextTopic = (): string => {
+    if (!total) return plan.topics[0]?.name ?? ''
+    let best = 0
+    weights.forEach((w, i) => {
+      current[i]! += w
+      if (current[i]! > current[best]!) best = i
+    })
+    current[best]! -= total
+    return plan.topics[best]!.name
+  }
+  const perPage = new Map<string, number>()
+  return raw.slice(0, Math.min(limit, raw.length)).map((s) => {
+    const page = plan.pages[s.pageIndex]!
+    const k = perPage.get(s.pageId) ?? 0
+    perPage.set(s.pageId, k + 1)
+    return { pageId: s.pageId, slotAt: s.slotAt, topic: nextTopic(), withImage: campaignSlotHasImage(campaignImageRatio(page.platform, plan.imageRatio), k) }
+  })
 }
 
 /* ---------- Yêu cầu lưu nháp ---------- */
@@ -82,6 +159,8 @@ export const SaveCampaignRequest = z
       .max(CAMPAIGN_POST_TIMES_MAX, `Tối đa ${CAMPAIGN_POST_TIMES_MAX} khung giờ`),
     imageRatio: z.number().int('Tỉ lệ ảnh là số nguyên').min(0, 'Tỉ lệ ảnh từ 0%').max(100, 'Tỉ lệ ảnh tối đa 100%'),
     mode: CampaignMode.default('review'),
+    /** Story 7.2: `updatedAt` của nháp lúc đọc (chỉ `PUT`) — khác bản hiện tại → 409 (nháp đã đổi ở tab khác). */
+    baseUpdatedAt: IsoDateTime.optional(),
   })
   .strict()
   .superRefine((body, ctx) => {
@@ -150,3 +229,50 @@ export type CampaignPageOption = z.infer<typeof CampaignPageOption>
 /** `GET /api/v1/campaigns/page-options` → 200: mọi trang chưa gỡ, cùng thứ tự `GET /pages`. */
 export const CampaignPageOptionsResponse = z.object({ items: z.array(CampaignPageOption) })
 export type CampaignPageOptionsResponse = z.infer<typeof CampaignPageOptionsResponse>
+
+/* ---------- Xem trước 7 bài đầu (Story 7.2) ---------- */
+
+/**
+ * Một slot chiến dịch (1 post : 1 target — AD-13). `topic` = chủ đề slot; `imagePending` = ô ảnh AI đang sinh (slot còn
+ * `planned`); `errorCode` có khi AI / ảnh / hậu kiểm lỗi (`pending_approval` kèm mã — AD-15).
+ */
+export const CampaignSlotDto = z.object({
+  id: z.uuid(),
+  postId: z.uuid(),
+  pageId: z.uuid(),
+  slotAt: IsoDateTime,
+  topic: z.string().nullable(),
+  status: PostTargetStatus,
+  caption: z.string(),
+  aiCaption: z.boolean(),
+  media: z.array(MediaAssetDto),
+  imagePending: z.boolean(),
+  /** Khoá lạc quan (AD-13) — body của hành động slot. */
+  version: z.number().int().nonnegative(),
+  errorCode: ErrorCode.nullable(),
+})
+export type CampaignSlotDto = z.infer<typeof CampaignSlotDto>
+
+/** `GET /api/v1/campaigns/:id/preview` → 200, theo `slotAt` rồi thứ tự trang. `generating` = còn slot `planned`. */
+export const CampaignPreviewResponse = z.object({ items: z.array(CampaignSlotDto), generating: z.boolean() })
+export type CampaignPreviewResponse = z.infer<typeof CampaignPreviewResponse>
+
+const SlotVersion = z.number().int().nonnegative()
+
+/**
+ * Body `POST /api/v1/campaigns/:id/slots/:targetId/transition` — Sửa (caption mới), Tạo lại (về `planned` rồi AI sinh
+ * lại), Xoá (`cancelled`). Mọi hành động mang `version` (AD-13).
+ */
+export const CampaignSlotActionRequest = z.discriminatedUnion('action', [
+  z
+    .object({
+      action: z.literal('edit'),
+      version: SlotVersion,
+      caption: z.string().trim().min(1, 'Nhập nội dung bài').max(POST_CAPTION_MAX, `Nội dung tối đa ${POST_CAPTION_MAX} ký tự`),
+    })
+    .strict(),
+  z.object({ action: z.literal('regenerate'), version: SlotVersion }).strict(),
+  z.object({ action: z.literal('cancel'), version: SlotVersion }).strict(),
+])
+export type CampaignSlotActionRequest = z.input<typeof CampaignSlotActionRequest>
+export type ParsedCampaignSlotActionRequest = z.output<typeof CampaignSlotActionRequest>

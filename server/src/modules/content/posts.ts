@@ -10,10 +10,27 @@ import { getPage } from '../pages/index.ts'
 import { toMediaAssetDto } from './media.ts'
 import { mediaAssets, postTargetMedia, postTargets, posts } from './schema.ts'
 
-export interface CreatePostInput extends ParsedSavePostRequest {
-  /** Story 6.1 chỉ tạo bài thủ công; `campaign` mở ở Epic 7 (kèm `campaignId`, `slot_at`). */
+/** Bài soạn tay (Story 6.1): 1 post : n target `draft`. */
+export interface CreateManualPostInput extends ParsedSavePostRequest {
   source: Extract<PostSource, 'manual'>
 }
+
+/**
+ * Slot chiến dịch (Story 7.2, AD-13): 1 post : 1 target `planned`, caption rỗng tới khi AI sinh. `slotAt` bất biến
+ * (khoá duy nhất `(campaign_id, page_id, slot_at)`); `scheduledAt` = giờ hiện trên Lịch (`null` với bài xem trước của
+ * chiến dịch nháp — 7.3 đặt khi bắt đầu); `held` = không đăng được tới khi `campaigns` bỏ giữ.
+ */
+export interface CreateSlotPostInput {
+  source: Extract<PostSource, 'campaign'>
+  campaignId: string
+  topic: string | null
+  pageId: string
+  slotAt: Date
+  scheduledAt: Date | null
+  held: boolean
+}
+
+export type CreatePostInput = CreateManualPostInput | CreateSlotPostInput
 
 interface FieldIssue {
   path: (string | number)[]
@@ -60,10 +77,26 @@ async function insertTargetMedia(db: DbExecutor, targetId: string, mediaIds: rea
 }
 
 /**
- * Tạo một bài + mỗi trang một target `draft` (caption/ảnh riêng). Chạy trong transaction của bên gọi để bài và
- * mọi target cùng có hoặc cùng không.
+ * Tạo một bài + mỗi trang một target `draft` (caption/ảnh riêng), hoặc một slot chiến dịch (1 target `planned`). Chạy
+ * trong transaction của bên gọi để bài và mọi target cùng có hoặc cùng không. Slot trùng khoá → lỗi unique của Postgres
+ * (bên gọi tạo idempotent bằng `ensureCampaignSlots`).
  */
 export async function createPost(tx: DbExecutor, input: CreatePostInput): Promise<PostDto> {
+  if (input.source === 'campaign') {
+    await assertTargetsValid(tx, [{ pageId: input.pageId, caption: '', mediaIds: [], aiCaption: false }])
+    const [post] = await tx.insert(posts).values({ source: 'campaign', topic: input.topic }).returning({ id: posts.id })
+    await tx.insert(postTargets).values({
+      postId: post!.id,
+      pageId: input.pageId,
+      position: 0,
+      status: 'planned' satisfies PostTargetStatus,
+      campaignId: input.campaignId,
+      slotAt: input.slotAt,
+      scheduledAt: input.scheduledAt,
+      held: input.held,
+    })
+    return (await getPost(tx, post!.id))!
+  }
   await assertTargetsValid(tx, input.targets)
   const [post] = await tx.insert(posts).values({ source: input.source, topic: input.topic }).returning({ id: posts.id })
   for (const [position, t] of input.targets.entries()) {

@@ -47,6 +47,8 @@ export function entityMatches(root: unknown, entity: string): boolean {
  *   gửi); `message` → sức khoẻ webhook `['webhooks', …]` ("Nhận tin gần nhất: vừa xong" ngay khi tin về, không chờ
  *   lần hỏi lại mỗi phút).
  * - Story 7.1: `page` (mất kết nối / kết nối lại / gỡ) → trang chọn được của wizard chiến dịch `['campaigns', …]`.
+ * - Story 7.2: `post_target` (AI viết xong bài xem trước `post_target.updated`, xoá, đăng) → xem trước chiến dịch
+ *   `['campaigns', id, 'preview']`.
  */
 export const ENTITY_ALSO_INVALIDATES: Readonly<Record<string, readonly string[]>> = {
   openai_key: ['settings', 'onboarding'],
@@ -56,8 +58,8 @@ export const ENTITY_ALSO_INVALIDATES: Readonly<Record<string, readonly string[]>
   page: ['search', 'onboarding', 'campaign'],
   group: ['search'],
   conversation: ['message', 'contact'],
-  // Story 6.4: target đăng xong / lỗi → bài đang mở ở Soạn bài `['posts', id]`.
-  post_target: ['post'],
+  // Story 6.4: target đăng xong / lỗi → bài đang mở ở Soạn bài `['posts', id]`. Story 7.2: bài xem trước chiến dịch.
+  post_target: ['post', 'campaign'],
 }
 
 /**

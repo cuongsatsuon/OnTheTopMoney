@@ -3,11 +3,19 @@
 // kết nối / thiếu hồ sơ → mờ + lý do), lỗi validate → đúng bước + dưới ô. Kiểm sớm bằng chính schema của
 // `@ottm/shared` mà server dùng (tổng tỉ lệ = 100%). Tóm tắt (tổng bài, lịch nhiệt, bài có ảnh) dùng helper shared
 // `campaignPostsOnDay` / `campaignImageRatio` — cùng luật 7.2/7.3 dùng khi tạo slot.
+// Story 7.2: bước 4 xem trước 7 bài đầu (`GET /campaigns/:id/preview`, hỏi lại khi còn bài đang viết; SSE `post_target.*`
+// làm cũ) + Sửa / Xoá / Tạo lại (`POST /campaigns/:id/slots/:targetId/transition` với `version`); PUT mang
+// `baseUpdatedAt` để không đè nháp đã đổi ở tab khác.
 // Phần thuần tách khỏi hook để test được (campaigns.test.ts).
 import {
   CampaignDto,
   CampaignPageOptionsResponse,
+  CampaignPreviewResponse,
   SaveCampaignRequest,
+  type CampaignSlotActionRequest,
+  type CampaignSlotDto,
+  type ErrorCode,
+  type ImageErrorCode,
   campaignImageRatio,
   campaignPostsOnDay,
   type CampaignDuration,
@@ -24,6 +32,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiFetch, isApiError } from './api'
 import { todayKey } from './calendar'
+import { aiErrorText, imageFailureText } from './composer'
 
 /** Tham số URL của nháp đang mở (`/chien-dich/tao?id=<campaignId>`). */
 export const CAMPAIGN_PARAM = 'id'
@@ -209,9 +218,10 @@ export function autoName(form: CampaignForm, active: readonly PageDto[], groups:
   return `${who} – ${goalOf(form.goal).label.toLowerCase()} ${form.durationDays} ngày`
 }
 
-/** Body `POST/PUT /campaigns` từ form. */
-export function buildCampaignBody(form: CampaignForm, active: readonly PageDto[], name: string): SaveCampaignRequest {
+/** Body `POST/PUT /campaigns` từ form. `baseUpdatedAt` = `updatedAt` của nháp đã nạp (PUT; khác bản server → 409). */
+export function buildCampaignBody(form: CampaignForm, active: readonly PageDto[], name: string, baseUpdatedAt?: string): SaveCampaignRequest {
   return {
+    ...(baseUpdatedAt ? { baseUpdatedAt } : {}),
     name,
     goal: form.goal,
     startDate: form.startDate,
@@ -265,7 +275,7 @@ export function splitEven(topics: readonly CampaignTopic[]): CampaignTopic[] {
 
 /* ---------- Lỗi → bước + ô ---------- */
 
-export type CampaignField = keyof SaveCampaignRequest
+export type CampaignField = Exclude<keyof SaveCampaignRequest, 'baseUpdatedAt'>
 const STEP_OF: Record<CampaignField, number> = {
   goal: 1,
   startDate: 1,
@@ -334,9 +344,51 @@ export function serverCampaignErrors(err: unknown, body: SaveCampaignRequest): C
   return out.step === null ? null : out
 }
 
+/* ---------- Xem trước 7 bài đầu (Story 7.2) ---------- */
+
+/** Khoảng hỏi lại khi còn bài AI đang viết / đang tạo ảnh (SSE vẫn làm cũ ngay khi có sự kiện). */
+export const PREVIEW_POLL_MS = 5_000
+
+/** Bài đang hiện (chưa xoá, theo thứ tự đăng) + số bài đã bỏ + còn bài đang viết. */
+export function previewView(items: readonly CampaignSlotDto[]): { shown: CampaignSlotDto[]; removed: number; generating: boolean } {
+  const shown = items.filter((s) => s.status !== 'cancelled')
+  return { shown, removed: items.length - shown.length, generating: items.some((s) => s.status === 'planned') }
+}
+
+/** Pha của một thẻ: AI đang viết caption, đang tạo ảnh (đã có caption), sẵn sàng xem / sửa. */
+export type SlotPhase = 'writing' | 'image' | 'ready'
+export function slotPhase(slot: Pick<CampaignSlotDto, 'status' | 'caption' | 'imagePending'>): SlotPhase {
+  if (slot.status !== 'planned') return 'ready'
+  return slot.imagePending || slot.caption ? 'image' : 'writing'
+}
+
+/** "T2, 26/10 · 11:30" — giờ đăng dự kiến theo giờ VN (UTC+7, không giờ mùa hè). */
+export function slotWhen(slotAt: string): string {
+  const vn = new Date(Date.parse(slotAt) + 7 * 60 * 60_000).toISOString()
+  return `${dayLabel(vn.slice(0, 10))} · ${vn.slice(11, 16)}`
+}
+
+const isImageCode = (code: ErrorCode): code is ImageErrorCode => code === 'IMAGE_REJECTED' || code === 'IMAGE_FAILED'
+
+/** Ghi chú dưới bài có mã lỗi (AI lỗi, ảnh lỗi, hậu kiểm chặn — AD-15); `null` = không lỗi. */
+export function slotNote(code: ErrorCode | null): string | null {
+  if (!code) return null
+  if (code === 'AI_POLICY_BLOCKED') return 'Bài AI vẫn chạm “Điều cần tránh” của hồ sơ thương hiệu — sửa lại hoặc tạo lại.'
+  if (isImageCode(code)) return `Không tạo được ảnh — ${imageFailureText(code).toLowerCase()} Bấm “Tạo lại” để thử lại.`
+  return aiErrorText(code)
+}
+
+/** Sửa / Tạo lại chỉ khi bài đã viết xong (`pending_approval`); Xoá được cả bài đang viết. */
+export const slotCanEdit = (slot: Pick<CampaignSlotDto, 'status'>) => slot.status === 'pending_approval'
+export const slotCanCancel = (slot: Pick<CampaignSlotDto, 'status'>) => slot.status === 'pending_approval' || slot.status === 'planned'
+
+/** Câu toast khi lưu nháp bị 409 (đã đổi ở tab khác / đã bắt đầu). */
+export const DRAFT_CONFLICT_TEXT = 'Nháp đã đổi ở tab khác — tải lại trang để xem bản mới nhất.'
+
 /* ---------- Hook React Query ---------- */
 
 export const campaignKey = (id: string) => ['campaigns', id] as const
+export const campaignPreviewKey = (id: string) => ['campaigns', id, 'preview'] as const
 export const CAMPAIGN_PAGE_OPTIONS_KEY = ['campaigns', 'page-options'] as const
 
 /** Trang chọn được làm đích, theo id. */
@@ -366,6 +418,32 @@ export function useSaveCampaign() {
       id
         ? apiFetch(`/campaigns/${id}`, { method: 'PUT', body, schema: CampaignDto })
         : apiFetch('/campaigns', { method: 'POST', body, schema: CampaignDto }),
-    onSuccess: (campaign) => qc.setQueryData(campaignKey(campaign.id), campaign),
+    onSuccess: (campaign) => {
+      qc.setQueryData(campaignKey(campaign.id), campaign)
+      // Lưu nháp dựng lại bài xem trước theo cấu hình mới.
+      void qc.invalidateQueries({ queryKey: campaignPreviewKey(campaign.id) })
+    },
+  })
+}
+
+/** Bài xem trước của nháp; `null` → không tải. Còn bài đang viết → hỏi lại mỗi `PREVIEW_POLL_MS`. */
+export function useCampaignPreview(id: string | null) {
+  return useQuery({
+    queryKey: campaignPreviewKey(id ?? ''),
+    queryFn: ({ signal }) => apiFetch(`/campaigns/${id}/preview`, { schema: CampaignPreviewResponse, signal }),
+    enabled: id !== null,
+    refetchInterval: (q) => (q.state.data?.generating ? PREVIEW_POLL_MS : false),
+  })
+}
+
+/** Sửa / Xoá / Tạo lại một bài xem trước; kết quả là danh sách mới (ghi thẳng vào cache). */
+export function useSlotAction(campaignId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ targetId, body }: { targetId: string; body: CampaignSlotActionRequest }) =>
+      apiFetch(`/campaigns/${campaignId}/slots/${targetId}/transition`, { method: 'POST', body, schema: CampaignPreviewResponse }),
+    onSuccess: (data) => qc.setQueryData(campaignPreviewKey(campaignId), data),
+    // 409 (bài vừa đổi) → tải lại để thấy bản mới.
+    onError: () => void qc.invalidateQueries({ queryKey: campaignPreviewKey(campaignId) }),
   })
 }

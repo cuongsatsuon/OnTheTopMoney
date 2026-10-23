@@ -1,7 +1,9 @@
 // Chuyển trạng thái `post_targets` do chủ shop bấm (Story 6.4, AD-13): lên lịch / đăng ngay (`draft → scheduled`), đổi
 // giờ (`scheduled → scheduled` — cả kéo thả trên Lịch nội dung, Story 6.5), bỏ lịch (`scheduled → draft`), đăng lại
 // (`failed → scheduled`), xoá (Story 6.5: mọi trạng thái trước `publishing` và `failed` → `cancelled` + `cancel_reason`,
-// phát `post_target.cancelled`).
+// phát `post_target.cancelled`). Story 7.2 (slot chiến dịch, AD-13): sửa caption bài chờ duyệt (`pending_approval →
+// pending_approval`) và tạo lại (`pending_approval → planned` — `campaigns` sinh lại), đều khoá `version` và phát
+// `post_target.updated`.
 // - `transitionTarget`: MỘT target, khoá lạc quan `version`. Mọi chuyển tới `scheduled` gọi `assertPublishable` và kiểm
 //   giới hạn đăng/24h của nền tảng, rồi enqueue `publish.target {targetId, scheduleVersion}` `startAfter=scheduled_at`
 //   cùng transaction (AD-2). `schedule_version` tăng mỗi lần vào/rời `scheduled` hoặc đổi giờ — job cũ thấy lệch rồi bỏ
@@ -26,7 +28,7 @@ import type { JobSender } from '../../platform/jobs/index.ts'
 import { getPage } from '../pages/index.ts'
 import { getPost } from './posts.ts'
 import { assertPublishable } from './publishable.ts'
-import { postTargets, posts } from './schema.ts'
+import { postTargetMedia, postTargets, posts } from './schema.ts'
 
 export interface TransitionDeps {
   jobs: JobSender
@@ -35,20 +37,28 @@ export interface TransitionDeps {
   now?: () => Date
 }
 
-/** Hành động + thời điểm: `'now'` = đăng ngay (giờ máy chủ); giờ cụ thể phải ở tương lai. Xoá kèm lý do (AD-13). */
+/**
+ * Hành động + thời điểm: `'now'` = đăng ngay (giờ máy chủ); giờ cụ thể phải ở tương lai. Xoá kèm lý do (AD-13).
+ * Story 7.2: `edit` (caption mới của bài chờ duyệt) và `regenerate` (tạo lại) chỉ cho slot chiến dịch — không có trong
+ * `TargetAction` của route Soạn bài / Lịch.
+ */
 export type TargetTransition =
   | { action: Exclude<TargetAction, 'unschedule' | 'cancel'>; at: Date | 'now' }
   | { action: 'unschedule' }
   | { action: 'cancel'; reason: CancelReason }
+  | { action: 'edit'; caption: string }
+  | { action: 'regenerate' }
 
 /** Trạng thái nguồn hợp lệ của từng hành động (bảng AD-13). */
-const FROM: Record<TargetAction, readonly PostTargetStatus[]> = {
+const FROM: Record<TargetTransition['action'], readonly PostTargetStatus[]> = {
   schedule: ['draft'],
   reschedule: ['scheduled'],
   unschedule: ['scheduled'],
   retry: ['failed'],
   // "Mọi trạng thái trước `publishing`" + bài lỗi (chưa lên trang — xoá khỏi lịch).
   cancel: ['planned', 'draft', 'pending_approval', 'scheduled', 'failed'],
+  edit: ['pending_approval'],
+  regenerate: ['pending_approval'],
 }
 
 /** Hành động đưa target tới `scheduled` (qua luật nền tảng + giới hạn/24h). */
@@ -113,7 +123,7 @@ export async function transitionTarget(
 ): Promise<void> {
   const now = deps.now?.() ?? new Date()
   const [target] = await tx
-    .select({ id: postTargets.id, pageId: postTargets.pageId, status: postTargets.status, version: postTargets.version })
+    .select({ id: postTargets.id, pageId: postTargets.pageId, campaignId: postTargets.campaignId, status: postTargets.status, version: postTargets.version })
     .from(postTargets)
     .where(eq(postTargets.id, targetId))
     .for('update')
@@ -139,7 +149,27 @@ export async function transitionTarget(
       })
       .where(eq(postTargets.id, targetId))
       .returning({ version: postTargets.version })
-    await deps.events.publishEvent(tx, 'post_target.cancelled', { id: targetId, pageId: target.pageId, campaignId: null, version: row!.version })
+    await deps.events.publishEvent(tx, 'post_target.cancelled', { id: targetId, pageId: target.pageId, campaignId: target.campaignId, version: row!.version })
+    return
+  }
+
+  if (transition.action === 'edit' || transition.action === 'regenerate') {
+    // Sửa: chủ shop đã xem lại nội dung → bỏ mã lỗi (AI / hậu kiểm); nhãn "AI tạo" giữ nguyên (UX-DR10).
+    // Tạo lại: về `planned`, bỏ caption / mã / ảnh gắn (ô ảnh cũ thành ảnh không gắn — cron dọn sau 7 ngày).
+    if (transition.action === 'regenerate') await tx.delete(postTargetMedia).where(eq(postTargetMedia.postTargetId, targetId))
+    const [row] = await tx
+      .update(postTargets)
+      .set({
+        ...(transition.action === 'edit'
+          ? { caption: transition.caption }
+          : { status: 'planned' satisfies PostTargetStatus, caption: '', aiCaption: false }),
+        errorCode: null,
+        version: sql`${postTargets.version} + 1`,
+        updatedAt: sql`now()`,
+      })
+      .where(eq(postTargets.id, targetId))
+      .returning({ version: postTargets.version })
+    await deps.events.publishEvent(tx, 'post_target.updated', { id: targetId, pageId: target.pageId, campaignId: target.campaignId, version: row!.version })
     return
   }
 

@@ -94,8 +94,8 @@ development_status:
 
   epic-7: in-progress
   7-1-wizard-tạo-chiến-dịch-mục-tiêu-trang-đích-nội-dung-và-lịch: review
-  7-2-xem-trước-7-bài-đầu: in-progress
-  7-3-bắt-đầu-chiến-dịch: backlog
+  7-2-xem-trước-7-bài-đầu: review
+  7-3-bắt-đầu-chiến-dịch: in-progress
   7-4-sinh-nội-dung-cuốn-chiếu-và-hàng-đợi-bài-chờ-duyệt: backlog
   7-5-tạm-dừng-tiếp-tục-và-xoá-chiến-dịch: backlog
   7-6-chiến-dịch-tự-tạm-dừng-khi-có-sự-cố: backlog

@@ -159,8 +159,9 @@ export function buildApp({ sql, db, logger, http = {}, loginLimiter, health, eve
   // Story 6.4: lên lịch / đăng (enqueue `publish.target` cùng transaction → cần `jobs`); Story 6.5: xoá phát
   // `post_target.cancelled` (cần `events`); Lịch nội dung `GET /calendar`.
   registerPosts(app, { db, jobs, events, ...(clock ? { now: clock } : {}) })
-  // Chiến dịch nuôi page (Story 7.1): nháp wizard bước 1–3 + trang chọn được làm đích; chưa job / sự kiện.
-  registerCampaigns(app, { db, ...(clock ? { now: clock } : {}) })
+  // Chiến dịch nuôi page (Story 7.1): nháp wizard bước 1–3 + trang chọn được làm đích. Story 7.2: bài xem trước — lưu
+  // nháp enqueue `campaigns.preview` (cần `jobs`); Sửa / Xoá / Tạo lại cần `jobs` + `events`.
+  registerCampaigns(app, { db, jobs, events, ...(clock ? { now: clock } : {}) })
   // Hộp thư (Story 4.3): hội thoại, tin, đính kèm (đọc từ kho riêng tư); Story 4.7: gửi tin (cần `events` + `jobs`).
   registerInbox(app, { db, media: mediaStores, events, jobs })
   // Khách hàng (Story 4.9): danh sách, hồ sơ, lịch sử, gộp (cần `events`), tóm tắt AI (cần `events` + `jobs`).

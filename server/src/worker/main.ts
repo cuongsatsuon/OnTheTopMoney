@@ -8,6 +8,7 @@ import { QUEUES, createBoss, createJobSender, ensureQueues, isCriticalQueue, sta
 import { createSecretCipher } from '../adapters/crypto/index.ts'
 import { createMediaStores } from '../adapters/media/index.ts'
 import { gcReservations, handleAiEvent } from '../modules/ai/index.ts'
+import { handlePreviewJob } from '../modules/campaigns/index.ts'
 import { handleRunJob, handleTriageEvent } from '../modules/autoreply/index.ts'
 import {
   cleanupExpiredOAuth,
@@ -211,6 +212,15 @@ try {
           job as JobWithMetadata<unknown>,
         )
         logger.debug({ jobId: job.id, result }, 'content.image.generate')
+      },
+      // Story 7.2: sinh bài xem trước của chiến dịch nháp (caption theo hồ sơ; ảnh đi `content.image.generate`). Lỗi tạm của
+      // OpenAI ném lại sau khi slot khác đã xong; lần cuối ghi mã lên slot (`pending_approval`).
+      'campaigns.preview': async (job) => {
+        const result = await handlePreviewJob(
+          { db: dbHandle.db, events, jobs, cipher, log: logger.child({ component: 'campaigns_preview' }) },
+          job as JobWithMetadata<unknown>,
+        )
+        logger.debug({ jobId: job.id, result }, 'campaigns.preview')
       },
       // Story 6.3: xoá ảnh bài không gắn vào bài nào quá 7 ngày (dòng + file Cloudinary).
       'content.media_gc': async () => {

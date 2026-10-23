@@ -1,6 +1,6 @@
 // Cron `content.requeue` (Story 6.4, AD-13): vá đường đăng khi job bị mất hoặc worker chết giữa chừng.
 // - Target `scheduled` quá giờ hơn 10 phút mà không còn job `publish.target` sống (chờ / chờ retry / đang chạy) cùng
-//   `{targetId, scheduleVersion}` → enqueue lại (job tự bỏ qua nếu lịch vừa đổi). `held` (Epic 7) chưa có cột.
+//   `{targetId, scheduleVersion}` → enqueue lại (job tự bỏ qua nếu lịch vừa đổi). Target `held` (AD-15) không enqueue lại.
 // - Target `publishing` quá 15 phút → `failed` `PUBLISH_UNKNOWN` + `post_target.failed`: có thể bài đã lên, không tự đăng
 //   lại (chủ shop kiểm trang rồi "Đăng lại").
 import type { PostTargetStatus } from '@ottm/shared'
@@ -34,7 +34,9 @@ export async function requeueTargets(deps: RequeueDeps): Promise<RequeueResult> 
   const overdue = await deps.db
     .select({ id: postTargets.id, scheduleVersion: postTargets.scheduleVersion })
     .from(postTargets)
-    .where(and(eq(postTargets.status, 'scheduled'), lt(postTargets.scheduledAt, new Date(now.getTime() - REQUEUE_OVERDUE_MS))))
+    .where(
+      and(eq(postTargets.status, 'scheduled'), eq(postTargets.held, false), lt(postTargets.scheduledAt, new Date(now.getTime() - REQUEUE_OVERDUE_MS))),
+    )
     .orderBy(asc(postTargets.scheduledAt))
     .limit(REQUEUE_BATCH)
   let requeued = 0
@@ -50,9 +52,9 @@ export async function requeueTargets(deps: RequeueDeps): Promise<RequeueResult> 
       .update(postTargets)
       .set({ status: 'failed' satisfies PostTargetStatus, errorCode: 'PUBLISH_UNKNOWN', version: sql`${postTargets.version} + 1`, updatedAt: sql`now()` })
       .where(and(eq(postTargets.status, 'publishing'), lt(postTargets.publishingAt, new Date(now.getTime() - PUBLISHING_STUCK_MS))))
-      .returning({ id: postTargets.id, pageId: postTargets.pageId, version: postTargets.version })
+      .returning({ id: postTargets.id, pageId: postTargets.pageId, campaignId: postTargets.campaignId, version: postTargets.version })
     for (const r of rows) {
-      await deps.events.publishEvent(tx, 'post_target.failed', { id: r.id, pageId: r.pageId, campaignId: null, errorCode: 'PUBLISH_UNKNOWN', version: r.version })
+      await deps.events.publishEvent(tx, 'post_target.failed', { id: r.id, pageId: r.pageId, campaignId: r.campaignId, errorCode: 'PUBLISH_UNKNOWN', version: r.version })
     }
     return rows.length
   })

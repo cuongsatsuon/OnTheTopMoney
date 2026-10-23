@@ -55,6 +55,9 @@ export const EVENTS = {
   'post_target.published': event(true, { pageId: Id, campaignId: Id.nullable() }),
   'post_target.failed': event(true, { pageId: Id, campaignId: Id.nullable(), errorCode: ErrorCode }),
   'post_target.cancelled': event(true, { pageId: Id, campaignId: Id.nullable() }),
+  // Story 7.2: nội dung / trạng thái slot đổi ngoài request của chủ shop (AI sinh xong caption / ảnh) hoặc do Sửa / Tạo lại
+  // — web làm cũ xem trước chiến dịch + Lịch.
+  'post_target.updated': event(true, { pageId: Id, campaignId: Id.nullable() }),
   'campaign.paused': event(true, { reason: PauseReason }),
   'campaign.resumed': event(true, {}),
   'campaign.completed': event(true, {}),

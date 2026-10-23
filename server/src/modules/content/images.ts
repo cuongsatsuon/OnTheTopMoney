@@ -7,6 +7,8 @@
 // - Chỉ lỗi tạm của OpenAI (`RATE_LIMITED`, 5xx) ném để retry; lần thử cuối ghi `failed`.
 // - Kho lỗi sau khi đã có ảnh → `failed` luôn: thử lại là gọi OpenAI (tính tiền) thêm lần nữa.
 // - `job.signal` (pg-boss huỷ khi job quá hạn) đi xuống gateway: huỷ thì ném lại, không ghi — lượt thử sau làm tiếp.
+// - Story 7.2: ô gắn sẵn vào slot chiến dịch → tính chi phí `campaign_generate` theo trang của slot; xong / lỗi thì đẩy slot
+//   `planned` sang `pending_approval` cùng transaction (`slots.settleSlotImage`).
 // `ai` không chạm `media_assets` (gateway chỉ trả bytes + ghi `ai_usage`). Không log prompt / mô tả.
 import {
   IMAGE_GENERATE_COUNT,
@@ -26,6 +28,7 @@ import { detectImageMime } from '../profiles/index.ts'
 import { getOpenAiPrefs } from '../settings/index.ts'
 import { toGeneratedImageDto } from './media.ts'
 import { mediaAssets } from './schema.ts'
+import { settleSlotImage, slotOfAsset } from './slots.ts'
 
 export interface RequestImagesDeps {
   db: Db
@@ -103,7 +106,10 @@ async function markFailed(deps: ImageGenerateDeps, id: string, code: ImageErrorC
       .set({ status: 'failed', errorCode: code })
       .where(and(eq(mediaAssets.id, id), eq(mediaAssets.status, 'pending')))
       .returning({ id: mediaAssets.id })
-    if (row) await deps.events.publishEvent(tx, 'media_asset.failed', { id, errorCode: code })
+    if (row) {
+      await deps.events.publishEvent(tx, 'media_asset.failed', { id, errorCode: code })
+      await settleSlotImage(tx, deps.events, id, code)
+    }
     return !!row
   })
   deps.log?.warn({ mediaAssetId: id, code, cause }, 'content: sinh ảnh AI lỗi')
@@ -124,9 +130,18 @@ export async function generateImageAsset(
   if (!row.prompt) return markFailed(deps, id, 'IMAGE_FAILED', 'PROMPT_MISSING')
 
   const size = postImageSize((await getOpenAiPrefs(deps.db)).imageSize)
+  const slot = await slotOfAsset(deps.db, id)
   let image: Buffer
   try {
-    const res = await generateImage(deps, { feature: 'image_generate', ref: id, prompt: row.prompt, n: 1, size, ...(opts.signal ? { signal: opts.signal } : {}) })
+    const res = await generateImage(deps, {
+      feature: slot ? 'campaign_generate' : 'image_generate',
+      ...(slot ? { pageId: slot.pageId } : {}),
+      ref: id,
+      prompt: row.prompt,
+      n: 1,
+      size,
+      ...(opts.signal ? { signal: opts.signal } : {}),
+    })
     image = res.images[0]!
   } catch (err) {
     if (opts.signal?.aborted) throw err
@@ -152,7 +167,10 @@ export async function generateImageAsset(
         .set({ status: 'ready', publicId: put.publicId, url: put.url, width: put.width, height: put.height, bytes: put.bytes, format: put.format })
         .where(and(eq(mediaAssets.id, id), eq(mediaAssets.status, 'pending')))
         .returning({ id: mediaAssets.id })
-      if (updated) await deps.events.publishEvent(tx, 'media_asset.created', { id })
+      if (updated) {
+        await deps.events.publishEvent(tx, 'media_asset.created', { id })
+        await settleSlotImage(tx, deps.events, id, null)
+      }
       return !!updated
     })
   } catch (err) {

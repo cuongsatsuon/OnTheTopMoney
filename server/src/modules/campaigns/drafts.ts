@@ -2,7 +2,8 @@
 // `campaign_pages`. Body đã qua `SaveCampaignRequest` (shared — gồm tổng tỉ lệ = 100%); ở đây kiểm phần cần dữ liệu:
 // trang tồn tại + chọn được (`pages.ts`), nhóm nhãn tồn tại và chứa các trang, ngày bắt đầu không ở quá khứ (giờ VN).
 // Mọi lỗi gom thành một `VALIDATION_FAILED` với `path` trỏ đúng ô (FE báo dưới ô, về đúng bước).
-// Chưa tạo slot / bài (Story 7.2+) và chưa đổi trạng thái chiến dịch (7.3+).
+// Story 7.2: bài xem trước đồng bộ theo cấu hình ở `preview.ts` (route gọi trong cùng transaction lưu). PUT mang
+// `baseUpdatedAt` khác bản hiện tại → 409 (nháp đã đổi ở tab khác). Chưa đổi trạng thái chiến dịch (7.3+).
 import {
   CAMPAIGN_START_MAX_AHEAD_DAYS,
   type CampaignDto,
@@ -88,12 +89,15 @@ export async function createCampaignDraft(tx: DbExecutor, input: ParsedSaveCampa
 
 /**
  * Thay toàn bộ cấu hình của một nháp (khoá dòng chiến dịch để hai lần lưu không đan nhau). Không có → 404; đã rời
- * `draft` → 409 (v1 không sửa cấu hình chiến dịch đang chạy — AD-15 Deferred).
+ * `draft` → 409 (v1 không sửa cấu hình chiến dịch đang chạy — AD-15 Deferred); `baseUpdatedAt` lệch → 409.
  */
 export async function updateCampaignDraft(tx: DbExecutor, id: string, input: ParsedSaveCampaignRequest, now: Date): Promise<CampaignDto> {
-  const [current] = await tx.select({ status: campaigns.status }).from(campaigns).where(eq(campaigns.id, id)).for('update')
+  const [current] = await tx.select({ status: campaigns.status, updatedAt: campaigns.updatedAt }).from(campaigns).where(eq(campaigns.id, id)).for('update')
   if (!current) throw new AppError('NOT_FOUND', 404, { message: 'Chiến dịch không tồn tại', details: { campaignId: id } })
   if (current.status !== ('draft' satisfies CampaignStatus)) throw new AppError('VERSION_CONFLICT', 409, { message: 'Chiến dịch đã rời trạng thái nháp' })
+  if (input.baseUpdatedAt !== undefined && input.baseUpdatedAt !== current.updatedAt.toISOString()) {
+    throw new AppError('VERSION_CONFLICT', 409, { message: 'Nháp đã đổi ở nơi khác', details: { campaignId: id, updatedAt: current.updatedAt.toISOString() } })
+  }
   await assertDraftValid(tx, input, now)
   await tx.update(campaigns).set({ ...columnsOf(input), updatedAt: sql`now()` }).where(eq(campaigns.id, id))
   await tx.delete(campaignTopics).where(eq(campaignTopics.campaignId, id))

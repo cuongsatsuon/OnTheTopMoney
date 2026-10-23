@@ -5,7 +5,7 @@
 export const MODULE = 'content'
 
 // Bài + đích từng trang: một cửa tạo (AD-13), sửa nháp, đọc.
-export { createPost, getPost, updateDraftPost, type CreatePostInput } from './posts.ts'
+export { createPost, getPost, updateDraftPost, type CreateManualPostInput, type CreatePostInput, type CreateSlotPostInput } from './posts.ts'
 // Luật nền tảng phía server (cùng bảng `packages/shared` với FE) — gọi trước mọi chuyển tới `scheduled`.
 export { assertPublishable } from './publishable.ts'
 // Lên lịch và đăng (Story 6.4, AD-13): chuyển trạng thái do chủ shop bấm; job `publish.target`; cron `content.requeue`.
@@ -27,7 +27,21 @@ export { PUBLISHING_STUCK_MS, REQUEUE_OVERDUE_MS, requeueTargets, type RequeueDe
 // Ảnh bài (AD-14): kiểm bytes trước khi tải lên kho công khai, ghi `media_assets` sau.
 export { POST_IMAGE_VALIDATION, recordMediaAsset, toGeneratedImageDto, toMediaAssetDto, validatePostImage } from './media.ts'
 // Viết caption bằng AI theo hồ sơ từng trang (Story 6.2) — chạy trong request, không lưu bài.
-export { COMPOSE_CONCURRENCY, composeCaptions, type ComposeDeps } from './compose.ts'
+export { AI_STOP_CODES, COMPOSE_CONCURRENCY, composeCaptionForPage, composeCaptions, type ComposeBrief, type ComposeDeps } from './compose.ts'
+// Slot chiến dịch (Story 7.2, AD-13, AD-15): tạo / dọn slot theo kế hoạch của `campaigns`, sinh caption + ảnh, đọc xem trước.
+export {
+  SlotGenerateRetryableError,
+  ensureCampaignSlots,
+  failSlot,
+  generateSlot,
+  listCampaignSlots,
+  listSlotsToGenerate,
+  pruneCampaignSlots,
+  slotCampaignOf,
+  type SlotGenerateDeps,
+  type SlotOutcome,
+  type SlotPlan,
+} from './slots.ts'
 // Sinh ảnh AI (Story 6.3, AD-14): yêu cầu 4 ô + job `content.image.generate`; cron dọn ảnh không gắn bài.
 export {
   ImageGenerateRetryableError,

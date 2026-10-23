@@ -71,6 +71,8 @@ export interface QueuePayloads {
   /** Story 6.4: đăng một target đúng phiên bản lịch (lệch → job bỏ qua im lặng). */
   'publish.target': { targetId: string; scheduleVersion: number }
   'content.requeue': Record<string, never>
+  /** Story 7.2: sinh bài xem trước của một chiến dịch nháp (stately theo `campaignId`). */
+  'campaigns.preview': { campaignId: string }
   /** Story 4.5: tin của chính trang chưa khớp tin nào của app — bản chuẩn hoá (dạng JSON) để thử khớp lại. */
   'inbox.echo_match': {
     pageId: string
@@ -378,6 +380,22 @@ export const QUEUES = {
     concurrency: 1,
     expireInSeconds: 120,
     cron: { expression: '*/15 * * * *', tz: CRON_TZ },
+  },
+  // Module `campaigns` (Story 7.2, AD-15, AD-24): sinh 7 bài xem trước của chiến dịch nháp (caption theo hồ sơ từng trang;
+  // ảnh đi job `content.image.generate`). `stately` theo `campaignId`: tối đa một lượt chờ + một lượt chạy mỗi chiến dịch —
+  // lưu lại / "Tạo lại" trong lúc đang chạy gộp vào đúng MỘT lượt kế tiếp. Idempotent (slot đã sinh bỏ qua; mọi lần ghi
+  // `UPDATE … WHERE status='planned'`) nên retry an toàn. Chỉ lỗi tạm của OpenAI ném để retry; lần cuối ghi mã lên slot.
+  // Retry 2 backoff, concurrency 2 (AD-24). Hạn 900 giây > 7 slot / 3 song song × 2 lời gọi (mỗi lời ≤120 giây). Hỏi job
+  // 0,5 giây để bước 4 bắt đầu ngay.
+  'campaigns.preview': {
+    policy: 'stately',
+    singletonKey: (data: { campaignId: string }) => data.campaignId,
+    retryLimit: 2,
+    retryDelay: 10,
+    retryBackoff: true,
+    concurrency: 2,
+    expireInSeconds: 900,
+    pollingIntervalSeconds: 0.5,
   },
 } as const satisfies { [N in keyof QueuePayloads]: QueueDef }
 

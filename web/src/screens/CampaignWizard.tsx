@@ -2,18 +2,59 @@
 // đích (nhóm hoặc từng trang, tần suất riêng; trang mất kết nối / thiếu hồ sơ mờ kèm lý do), chủ đề + tỉ lệ, khung giờ,
 // tỉ lệ ảnh AI, chế độ duyệt. Sang bước 4 thì lưu nháp (`POST`/`PUT /campaigns`, URL thành `?id=<id>` để mở lại);
 // lỗi validate (web kiểm sớm bằng schema shared, server kiểm lại) về đúng bước, báo dưới ô.
-// Bước 4 (xem trước 7 bài — Story 7.2) và "Bắt đầu chiến dịch" (Story 7.3) khoá kèm "Sắp có".
-import { type CampaignDuration, type CampaignFrequency, type CampaignGoal, type PageDto, CAMPAIGN_FREQUENCIES } from '@ottm/shared'
-import { ArrowLeft, ArrowRight, Check, CircleCheck, ImageIcon, MessageCircleHeart, Plus, Rocket, ShieldCheck, ShoppingBag, Sparkles, UserPlus, X, Zap } from 'lucide-react'
+// Story 7.2: bước 4 xem trước 7 bài đầu — AI viết trên worker (slot thật của chiến dịch, chưa đăng được), thẻ tự cập nhật
+// (SSE + hỏi lại khi còn bài đang viết); Sửa / Xoá / Tạo lại từng bài. "Bắt đầu chiến dịch" (Story 7.3) khoá "Sắp có".
+import { type CampaignDuration, type CampaignFrequency, type CampaignGoal, type CampaignSlotDto, type PageDto, CAMPAIGN_FREQUENCIES } from '@ottm/shared'
+import {
+  ArrowLeft,
+  ArrowRight,
+  Check,
+  CircleAlert,
+  CircleCheck,
+  ImageIcon,
+  MessageCircleHeart,
+  Pencil,
+  Plus,
+  RefreshCw,
+  Rocket,
+  ShieldCheck,
+  ShoppingBag,
+  Sparkles,
+  Trash2,
+  UserPlus,
+  X,
+  Zap,
+} from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import { AiLockHint } from '../components/AiLockHint'
 import { Content } from '../components/AppShell'
 import { Skeleton } from '../components/Skeleton'
-import { Button, Card, CardHeader, Chip, Field, GroupChip, Input, PageAvatar, PageHeader, PageLabel, Segmented, Select, StatusChip, cn } from '../components/ui'
+import {
+  AiBadge,
+  Button,
+  Card,
+  CardHeader,
+  Chip,
+  Field,
+  GroupChip,
+  Input,
+  PageAvatar,
+  PageHeader,
+  PageLabel,
+  Segmented,
+  Select,
+  StatusChip,
+  Textarea,
+  cn,
+} from '../components/ui'
+import { useAiBudget } from '../lib/ai-budget'
+import { isApiError } from '../lib/api'
 import { useApp } from '../lib/app-context'
 import {
   BLOCK_REASON_TEXT,
   CAMPAIGN_PARAM,
+  DRAFT_CONFLICT_TEXT,
   FREQUENCY_LABEL,
   GOALS,
   NO_ERRORS,
@@ -33,21 +74,30 @@ import {
   hasInstagram,
   initialForm,
   planTotals,
+  previewView,
   serverCampaignErrors,
   shortDay,
+  slotCanCancel,
+  slotCanEdit,
+  slotNote,
+  slotPhase,
+  slotWhen,
   splitEven,
   stepHasErrors,
   targetPages,
   topicSum,
   useCampaign,
   useCampaignPageOptions,
+  useCampaignPreview,
   useSaveCampaign,
+  useSlotAction,
   validateCampaign,
   type CampaignErrors,
   type CampaignForm,
   type PageOptions,
 } from '../lib/campaigns'
 import { todayKey } from '../lib/calendar'
+import { composeLock } from '../lib/composer'
 import { toUiPage, usePages } from '../lib/connections'
 import { errorMessageOf } from '../lib/error-messages'
 import { useGroups } from '../lib/groups'
@@ -86,6 +136,11 @@ export default function CampaignWizard() {
    * (mất dữ liệu đã nhập, về bước 1).
    */
   const [createdId, setCreatedId] = useState<string | null>(null)
+  /**
+   * `updatedAt` của nháp lúc nạp vào form (cập nhật sau mỗi lần chính tab này lưu) — PUT mang theo; tab khác đã lưu thì
+   * server trả 409 thay vì đè im lặng. Không lấy từ `campaignQuery.data` vì lần tải lại (focus cửa sổ) không nạp lại form.
+   */
+  const [baseUpdatedAt, setBaseUpdatedAt] = useState<string | null>(null)
   /** Lỗi đang hiện dưới ô — chỉ sau khi bấm "Tiếp tục" (tổng tỉ lệ có dòng trạng thái riêng, luôn hiện). */
   const [errors, setErrors] = useState<CampaignErrors>(NO_ERRORS)
   const [newTopic, setNewTopic] = useState('')
@@ -101,6 +156,7 @@ export default function CampaignWizard() {
   const awaitingUrl = createdId !== null && campaignId !== createdId
   if (!awaitingUrl && loadedKey !== initKey && groupsQuery.data && (!campaignId || campaignQuery.data)) {
     setForm(campaignId && campaignQuery.data ? formFromCampaign(campaignQuery.data) : initialForm(scope, groupsQuery.data))
+    setBaseUpdatedAt(campaignId ? (campaignQuery.data?.updatedAt ?? null) : null)
     setErrors(NO_ERRORS)
     setStep(1)
     setMaxStep(campaignId ? 3 : 1)
@@ -143,7 +199,8 @@ export default function CampaignWizard() {
   const maxPerDay = Math.max(1, ...plan)
   const sum = topicSum(form.topics)
   const name = form.name.trim() || autoName(form, active, groupList)
-  const body = buildCampaignBody(form, active, name)
+  // PUT mang `updatedAt` của nháp đã nạp: tab khác vừa lưu → 409 thay vì đè im lặng.
+  const body = buildCampaignBody(form, active, name, campaignId ? (baseUpdatedAt ?? undefined) : undefined)
   const withIg = hasInstagram(active)
 
   /* --- Hành động --- */
@@ -199,6 +256,7 @@ export default function CampaignWizard() {
       {
         onSuccess: (saved) => {
           setErrors(NO_ERRORS)
+          setBaseUpdatedAt(saved.updatedAt)
           if (saved.id !== campaignId) {
             setCreatedId(saved.id)
             setLoadedKey(saved.id)
@@ -217,7 +275,7 @@ export default function CampaignWizard() {
           if (fromServer) {
             setErrors(fromServer)
             show(fromServer.step!)
-          } else notify(errorMessageOf(err))
+          } else notify(isApiError(err) && err.code === 'VERSION_CONFLICT' ? DRAFT_CONFLICT_TEXT : errorMessageOf(err))
         },
       },
     )
@@ -588,18 +646,12 @@ export default function CampaignWizard() {
                   <CircleCheck size={18} className="mt-0.5 shrink-0 text-success" />
                   <div>
                     <div className="font-medium">Đã lưu bản nháp “{name}”</div>
-                    <div className="mt-0.5 text-[13px] text-muted-foreground">Quay lại các bước trước để chỉnh; mỗi lần sang bước này cấu hình được lưu lại.</div>
-                  </div>
-                </div>
-                <div className="flex items-start gap-3 rounded-md border border-dashed border-border px-4 py-6 text-sm text-muted-foreground">
-                  <Sparkles size={18} className="mt-0.5 shrink-0 text-ai" />
-                  <div>
-                    <div className="font-medium text-foreground">
-                      Xem trước 7 bài đầu <Chip className="ml-1">Sắp có</Chip>
+                    <div className="mt-0.5 text-[13px] text-muted-foreground">
+                      Quay lại các bước trước để chỉnh; mỗi lần sang bước này cấu hình được lưu lại và bài xem trước không còn khớp sẽ được viết lại.
                     </div>
-                    <div className="mt-0.5 text-[13px]">AI sẽ viết trước 7 bài đầu theo Hồ sơ thương hiệu của từng trang để bạn sửa, xoá hoặc tạo lại trước khi bắt đầu.</div>
                   </div>
                 </div>
+                {campaignId && <PreviewList campaignId={campaignId} pages={allPages} />}
               </div>
             </Card>
           )}
@@ -720,6 +772,148 @@ export default function CampaignWizard() {
         </div>
       </div>
     </Content>
+  )
+}
+
+/* ---------- Xem trước 7 bài đầu (Story 7.2) ---------- */
+
+function PreviewList({ campaignId, pages }: { campaignId: string; pages: readonly PageDto[] }) {
+  const { aiLock, notify } = useApp()
+  const budgetState = useAiBudget().data?.state
+  const lock = composeLock({ key: aiLock, budgetBlocked: budgetState === 'blocked', serverCode: null })
+  const query = useCampaignPreview(campaignId)
+  const act = useSlotAction(campaignId)
+  const [editing, setEditing] = useState<{ id: string; text: string } | null>(null)
+
+  if (query.isPending) {
+    return (
+      <div aria-busy="true" className="space-y-3">
+        {Array.from({ length: 3 }, (_, i) => (
+          <Skeleton key={i} className="h-28 rounded-lg" />
+        ))}
+      </div>
+    )
+  }
+  if (query.isError) {
+    return (
+      <div className="flex items-center justify-between rounded-md border border-border px-4 py-3 text-sm">
+        <span className="text-danger">{errorMessageOf(query.error)}</span>
+        <Button size="sm" onClick={() => void query.refetch()}>
+          Thử lại
+        </Button>
+      </div>
+    )
+  }
+
+  const { shown, removed, generating } = previewView(query.data.items)
+  const done = shown.filter((s) => slotPhase(s) === 'ready').length
+  const run = (slot: CampaignSlotDto, body: Parameters<typeof act.mutate>[0]['body'], onDone?: () => void) =>
+    act.mutate({ targetId: slot.id, body }, { onSuccess: () => onDone?.(), onError: (err) => notify(errorMessageOf(err)) })
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2 text-[13px] text-muted-foreground" role="status">
+        <Sparkles size={15} className="text-ai" />
+        {generating ? `AI đang viết… ${done}/${shown.length} bài xong` : `${shown.length} bài xem trước — chưa đăng cho tới khi bắt đầu chiến dịch`}
+        {removed > 0 && <span>· Đã bỏ {removed} bài</span>}
+      </div>
+      {shown.length === 0 && <p className="text-sm text-muted-foreground">Đã bỏ hết bài xem trước. Quay lại bước 3 để đổi cấu hình nếu muốn AI viết lại.</p>}
+      {shown.map((slot) => {
+        const page = pages.find((p) => p.id === slot.pageId)
+        const phase = slotPhase(slot)
+        const note = slotNote(slot.errorCode)
+        const isEditing = editing?.id === slot.id
+        return (
+          <div key={slot.id} className="rounded-lg border border-border bg-surface p-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="min-w-0 flex-1">{page ? <PageLabel page={toUiPage(page)} sub={slotWhen(slot.slotAt)} /> : <span className="text-sm">Trang đã gỡ</span>}</div>
+              {slot.topic && <Chip>{slot.topic}</Chip>}
+              {slot.aiCaption && <AiBadge />}
+            </div>
+
+            <div className="mt-3">
+              {phase === 'writing' ? (
+                <div className="space-y-2" aria-label="AI đang viết…">
+                  <Skeleton className="h-3.5 w-11/12" />
+                  <Skeleton className="h-3.5 w-9/12" />
+                  <p className="text-xs text-ai">AI đang viết…</p>
+                </div>
+              ) : isEditing ? (
+                <Textarea
+                  rows={5}
+                  value={editing.text}
+                  onChange={(e) => setEditing({ id: slot.id, text: e.target.value })}
+                  aria-label="Nội dung bài"
+                  className="w-full"
+                />
+              ) : (
+                slot.caption && <p className="text-sm whitespace-pre-line">{slot.caption}</p>
+              )}
+              {phase === 'image' && (
+                <div className="mt-3 flex size-24 items-center justify-center rounded-md bg-ai-soft/60 text-center text-[11px] text-ai">
+                  <ImageIcon size={14} className="mr-1" /> Đang tạo ảnh…
+                </div>
+              )}
+              {slot.media.length > 0 && (
+                <div className="mt-3 flex gap-2">
+                  {slot.media.map((m) => (
+                    <img key={m.id} src={m.url} alt="Ảnh AI của bài" width={96} height={96} className="size-24 rounded-md object-cover" />
+                  ))}
+                </div>
+              )}
+              {note && (
+                <p className="mt-2 flex items-start gap-1.5 text-[13px] text-amber-700">
+                  <CircleAlert size={14} className="mt-0.5 shrink-0" /> {note}
+                </p>
+              )}
+            </div>
+
+            <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
+              {isEditing ? (
+                <>
+                  <Button size="sm" variant="ghost" onClick={() => setEditing(null)} disabled={act.isPending}>
+                    Huỷ
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    disabled={act.isPending || !editing.text.trim()}
+                    onClick={() => run(slot, { action: 'edit', version: slot.version, caption: editing.text }, () => setEditing(null))}
+                  >
+                    Lưu
+                  </Button>
+                </>
+              ) : (
+                <>
+                  {slotCanEdit(slot) && (
+                    <Button size="sm" icon={<Pencil size={13} />} disabled={act.isPending} onClick={() => setEditing({ id: slot.id, text: slot.caption })}>
+                      Sửa
+                    </Button>
+                  )}
+                  {slotCanEdit(slot) && (
+                    <AiLockHint locked={lock.locked} hint={lock.hint} link={lock.link}>
+                      <Button
+                        size="sm"
+                        icon={<RefreshCw size={13} />}
+                        disabled={lock.locked || act.isPending}
+                        onClick={() => run(slot, { action: 'regenerate', version: slot.version })}
+                      >
+                        Tạo lại
+                      </Button>
+                    </AiLockHint>
+                  )}
+                  {slotCanCancel(slot) && (
+                    <Button size="sm" variant="ghost" icon={<Trash2 size={13} />} disabled={act.isPending} onClick={() => run(slot, { action: 'cancel', version: slot.version })}>
+                      Xoá
+                    </Button>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        )
+      })}
+    </div>
   )
 }
 
