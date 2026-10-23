@@ -15,6 +15,7 @@ import {
   listSubscriptionErrors,
   recordSubscribeError,
   subscribePage,
+  subscribedFieldsFor,
 } from '../src/modules/connections/index.ts'
 import { FAKE_IG, FAKE_PAGES, createFakeMetaGraph } from '../src/modules/connections/fake-meta.ts'
 import { createDb, type DbHandle } from '../src/platform/db/index.ts'
@@ -76,6 +77,8 @@ async function insertPage(opts: {
   removed?: boolean
   subscribedAt?: Date | null
   subscribeError?: string | null
+  /** Chuỗi field của lần đăng ký trước; mặc định = chuỗi hiện tại khi có `subscribedAt`. */
+  subscribedFields?: string | null
 }): Promise<string> {
   const [page] = await handle.sql<{ id: string }[]>`
     insert into pages (platform, platform_account_id, name, connection_status, removed_at)
@@ -85,15 +88,19 @@ async function insertPage(opts: {
   const pageId = page!.id
   const accessToken = opts.tokenSourcePageId ? null : cipher.encrypt(opts.tokenPlain ?? `FAKE_PAGE_${opts.accountId}_seed`)
   await handle.sql`
-    insert into page_credentials (page_id, access_token, token_source_page_id, webhook_subscribed_at, webhook_subscribe_error)
+    insert into page_credentials (page_id, access_token, token_source_page_id, webhook_subscribed_at, webhook_subscribe_error,
+                                  webhook_subscribed_fields)
     values (${pageId}, ${accessToken}, ${opts.tokenSourcePageId ?? null},
-            ${opts.subscribedAt ? opts.subscribedAt.toISOString() : null}::timestamptz, ${opts.subscribeError ?? null})`
+            ${opts.subscribedAt ? opts.subscribedAt.toISOString() : null}::timestamptz, ${opts.subscribeError ?? null},
+            ${opts.subscribedFields !== undefined ? opts.subscribedFields : opts.subscribedAt ? subscribedFieldsFor(opts.platform) : null})`
   return pageId
 }
 
 const credOf = async (pageId: string) =>
-  (await handle.sql<{ webhook_subscribed_at: string | null; webhook_subscribe_error: string | null; updated_at: string }[]>`
-    select webhook_subscribed_at, webhook_subscribe_error, updated_at from page_credentials where page_id = ${pageId}`)[0]!
+  (
+    await handle.sql<{ webhook_subscribed_at: string | null; webhook_subscribe_error: string | null; webhook_subscribed_fields: string | null; updated_at: string }[]>`
+    select webhook_subscribed_at, webhook_subscribe_error, webhook_subscribed_fields, updated_at from page_credentials where page_id = ${pageId}`
+  )[0]!
 const statusOf = async (pageId: string) =>
   (await handle.sql<{ connection_status: string }[]>`select connection_status from pages where id = ${pageId}`)[0]!.connection_status
 
@@ -150,7 +157,7 @@ describe('confirmConnections — enqueue connections.subscribe_page trong cùng 
   const fb = () => ({ ...fbCandidate, tokenEnvelope: cipher.encrypt(`FAKE_PAGE_${FAKE_PAGES.beauty.id}_x`) })
   const th = () => ({ ...threadsCandidate, tokenEnvelope: cipher.encrypt('FAKE_TH_LONG_full_x') })
 
-  it('xác nhận 1 Fanpage → đúng 1 job; job đăng ký đủ 4 field, đặt webhook_subscribed_at', async () => {
+  it('xác nhận 1 Fanpage → đúng 1 job; job đăng ký đủ field, đặt webhook_subscribed_at + chuỗi field', async () => {
     const resultId = await seedResult([fb()])
     const { pages } = await confirmConnections({ db: handle.db, events, jobs, now: () => NOW }, {
       sessionId: SESSION,
@@ -164,13 +171,16 @@ describe('confirmConnections — enqueue connections.subscribe_page trong cùng 
     const calls = subscribeCalls()
     expect(calls).toHaveLength(1)
     expect(calls[0]!.path).toBe(`/${FAKE_PAGES.beauty.id}/subscribed_apps`)
-    expect(calls[0]!.options.params?.subscribed_fields).toBe('messages,messaging_postbacks,message_echoes,feed')
-    expect(PAGE_SUBSCRIBED_FIELDS).toBe('messages,messaging_postbacks,message_echoes,feed')
+    // Story 4.5: thêm "đã nhận / đã xem" của tin outbound.
+    const fields = 'messages,messaging_postbacks,message_echoes,message_deliveries,message_reads,feed'
+    expect(calls[0]!.options.params?.subscribed_fields).toBe(fields)
+    expect(PAGE_SUBSCRIBED_FIELDS).toBe(fields)
     expect(calls[0]!.options.tier).toBe('background')
     expect(calls[0]!.options.token).toMatch(new RegExp(`^FAKE_PAGE_${FAKE_PAGES.beauty.id}_`))
     const cred = await credOf(pages[0]!.id)
     expect(new Date(cred.webhook_subscribed_at!).toISOString()).toBe(NOW.toISOString())
     expect(cred.webhook_subscribe_error).toBeNull()
+    expect(cred.webhook_subscribed_fields).toBe(fields)
   })
 
   it('xác nhận IG (tự gồm Fanpage nguồn) → job cho cả hai; IG đăng ký trên Fanpage nguồn', async () => {
@@ -345,6 +355,21 @@ describe('enqueueMissingSubscriptions — chạy bù', () => {
     expect((await queuedPageIds()).sort()).toEqual([a, b].sort())
 
     for (const id of await queuedPageIds()) await subscribePage(deps(), id)
+    expect(await enqueueMissingSubscriptions(handle.db, jobs)).toBe(0)
+  })
+
+  it('Story 4.5: trang đã đăng ký với chuỗi field cũ / chưa ghi chuỗi → chạy bù đăng ký lại; có lỗi → không', async () => {
+    const old = await insertPage({ platform: 'facebook', accountId: FAKE_PAGES.beauty.id, subscribedAt: NOW, subscribedFields: 'messages,messaging_postbacks,message_echoes,feed' })
+    const legacy = await insertPage({ platform: 'threads', accountId: 'TH_LEGACY', subscribedAt: NOW, subscribedFields: null })
+    await insertPage({ platform: 'facebook', accountId: FAKE_PAGES.home.id, subscribedAt: NOW })
+    await insertPage({ platform: 'facebook', accountId: 'P_ERR_OLD', subscribedAt: NOW, subscribedFields: 'messages', subscribeError: 'PERMISSION_DENIED' })
+
+    expect(await enqueueMissingSubscriptions(handle.db, jobs)).toBe(2)
+    expect((await queuedPageIds()).sort()).toEqual([old, legacy].sort())
+    for (const id of [old, legacy]) await subscribePage(deps(), id)
+    expect((await credOf(old)).webhook_subscribed_fields).toBe(PAGE_SUBSCRIBED_FIELDS)
+    expect((await credOf(legacy)).webhook_subscribed_fields).toBe(subscribedFieldsFor('threads'))
+    await handle.sql`delete from pgboss.job where name = ${QUEUE}`
     expect(await enqueueMissingSubscriptions(handle.db, jobs)).toBe(0)
   })
 

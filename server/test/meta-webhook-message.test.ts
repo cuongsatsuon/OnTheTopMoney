@@ -1,7 +1,14 @@
 // Story 4.3 — adapters/meta: chuẩn hoá mục `messaging` (Messenger / IG Direct) và tải đính kèm từ CDN Meta
-// (allowlist host, redirect phải vẫn là CDN Meta, giới hạn byte, phân loại lỗi). Thuần, không gọi mạng.
+// (allowlist host, redirect phải vẫn là CDN Meta, giới hạn byte, phân loại lỗi). Story 4.5: echo của chính trang,
+// "đã nhận / đã xem". Thuần, không gọi mạng.
 import { describe, expect, it } from 'vitest'
-import { ATTACHMENT_MAX_BYTES, downloadWebhookAttachment, isAllowedAttachmentUrl, normalizeMessagingItem } from '../src/adapters/meta/index.ts'
+import {
+  ATTACHMENT_MAX_BYTES,
+  downloadWebhookAttachment,
+  isAllowedAttachmentUrl,
+  normalizeMessagingItem,
+  normalizeMessagingReceipt,
+} from '../src/adapters/meta/index.ts'
 
 const PAGE = 'PAGE_1'
 const NOW = new Date('2026-10-23T03:00:00.000Z')
@@ -51,21 +58,95 @@ describe('normalizeMessagingItem', () => {
   })
 
   it.each([
-    ['echo', item({ mid: 'm', text: 'x', is_echo: true })],
     ['deleted', item({ mid: 'm', is_deleted: true })],
     ['not_message', item(undefined, { postback: { payload: 'P' } })],
     ['not_message', item(undefined, { reaction: { mid: 'm', reaction: 'love' } })],
     ['not_message', item(undefined, { read: { watermark: 1 } })],
     ['malformed', item({ text: 'thiếu mid' })],
     ['malformed', { message: { mid: 'm', text: 'thiếu sender' } }],
-    ['from_page', { sender: { id: PAGE }, message: { mid: 'm', text: 'x' } }],
+    // Echo phải biết khách nhận: thiếu `recipient.id` / người nhận là chính trang / thiếu mid.
+    ['malformed', { sender: { id: PAGE }, message: { mid: 'm', text: 'x', is_echo: true } }],
+    ['malformed', item({ mid: 'm', text: 'x', is_echo: true })],
+    ['malformed', { sender: { id: PAGE }, recipient: { id: 'PSID_1' }, message: { text: 'x', is_echo: true } }],
   ] as const)('%s → skip', (reason, raw) => {
     expect(normalizeMessagingItem(raw, PAGE, NOW)).toEqual({ kind: 'skip', reason })
+  })
+
+  it('Story 4.5: echo (`is_echo`) → khách = người nhận, kèm app_id (số → chuỗi) + metadata + đính kèm', () => {
+    const raw = {
+      sender: { id: PAGE },
+      recipient: { id: 'PSID_1' },
+      timestamp: 1_792_000_000_000,
+      message: {
+        mid: 'm_e',
+        is_echo: true,
+        app_id: 263902037430900,
+        metadata: '0190aaaa-0000-7000-8000-000000000001',
+        text: 'Dạ shop chào chị',
+        attachments: [{ type: 'image', payload: { url: 'https://scontent.xx.fbcdn.net/a.jpg' } }],
+      },
+    }
+    expect(normalizeMessagingItem(raw, PAGE, NOW)).toEqual({
+      kind: 'echo',
+      customerId: 'PSID_1',
+      mid: 'm_e',
+      timestamp: new Date(1_792_000_000_000),
+      text: 'Dạ shop chào chị',
+      attachments: [{ kind: 'image', url: 'https://scontent.xx.fbcdn.net/a.jpg' }],
+      appId: '263902037430900',
+      metadata: '0190aaaa-0000-7000-8000-000000000001',
+    })
+  })
+
+  it('Story 4.5: người gửi là chính trang dù không có cờ echo → echo; không app_id/metadata → null', () => {
+    expect(normalizeMessagingItem({ sender: { id: PAGE }, recipient: { id: 'IGSID_1' }, message: { mid: 'm', text: 'x' } }, PAGE, NOW)).toEqual({
+      kind: 'echo',
+      customerId: 'IGSID_1',
+      mid: 'm',
+      timestamp: NOW,
+      text: 'x',
+      attachments: [],
+      appId: null,
+      metadata: null,
+    })
   })
 
   it('không có `timestamp` → dùng `now`; chữ toàn khoảng trắng → null', () => {
     const dm = normalizeMessagingItem({ sender: { id: 'U' }, message: { mid: 'm', text: '   ' } }, PAGE, NOW)
     expect(dm).toMatchObject({ kind: 'dm', timestamp: NOW, text: null, recipientId: PAGE })
+  })
+})
+
+describe('normalizeMessagingReceipt (Story 4.5)', () => {
+  it('Messenger delivery → delivered (mids + watermark); read → read (watermark); IG read → mid, không mốc', () => {
+    expect(normalizeMessagingReceipt(item(undefined, { delivery: { mids: ['m_1', 'm_2'], watermark: 1_792_000_000_500 } }), PAGE)).toEqual({
+      kind: 'receipt',
+      status: 'delivered',
+      customerId: 'PSID_1',
+      mids: ['m_1', 'm_2'],
+      watermark: new Date(1_792_000_000_500),
+    })
+    expect(normalizeMessagingReceipt(item(undefined, { read: { watermark: 1_792_000_000_900 } }), PAGE)).toEqual({
+      kind: 'receipt',
+      status: 'read',
+      customerId: 'PSID_1',
+      mids: [],
+      watermark: new Date(1_792_000_000_900),
+    })
+    expect(normalizeMessagingReceipt(item(undefined, { read: { mid: 'ig_m' } }), PAGE)).toEqual({
+      kind: 'receipt',
+      status: 'read',
+      customerId: 'PSID_1',
+      mids: ['ig_m'],
+      watermark: null,
+    })
+  })
+
+  it('không phải receipt / thiếu mốc lẫn mid / khách là chính trang → skip', () => {
+    expect(normalizeMessagingReceipt(item({ mid: 'm', text: 'x' }), PAGE)).toEqual({ kind: 'skip', reason: 'not_receipt' })
+    expect(normalizeMessagingReceipt(item(undefined, { delivery: {} }), PAGE)).toEqual({ kind: 'skip', reason: 'malformed' })
+    expect(normalizeMessagingReceipt({ sender: { id: PAGE }, read: { watermark: 1 } }, PAGE)).toEqual({ kind: 'skip', reason: 'malformed' })
+    expect(normalizeMessagingReceipt({ read: { watermark: 1 } }, PAGE)).toEqual({ kind: 'skip', reason: 'malformed' })
   })
 })
 

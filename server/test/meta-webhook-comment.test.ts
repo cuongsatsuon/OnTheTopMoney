@@ -49,8 +49,16 @@ describe('normalizeFeedChange (FB feed)', () => {
     expect(normalizeFeedChange(feed({ verb: 'unhide' }), FB, NOW)).toEqual({ kind: 'unhide', commentId: 'POST_C1' })
   })
 
-  it('bình luận của chính trang → from_page; item khác / verb lạ → not_comment; thiếu id → malformed', () => {
-    expect(normalizeFeedChange(feed({ from: { id: 'PAGE_1', name: 'Shop' } }), FB, NOW)).toEqual({ kind: 'skip', reason: 'from_page' })
+  it('bình luận của chính trang → page_comment (Story 4.5); item khác / verb lạ → not_comment; thiếu id → malformed', () => {
+    expect(normalizeFeedChange(feed({ from: { id: 'PAGE_1', name: 'Shop' }, parent_id: 'POST_C0' }), FB, NOW)).toEqual({
+      kind: 'page_comment',
+      commentId: 'POST_C1',
+      parentId: 'POST_C0',
+      platformPostId: expect.any(String),
+      text: expect.anything(),
+      timestamp: expect.any(Date),
+      attachments: expect.any(Array),
+    })
     expect(normalizeFeedChange(feed({ item: 'reaction' }), FB, NOW)).toEqual({ kind: 'skip', reason: 'not_comment' })
     expect(normalizeFeedChange(feed({ item: 'status' }), FB, NOW)).toEqual({ kind: 'skip', reason: 'not_comment' })
     expect(normalizeFeedChange(feed({ verb: 'block' }), FB, NOW)).toEqual({ kind: 'skip', reason: 'not_comment' })
@@ -85,10 +93,14 @@ describe('normalizeInstagramComment (IG comments)', () => {
     })
   })
 
-  it('trả lời → parentId; của chính tài khoản (id hoặc username) → from_page; thiếu trường → malformed', () => {
+  it('trả lời → parentId; của chính tài khoản (id hoặc username) → page_comment; thiếu trường → malformed', () => {
     expect(normalizeInstagramComment(ig({ id: 'igc_2', parent_id: 'igc_1' }), IG, NOW)).toMatchObject({ parentId: 'igc_1' })
-    expect(normalizeInstagramComment(ig({ from: { id: 'IG_1', username: 'x' } }), IG, NOW)).toEqual({ kind: 'skip', reason: 'from_page' })
-    expect(normalizeInstagramComment(ig({ from: { id: 'other', username: '@Shop.IG' } }), IG, NOW)).toEqual({ kind: 'skip', reason: 'from_page' })
+    expect(normalizeInstagramComment(ig({ id: 'igc_3', parent_id: 'igc_1', from: { id: 'IG_1', username: 'x' } }), IG, NOW)).toMatchObject({
+      kind: 'page_comment',
+      commentId: 'igc_3',
+      parentId: 'igc_1',
+    })
+    expect(normalizeInstagramComment(ig({ from: { id: 'other', username: '@Shop.IG' } }), IG, NOW)).toMatchObject({ kind: 'page_comment', parentId: null })
     expect(normalizeInstagramComment(ig({ media: undefined }), IG, NOW)).toEqual({ kind: 'skip', reason: 'malformed' })
     expect(normalizeInstagramComment(ig({ id: undefined }), IG, NOW)).toEqual({ kind: 'skip', reason: 'malformed' })
     expect(normalizeInstagramComment({}, IG, NOW)).toEqual({ kind: 'skip', reason: 'not_comment' })
@@ -129,8 +141,12 @@ describe('normalizeThreadsReply (Threads replies)', () => {
     expect(c).toMatchObject({ parentId: 'r_1', author: { id: 'THU_9', username: 'thuha' }, attachments: [{ kind: 'image', url: 'https://scontent.cdninstagram.com/x.jpg' }] })
   })
 
-  it('trả lời của chính trang (username = handle) → from_page; thiếu root_post / username → malformed', () => {
-    expect(normalizeThreadsReply(reply({ username: 'Shop.Threads' }), TH, NOW)).toEqual({ kind: 'skip', reason: 'from_page' })
+  it('trả lời của chính trang (username = handle) → page_comment; thiếu root_post / username → malformed', () => {
+    expect(normalizeThreadsReply(reply({ id: 'r_3', username: 'Shop.Threads', replied_to: { id: 'r_1' } }), TH, NOW)).toMatchObject({
+      kind: 'page_comment',
+      commentId: 'r_3',
+      parentId: 'r_1',
+    })
     expect(normalizeThreadsReply(reply({ root_post: undefined }), TH, NOW)).toEqual({ kind: 'skip', reason: 'malformed' })
     expect(normalizeThreadsReply(reply({ username: undefined }), TH, NOW)).toEqual({ kind: 'skip', reason: 'malformed' })
   })

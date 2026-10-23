@@ -2,12 +2,15 @@
 // request (đã trả 200 ở POST):
 // - sự kiện thử (`test`) → `ignored` (chỉ nhật ký);
 // - trang không có trong DB / đã gỡ → `ignored` (lưu, không route, không tạo gì trong `inbox`);
-// - Story 4.3: mục `messages` của Fanpage/IG → chuẩn hoá qua `adapters/meta` → `inbox.ingest` → `routed`. Echo
-//   (Story 4.5), tin thu hồi, mục thiếu id, tin do chính trang gửi → `ignored`;
+// - Story 4.3: mục `messages` của Fanpage/IG → chuẩn hoá qua `adapters/meta` → `inbox.ingest` → `routed`. Tin thu hồi,
+//   mục thiếu id → `ignored`;
 // - Story 4.4: FB `feed`, IG `comments`, Threads `replies` → chuẩn hoá bình luận → bình luận mới `inbox.ingestComment`;
 //   sửa `inbox.updateMessageText`; xoá/ẩn `inbox.markMessageRemoved`; bỏ ẩn `inbox.markMessageUnhidden`. Không tìm thấy
-//   tin để sửa/xoá, bình luận của chính trang, mục không phải bình luận → `ignored`;
-// - loại khác (echo — Story 4.5, postback, reaction, delivery, read, mentions, không rõ) → `ignored`.
+//   tin để sửa/xoá, mục không phải bình luận → `ignored`;
+// - Story 4.5: tin/bình luận của chính trang (`message_echoes`, `is_echo`, tác giả = trang) → `inbox.ingestEcho` (luồng chưa
+//   có hội thoại → `ignored`); "đã nhận / đã xem" (`message_deliveries|message_reads`) → `inbox.markOutboundReceipt`
+//   (không có hội thoại / tin nào → `ignored`);
+// - loại khác (postback, reaction, mentions, không rõ) → `ignored`.
 // Idempotent theo khoá mục: ingest chống trùng theo `(page_id, platform_message_id)`, sửa/xoá lặp lại không đổi gì.
 import type { Platform, WebhookProduct } from '@ottm/shared'
 import { eq } from 'drizzle-orm'
@@ -15,6 +18,7 @@ import {
   normalizeFeedChange,
   normalizeInstagramComment,
   normalizeMessagingItem,
+  normalizeMessagingReceipt,
   normalizeThreadsReply,
   type CommentPageRef,
   type NormalizedComment,
@@ -22,7 +26,18 @@ import {
 import type { Db } from '../../platform/db/index.ts'
 import type { EventPublisher } from '../../platform/events/index.ts'
 import type { JobSender } from '../../platform/jobs/index.ts'
-import { ingestComment, ingestDm, markMessageRemoved, markMessageUnhidden, updateMessageText } from '../inbox/index.ts'
+import {
+  echoFromComment,
+  echoFromDm,
+  ingestComment,
+  ingestDm,
+  ingestEcho,
+  markMessageRemoved,
+  markMessageUnhidden,
+  markOutboundReceipt,
+  updateMessageText,
+  type EchoResult,
+} from '../inbox/index.ts'
 import { findPageByPlatformAccountId } from '../pages/index.ts'
 import { webhookEvents } from './schema.ts'
 
@@ -52,10 +67,19 @@ export interface RouteDeps {
   db: Db
   /** Phát `message.received` trong transaction ingest. */
   events: EventPublisher
-  /** Enqueue job đính kèm / hồ sơ khách trong transaction ingest. */
+  /** Enqueue job đính kèm / hồ sơ khách / thử khớp echo trong transaction ingest. */
   jobs: JobSender
+  /** Id app Meta/Threads của máy chủ (`META_APP_ID`…) — phân biệt echo của app mình với Business Suite (Story 4.5). */
+  appIds?: readonly string[] | undefined
   now?: () => Date
 }
+
+/** Tin của trang vào luồng chưa có hội thoại → chỉ lưu; còn lại (khớp, chèn, chờ thử lại, trùng) → đã route. */
+const echoStatus = (r: EchoResult): 'ignored' | 'routed' => (r.status === 'no_conversation' ? 'ignored' : 'routed')
+
+/** Field mục `messaging` mang tin (của khách hoặc của trang) / "đã nhận, đã xem". */
+const MESSAGE_FIELDS: ReadonlySet<string> = new Set(['messages', 'message_echoes'])
+const RECEIPT_FIELDS: ReadonlySet<string> = new Set(['message_deliveries', 'message_reads'])
 
 /** Nền tảng khả dĩ của một mục theo sản phẩm webhook — để không route chéo (meta ≠ threads). */
 export function platformsForProduct(product: WebhookProduct): readonly Platform[] {
@@ -83,15 +107,31 @@ export async function routeWebhookEvent(deps: RouteDeps, data: RouteJobData): Pr
     return 'ignored_no_page'
   }
 
-  // Story 4.3: tin nhắn Messenger / IG Direct → `inbox.ingest`. Threads không có DM.
-  if (event.field === 'messages') {
+  const inbox = { db: deps.db, events: deps.events, jobs: deps.jobs, appIds: deps.appIds, now: deps.now }
+
+  // Story 4.3: tin nhắn Messenger / IG Direct → `inbox.ingest`; Story 4.5: tin của chính trang → `inbox.ingestEcho`.
+  // Threads không có DM.
+  if (MESSAGE_FIELDS.has(event.field)) {
     let status: RouteResult = 'ignored'
     if (page.platform !== 'threads' && event.platformPageId) {
       const dm = normalizeMessagingItem(event.payload, event.platformPageId, deps.now?.() ?? new Date())
       if (dm.kind === 'dm') {
-        await ingestDm({ db: deps.db, events: deps.events, jobs: deps.jobs }, { pageId: page.id, message: dm })
+        await ingestDm(inbox, { pageId: page.id, message: dm })
         status = 'routed'
+      } else if (dm.kind === 'echo') {
+        status = echoStatus(await ingestEcho(inbox, { pageId: page.id, echo: echoFromDm(dm) }))
       }
+    }
+    await setStatus(deps.db, event.id, status, page.id)
+    return status
+  }
+
+  // Story 4.5: đã nhận / đã xem của tin trang gửi (Messenger `delivery`/`read`, IG `messaging_seen`).
+  if (RECEIPT_FIELDS.has(event.field)) {
+    let status: RouteResult = 'ignored'
+    if (page.platform !== 'threads' && event.platformPageId) {
+      const receipt = normalizeMessagingReceipt(event.payload, event.platformPageId)
+      if (receipt.kind === 'receipt' && (await markOutboundReceipt(inbox, { pageId: page.id, receipt })).status !== 'missing') status = 'routed'
     }
     await setStatus(deps.db, event.id, status, page.id)
     return status
@@ -102,12 +142,14 @@ export async function routeWebhookEvent(deps: RouteDeps, data: RouteJobData): Pr
   let status: RouteResult = 'ignored'
   if (normalize && event.platformPageId) {
     const comment = normalize(event.payload, { platformAccountId: event.platformPageId, handle: page.handle }, event.receivedAt)
-    const inbox = { db: deps.db, events: deps.events, jobs: deps.jobs }
     const ref = (commentId: string) => ({ pageId: page.id, platformMessageId: commentId })
     switch (comment.kind) {
       case 'comment':
         await ingestComment(inbox, { pageId: page.id, comment })
         status = 'routed'
+        break
+      case 'page_comment':
+        status = echoStatus(await ingestEcho(inbox, { pageId: page.id, echo: echoFromComment(comment) }))
         break
       case 'edit':
         if ((await updateMessageText(inbox, { ...ref(comment.commentId), text: comment.text, editedAt: comment.timestamp })) !== 'missing') status = 'routed'

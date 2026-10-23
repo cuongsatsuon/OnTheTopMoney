@@ -1,0 +1,1 @@
+ALTER TABLE "page_credentials" ADD COLUMN "webhook_subscribed_fields" text;

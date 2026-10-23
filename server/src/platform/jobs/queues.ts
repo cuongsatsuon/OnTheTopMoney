@@ -60,6 +60,21 @@ export interface QueuePayloads {
   'inbox.fetch_post_text': { conversationId: string }
   'inbox.send': { messageId: string }
   'inbox.send_sweep': Record<string, never>
+  /** Story 4.5: tin của chính trang chưa khớp tin nào của app — bản chuẩn hoá (dạng JSON) để thử khớp lại. */
+  'inbox.echo_match': {
+    pageId: string
+    echo: {
+      channel: 'dm' | 'comment'
+      threadRef: string | null
+      platformMessageId: string
+      text: string | null
+      /** ISO 8601. */
+      timestamp: string
+      attachments: { kind: string; url: string }[]
+      appId: string | null
+      metadata: string | null
+    }
+  }
 }
 
 export const QUEUES = {
@@ -244,6 +259,18 @@ export const QUEUES = {
     concurrency: 1,
     expireInSeconds: 60,
     cron: { expression: '*/5 * * * *', tz: CRON_TZ },
+  },
+  // Module `inbox` (Story 4.5, AD-20, AD-24): tin của chính trang (echo) chưa khớp tin nào app gửi → thử khớp lại.
+  // `webhook.route` thử lần đầu ngay rồi enqueue job `startAfter` 5 giây; chưa khớp thì handler ném để retry sau 5 giây
+  // (không backoff). Lần chạy thứ 3 chèn `app_unmatched` / `external_human`; lượt retry thứ 4 chỉ dự phòng lỗi bất ngờ
+  // (DB…). Idempotent: tin đã gắn id → `duplicate`. Hỏi job 0,5 giây như `webhook.route`.
+  'inbox.echo_match': {
+    policy: 'standard',
+    retryLimit: 3,
+    retryDelay: 5,
+    concurrency: 5,
+    expireInSeconds: 60,
+    pollingIntervalSeconds: 0.5,
   },
 } as const satisfies { [N in keyof QueuePayloads]: QueueDef }
 

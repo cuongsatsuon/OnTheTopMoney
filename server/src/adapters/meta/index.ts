@@ -53,13 +53,17 @@ export {
   downloadWebhookAttachment,
   isAllowedAttachmentUrl,
   normalizeMessagingItem,
+  normalizeMessagingReceipt,
   type AttachmentDownloadFailure,
   type AttachmentDownloadResult,
   type DmAttachment,
+  type DmEcho,
   type DmMessage,
+  type DmReceipt,
   type DmSkipReason,
   type DownloadOptions,
   type NormalizedDm,
+  type NormalizedReceipt,
 } from './webhook-message.ts'
 export {
   normalizeFeedChange,
@@ -74,4 +78,5 @@ export {
   type CommentUnhide,
   type NewComment,
   type NormalizedComment,
+  type PageComment,
 } from './webhook-comment.ts'

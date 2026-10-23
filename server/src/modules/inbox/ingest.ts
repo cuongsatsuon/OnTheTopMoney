@@ -93,15 +93,7 @@ export async function ingestDm(deps: IngestDeps, input: IngestDmInput): Promise<
  */
 export async function ingestComment(deps: IngestDeps, input: IngestCommentInput): Promise<IngestResult> {
   const { pageId, comment } = input
-  let threadKey = comment.commentId
-  if (comment.parentId) {
-    const [parent] = await deps.db
-      .select({ threadKey: conversations.threadKey })
-      .from(messages)
-      .innerJoin(conversations, eq(conversations.id, messages.conversationId))
-      .where(and(eq(messages.pageId, pageId), eq(messages.platformMessageId, comment.parentId), eq(conversations.channel, 'comment')))
-    threadKey = parent?.threadKey ?? comment.parentId
-  }
+  const threadKey = comment.parentId ? await commentThreadKey(deps.db, pageId, comment.parentId) : comment.commentId
   return ingestInbound(deps, {
     pageId,
     channel: 'comment',
@@ -114,6 +106,30 @@ export async function ingestComment(deps: IngestDeps, input: IngestCommentInput)
     attachments: comment.attachments,
     platformPostId: comment.platformPostId,
   })
+}
+
+/**
+ * Luồng (`thread_key`) của một trả lời trong luồng bình luận: hội thoại chứa tin `parentId` cùng trang, chưa có tin đó
+ * thì chính `parentId` (FB/IG: cha luôn là bình luận gốc). Dùng chung cho bình luận của khách và của trang (Story 4.5).
+ */
+export async function commentThreadKey(db: DbExecutor, pageId: string, parentId: string): Promise<string> {
+  const [parent] = await db
+    .select({ threadKey: conversations.threadKey })
+    .from(messages)
+    .innerJoin(conversations, eq(conversations.id, messages.conversationId))
+    .where(and(eq(messages.pageId, pageId), eq(messages.platformMessageId, parentId), eq(conversations.channel, 'comment')))
+  return parent?.threadKey ?? parentId
+}
+
+/** Đính kèm của một tin → dòng `pending` + job `inbox.fetch_attachment` (tải ngoài transaction), trong `tx` của bên gọi. */
+export async function insertAttachments(tx: DbExecutor, jobs: JobSender, messageId: string, attachments: readonly DmAttachment[]): Promise<void> {
+  for (const [position, attachment] of attachments.entries()) {
+    const [row] = await tx
+      .insert(messageAttachments)
+      .values({ messageId, position, kind: attachment.kind, sourceUrl: attachment.url })
+      .returning({ id: messageAttachments.id })
+    await jobs.send('inbox.fetch_attachment', { attachmentId: row!.id }, { db: bossDbFor(tx) })
+  }
 }
 
 /** Tên hiển thị của khách lấy từ payload bình luận (FB `from.name`, IG/Threads username). */
@@ -202,13 +218,7 @@ async function ingestInbound(deps: IngestDeps, input: InboundMessage): Promise<I
       throw new Error('inbox.ingest: tin trùng xuất hiện giữa transaction')
     }
 
-    for (const [position, attachment] of input.attachments.entries()) {
-      const [row] = await tx
-        .insert(messageAttachments)
-        .values({ messageId: inserted.id, position, kind: attachment.kind, sourceUrl: attachment.url })
-        .returning({ id: messageAttachments.id })
-      await deps.jobs.send('inbox.fetch_attachment', { attachmentId: row!.id }, { db: bossDbFor(tx) })
-    }
+    await insertAttachments(tx, deps.jobs, inserted.id, input.attachments)
 
     if (!newConversation) {
       const c = conv!

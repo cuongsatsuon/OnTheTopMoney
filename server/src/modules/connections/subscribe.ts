@@ -11,7 +11,7 @@
 // - `RATE_LIMITED` / `TRANSIENT` → ném để pg-boss retry (policy `connections.*`); hết retry → `FAILED`.
 // Trang đã gỡ hoặc mất kết nối lúc job chạy → bỏ qua, không lỗi.
 import { WEBHOOK_FIELDS, type PageSubscriptionError, type Platform, type WebhookSubscribeError } from '@ottm/shared'
-import { and, eq, isNotNull, isNull } from 'drizzle-orm'
+import { eq, isNotNull, isNull } from 'drizzle-orm'
 import type { SecretCipher } from '../../adapters/crypto/index.ts'
 import type { MetaClient, MetaErrorKind } from '../../adapters/meta/index.ts'
 import { bossDbFor, type Db, type DbExecutor } from '../../platform/db/index.ts'
@@ -26,6 +26,14 @@ import { markDisconnected, REASON_TOKEN_INVALID } from './token-check.ts'
 
 /** Field đăng ký trên Fanpage (cả khi đăng ký thay cho IG liên kết). */
 export const PAGE_SUBSCRIBED_FIELDS = WEBHOOK_FIELDS.page.join(',')
+
+/**
+ * Chuỗi field ghi nhận khi đăng ký thành công theo nền tảng (Story 4.5): FB/IG = field của Fanpage; Threads = field cấp
+ * app. Đổi danh sách field → chuỗi khác → chạy bù đăng ký lại.
+ */
+export function subscribedFieldsFor(platform: Platform): string {
+  return platform === 'threads' ? WEBHOOK_FIELDS.threads.join(',') : PAGE_SUBSCRIBED_FIELDS
+}
 
 export interface SubscribePageDeps {
   db: Db
@@ -60,10 +68,10 @@ function errorCodeOf(kind: MetaErrorKind): WebhookSubscribeError {
   return 'FAILED'
 }
 
-async function recordSuccess(db: DbExecutor, pageId: string, at: Date): Promise<void> {
+async function recordSuccess(db: DbExecutor, pageId: string, platform: Platform, at: Date): Promise<void> {
   await db
     .update(pageCredentials)
-    .set({ webhookSubscribedAt: at, webhookSubscribeError: null })
+    .set({ webhookSubscribedAt: at, webhookSubscribeError: null, webhookSubscribedFields: subscribedFieldsFor(platform) })
     .where(eq(pageCredentials.pageId, pageId))
 }
 
@@ -85,7 +93,7 @@ export async function subscribePage(deps: SubscribePageDeps, pageId: string): Pr
 
   // Threads: field `replies` bật ở cấp app; không có API theo tài khoản → ghi thành công, không gọi mạng.
   if (page.platform === 'threads') {
-    await recordSuccess(deps.db, pageId, now())
+    await recordSuccess(deps.db, pageId, page.platform, now())
     return { status: 'subscribed', network: false }
   }
 
@@ -127,7 +135,7 @@ export async function subscribePage(deps: SubscribePageDeps, pageId: string): Pr
       deps.log?.warn({ pageId, errorCode: 'REJECTED' }, 'connections: Meta từ chối đăng ký webhook trang')
       return { status: 'failed', errorCode: 'REJECTED' }
     }
-    await recordSuccess(deps.db, pageId, now())
+    await recordSuccess(deps.db, pageId, page.platform, now())
     deps.log?.info({ pageId, targetPageId: target.id }, 'connections: đã đăng ký webhook trang')
     return { status: 'subscribed', network: true }
   }
@@ -179,22 +187,23 @@ export async function enqueueSubscribePage(tx: DbExecutor, jobs: JobSender, page
 }
 
 /**
- * Chạy bù (worker khởi động): enqueue cho mọi trang chưa gỡ, không `disconnected`, chưa từng đăng ký
- * (`webhook_subscribed_at IS NULL AND webhook_subscribe_error IS NULL`). Chạy lại an toàn: job idempotent.
- * Trả số job đã enqueue.
+ * Chạy bù (worker khởi động): enqueue cho mọi trang chưa gỡ, không `disconnected`, không có lỗi đăng ký, và chưa từng
+ * đăng ký (`webhook_subscribed_at IS NULL`) hoặc đã đăng ký với chuỗi field khác hiện tại (Story 4.5: thêm field).
+ * Chạy lại an toàn: job idempotent. Trả số job đã enqueue.
  */
 export async function enqueueMissingSubscriptions(db: Db, jobs: JobSender): Promise<number> {
   return db.transaction(async (tx) => {
     const pages = (await listPages(tx)).filter((p) => p.connectionStatus !== 'disconnected')
     if (pages.length === 0) return 0
-    const pending = await tx
-      .select({ pageId: pageCredentials.pageId })
+    const rows = await tx
+      .select({ pageId: pageCredentials.pageId, at: pageCredentials.webhookSubscribedAt, fields: pageCredentials.webhookSubscribedFields })
       .from(pageCredentials)
-      .where(and(isNull(pageCredentials.webhookSubscribedAt), isNull(pageCredentials.webhookSubscribeError)))
-    const pendingIds = new Set(pending.map((r) => r.pageId))
+      .where(isNull(pageCredentials.webhookSubscribeError))
+    const stateOf = new Map(rows.map((r) => [r.pageId, r]))
     let count = 0
     for (const page of pages) {
-      if (!pendingIds.has(page.id)) continue
+      const state = stateOf.get(page.id)
+      if (!state || (state.at !== null && state.fields === subscribedFieldsFor(page.platform as Platform))) continue
       await enqueueSubscribePage(tx, jobs, page.id)
       count += 1
     }

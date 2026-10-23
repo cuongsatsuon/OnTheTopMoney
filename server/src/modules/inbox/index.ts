@@ -6,7 +6,31 @@
 // Story 4.4: ingest bình luận FB/IG + trả lời Threads, sửa/xoá/ẩn tin, caption bài được bình luận.
 // Story 4.6: lọc/đếm theo tab ở server, lệnh Tiếp quản / bật lại AI / Đánh dấu xong.
 // Story 4.7: `canSend` (cửa sổ gửi), gửi / gửi lại từ Hộp thư, job `inbox.send`, cron dọn tin kẹt `sending`.
+// Story 4.5: tin của chính trang (echo) — khớp tin app đã gửi / `app_unmatched` / `external_human`, job
+// `inbox.echo_match`; "đã nhận / đã xem" của tin outbound.
 export const MODULE = 'inbox'
+
+export {
+  ECHO_MATCH_ATTEMPTS,
+  ECHO_MATCH_DELAY_MS,
+  ECHO_MATCH_WINDOW_MS,
+  EchoUnmatchedError,
+  echoAuthor,
+  echoFromComment,
+  echoFromDm,
+  echoJobData,
+  handleEchoMatchJob,
+  ingestEcho,
+  markOutboundReceipt,
+  parseEchoMatchJobData,
+  type EchoAttempt,
+  type EchoDeps,
+  type EchoInput,
+  type EchoMessage,
+  type EchoResult,
+  type ReceiptInput,
+  type ReceiptResult,
+} from './echo.ts'
 
 export {
   ingestComment,

@@ -45,6 +45,7 @@ export {
   parseSubscribeJobData,
   recordSubscribeError,
   subscribePage,
+  subscribedFieldsFor,
   type SubscribeJobHandlerDeps,
   type SubscribeOutcome,
   type SubscribePageDeps,

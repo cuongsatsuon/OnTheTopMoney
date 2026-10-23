@@ -247,6 +247,12 @@ export function outboundStatusLabel(status: MessageStatus | null): string | null
   }
 }
 
+/**
+ * Người gửi dưới bong bóng tin không phải AI (Story 4.5): trả lời từ Meta Business Suite / app Facebook (echo ngoài app)
+ * ghi rõ "ngoài app"; tin của app (kể cả echo chưa khớp được tin nào) là "Bạn".
+ */
+export const outboundAuthorLabel = (origin: MessageOrigin): string => (origin === 'external_human' ? 'Bạn · ngoài app' : 'Bạn')
+
 /** "Gửi lại" chỉ cho tin của chủ shop đang lỗi (server cũng kiểm). */
 export const canResend = (msg: Pick<MessageDto, 'origin' | 'status'>): boolean => msg.origin === 'app_human' && msg.status === 'failed'
 

@@ -8,7 +8,8 @@
 //   thời điểm, không có sự kiện sửa/xoá.
 // - Threads `replies` [ASSUMPTION AD-4]: `id`, `username`, `text`, `timestamp` (ISO), `replied_to.id`, `root_post {id,
 //   owner_id}`, `media_type`/`media_url`. Không có id người trả lời → định danh `@username` (khi không có `from.id`).
-// - Bình luận của chính trang (`from.id` = id trang, username Threads = handle trang) → `skip` (Story 4.5 phân loại echo).
+// - Bình luận của chính trang (`from.id` = id trang, username = handle trang) → `page_comment` (Story 4.5: `inbox`
+//   khớp với trả lời công khai app đã gửi, hoặc coi là chủ shop trả lời ngoài app).
 import type { MessageRemoval } from '@ottm/shared'
 import { normalizeWebhookPostId } from './normalize.ts'
 import type { DmAttachment } from './webhook-message.ts'
@@ -60,15 +61,42 @@ export interface CommentUnhide {
   commentId: string
 }
 
+/** Bình luận / trả lời do chính trang viết (Story 4.5) — cùng trường với `NewComment`, không có tác giả. */
+export interface PageComment {
+  kind: 'page_comment'
+  commentId: string
+  /** Bình luận được trả lời; `null` khi trang bình luận thẳng trên bài (không thuộc hội thoại nào). */
+  parentId: string | null
+  platformPostId: string
+  text: string | null
+  timestamp: Date
+  attachments: DmAttachment[]
+}
+
 export type CommentSkipReason =
-  /** Tác giả là chính trang — Story 4.5. */
-  | 'from_page'
   /** Không phải bình luận (bài mới, reaction, share, `verb` lạ…). */
   | 'not_comment'
   /** Thiếu id bình luận / tác giả / bài. */
   | 'malformed'
 
-export type NormalizedComment = NewComment | CommentEdit | CommentRemoval | CommentUnhide | { kind: 'skip'; reason: CommentSkipReason }
+export type NormalizedComment =
+  | NewComment
+  | PageComment
+  | CommentEdit
+  | CommentRemoval
+  | CommentUnhide
+  | { kind: 'skip'; reason: CommentSkipReason }
+
+/** Bình luận mới → bình luận của trang khi tác giả là chính trang. */
+const asPageComment = (c: NewComment): PageComment => ({
+  kind: 'page_comment',
+  commentId: c.commentId,
+  parentId: c.parentId,
+  platformPostId: c.platformPostId,
+  text: c.text,
+  timestamp: c.timestamp,
+  attachments: c.attachments,
+})
 
 const asRecord = (v: unknown): Record<string, unknown> | null =>
   typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null
@@ -131,14 +159,13 @@ export function normalizeFeedChange(change: unknown, page: CommentPageRef, fallb
   const from = asRecord(value.from)
   const authorId = str(from?.id)
   if (!authorId) return skip('malformed')
-  if (authorId === page.platformAccountId) return skip('from_page')
   const rawPostId = str(value.post_id) ?? str(asRecord(value.post)?.id)
   if (!rawPostId) return skip('malformed')
   // Id bài của trang khác (bình luận trên bài được chia sẻ…) không ghép được → giữ nguyên id Meta gửi.
   const platformPostId = normalizeWebhookPostId('facebook', rawPostId, page.platformAccountId) ?? rawPostId
   const rawParent = str(value.parent_id)
   const parentId = rawParent && rawParent !== rawPostId && rawParent !== platformPostId ? rawParent : null
-  return {
+  const comment: NewComment = {
     kind: 'comment',
     commentId,
     parentId,
@@ -148,6 +175,7 @@ export function normalizeFeedChange(change: unknown, page: CommentPageRef, fallb
     timestamp: parsePlatformTime(value.created_time, fallbackTime),
     attachments: mediaAttachments(value.photo, value.video),
   }
+  return authorId === page.platformAccountId ? asPageComment(comment) : comment
 }
 
 /** Mục IG `comments` (`{field:'comments', value}`) → bình luận mới. IG không gửi sửa/xoá bình luận qua webhook. */
@@ -160,9 +188,8 @@ export function normalizeInstagramComment(change: unknown, page: CommentPageRef,
   const media = asRecord(value.media)
   const platformPostId = normalizeWebhookPostId('instagram', media?.id ?? value.media_id)
   if (!commentId || !authorId || !platformPostId) return skip('malformed')
-  if (authorId === page.platformAccountId || sameHandle(str(from?.username), page.handle)) return skip('from_page')
   const parent = str(value.parent_id)
-  return {
+  const comment: NewComment = {
     kind: 'comment',
     commentId,
     parentId: parent && parent !== commentId ? parent : null,
@@ -172,6 +199,8 @@ export function normalizeInstagramComment(change: unknown, page: CommentPageRef,
     timestamp: parsePlatformTime(value.timestamp, fallbackTime),
     attachments: [],
   }
+  const fromPage = authorId === page.platformAccountId || sameHandle(str(from?.username), page.handle)
+  return fromPage ? asPageComment(comment) : comment
 }
 
 /** Mục Threads `replies` (`{field:'replies', value}`) → trả lời mới. */
@@ -185,11 +214,10 @@ export function normalizeThreadsReply(change: unknown, page: CommentPageRef, fal
   const rootPost = asRecord(value.root_post)
   const platformPostId = normalizeWebhookPostId('threads', rootPost?.id)
   if (!commentId || !authorId || !platformPostId) return skip('malformed')
-  if (fromId === page.platformAccountId || sameHandle(username, page.handle)) return skip('from_page')
   const repliedTo = str(asRecord(value.replied_to)?.id)
   const mediaType = str(value.media_type)
   const mediaUrl = str(value.media_url)
-  return {
+  const comment: NewComment = {
     kind: 'comment',
     commentId,
     parentId: repliedTo && repliedTo !== str(rootPost?.id) && repliedTo !== commentId ? repliedTo : null,
@@ -199,4 +227,5 @@ export function normalizeThreadsReply(change: unknown, page: CommentPageRef, fal
     timestamp: parsePlatformTime(value.timestamp, fallbackTime),
     attachments: mediaUrl ? mediaAttachments(mediaType === 'IMAGE' ? mediaUrl : undefined, mediaType === 'VIDEO' ? mediaUrl : undefined) : [],
   }
+  return fromId === page.platformAccountId || sameHandle(username, page.handle) ? asPageComment(comment) : comment
 }

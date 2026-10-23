@@ -110,7 +110,8 @@ export const metaAccounts = pgTable('meta_accounts', {
  * (90 ngày) và `granular_scopes` = các quyền đã cấp cho riêng trang này (đọc từ `debug_token`).
  * Story 4.2: job `connections.subscribe_page` ghi `webhook_subscribed_at` khi đăng ký webhook thành công (xoá lỗi
  * cũ) hoặc `webhook_subscribe_error` (mã chẩn đoán `WebhookSubscribeError`) khi lỗi. Cả hai `null` = chưa đăng ký
- * lần nào → worker chạy bù khi khởi động. Ghi hai cột này KHÔNG đụng `updated_at` (tuổi token Threads).
+ * lần nào → worker chạy bù khi khởi động. Story 4.5: `webhook_subscribed_fields` = chuỗi field đã đăng ký; app thêm field
+ * (vd "đã nhận / đã xem") → chạy bù đăng ký lại. Ghi các cột này KHÔNG đụng `updated_at` (tuổi token Threads).
  */
 export const pageCredentials = pgTable(
   'page_credentials',
@@ -128,6 +129,8 @@ export const pageCredentials = pgTable(
     granularScopes: jsonb('granular_scopes').notNull().default(sql`'[]'::jsonb`),
     webhookSubscribedAt: timestamp('webhook_subscribed_at', { withTimezone: true, precision: 3 }),
     webhookSubscribeError: text('webhook_subscribe_error'),
+    /** Chuỗi field của lần đăng ký thành công gần nhất (Story 4.5) — khác chuỗi hiện tại → worker đăng ký lại. */
+    webhookSubscribedFields: text('webhook_subscribed_fields'),
     createdAt: timestamp('created_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
   },

@@ -527,7 +527,8 @@ Cần quyền Admin trên app chính ở <https://developers.facebook.com/apps>.
    sách quyền qua `scope`.
 5. Webhooks (dùng từ Epic 4, Story 4.1): **Webhooks** → Page / Instagram → callback `https://<tunnel>/webhooks/meta`,
    verify token = giá trị `META_VERIFY_TOKEN` trong `server/.env` (`openssl rand -hex 16`). Bật field tối thiểu:
-   Page `messages`, `messaging_postbacks`, `message_echoes`, `feed`; Instagram `messages`, `comments`. Threads
+   Page `messages`, `messaging_postbacks`, `message_echoes`, `message_deliveries`, `message_reads`, `feed`; Instagram
+   `messages`, `messaging_seen`, `comments` (Story 4.5: echo nhận diện tin của chính trang, "đã nhận / đã xem"). Threads
    webhook: app Threads → **Webhooks** → callback `https://<tunnel>/webhooks/threads`, cùng verify token, field
    `replies`.
    - **Production** (app Live): cùng các bước trên nhưng callback dùng tên miền thật —
@@ -536,10 +537,11 @@ Cần quyền Admin trên app chính ở <https://developers.facebook.com/apps>.
      URL + verify token ở **Cài đặt › Webhook** (có nút sao chép). Đây là bước triển khai một lần (AD-4).
    - **Đăng ký theo trang là tự động (Story 4.2)**: bước cấp app ở trên chỉ làm **một lần** cho mỗi app. Mỗi khi chủ
      shop xác nhận hoặc kết nối lại trang, worker chạy job `connections.subscribe_page`: Fanpage gọi
-     `POST /{page-id}/subscribed_apps` (`messages,messaging_postbacks,message_echoes,feed`); Instagram đăng ký qua
-     Fanpage nguồn với cùng field — field IG `messages`, `comments` **chỉ bật ở cấp app** (bước trên), app không bật
-     qua API; Threads không có API đăng ký theo tài khoản — field `replies` **chỉ bật ở cấp app**. Worker khởi động
-     sẽ chạy bù cho trang đã kết nối mà chưa từng đăng ký. Trang đăng ký lỗi hiện ở **Cài đặt › Webhook** và trang
+     `POST /{page-id}/subscribed_apps` (`messages,messaging_postbacks,message_echoes,message_deliveries,message_reads,feed`);
+     Instagram đăng ký qua Fanpage nguồn với cùng field — field IG `messages`, `messaging_seen`, `comments` **chỉ bật ở
+     cấp app** (bước trên), app không bật qua API; Threads không có API đăng ký theo tài khoản — field `replies` **chỉ
+     bật ở cấp app**. Worker khởi động sẽ chạy bù cho trang đã kết nối mà chưa từng đăng ký, hoặc đã đăng ký với danh
+     sách field cũ (vd bản trước Story 4.5) — nhớ bật thêm field mới ở cấp app trước khi deploy. Trang đăng ký lỗi hiện ở **Cài đặt › Webhook** và trang
      chi tiết (thiếu quyền / token hỏng → kết nối lại trang).
    - **Sức khoẻ webhook**: cron `webhooks.health` (5 phút) đánh dấu `stalled` khi sản phẩm (Facebook/Instagram hoặc
      Threads) có trang đang hoạt động mà không nhận sự kiện nào quá 30 phút trong 08:00–22:00 giờ VN; Hộp thư hiện

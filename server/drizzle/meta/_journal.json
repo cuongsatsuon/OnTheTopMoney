@@ -134,6 +134,13 @@
       "when": 1792770170198,
       "tag": "0018_tearful_the_leader",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1792771900009,
+      "tag": "0019_crazy_yellow_claw",
+      "breakpoints": true
     }
   ]
 }

@@ -19,6 +19,7 @@ import {
   subscribePage,
 } from '../modules/connections/index.ts'
 import {
+  handleEchoMatchJob,
   handleFetchAttachmentJob,
   handleFetchPostTextJob,
   handleFetchProfileJob,
@@ -50,6 +51,8 @@ const jobs = createJobSender(boss)
 // Kho file riêng tư (AD-14) cho đính kèm của khách (Story 4.3); thiếu `CLOUDINARY_URL` → đính kèm `failed`
 // `MEDIA_NOT_CONFIGURED`, tin vẫn vào Hộp thư.
 const media = createMediaStores({ CLOUDINARY_URL: config.CLOUDINARY_URL, CLOUDINARY_FOLDER: config.CLOUDINARY_FOLDER })
+// Story 4.5: id app của chính máy chủ — echo có `app_id` khác là chủ shop trả lời ngoài app (Business Suite…).
+const appIds = [config.META_APP_ID, config.THREADS_APP_ID].filter((id): id is string => typeof id === 'string' && id !== '')
 
 let heartbeatTimer: NodeJS.Timeout | undefined
 let closing = false
@@ -117,7 +120,7 @@ try {
       'webhook.route': (job) =>
         handleRouteJob(
           {
-            route: (data) => routeWebhookEvent({ db: dbHandle.db, events, jobs }, data),
+            route: (data) => routeWebhookEvent({ db: dbHandle.db, events, jobs, appIds }, data),
             markFailed: (eventId, errorCode) => markEventFailed(dbHandle.db, eventId, errorCode),
           },
           job as JobWithMetadata<unknown>,
@@ -170,6 +173,11 @@ try {
           job as JobWithMetadata<unknown>,
         )
         logger.debug({ jobId: job.id, result }, 'inbox.send')
+      },
+      // Story 4.5: thử khớp lại tin của chính trang (5 giây × 3); chưa khớp thì ném để retry, lần cuối chèn tin.
+      'inbox.echo_match': async (job) => {
+        const result = await handleEchoMatchJob({ db: dbHandle.db, events, jobs, appIds }, job as JobWithMetadata<unknown>)
+        logger.debug({ jobId: job.id, result: result.status }, 'inbox.echo_match')
       },
       // Story 4.7: tin kẹt `sending` quá 15 phút → `failed` `SEND_UNKNOWN`.
       'inbox.send_sweep': async () => {

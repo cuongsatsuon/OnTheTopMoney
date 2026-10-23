@@ -3,7 +3,9 @@
 // vụ, không log, không chạm DB. Module gọi (`webhooks` → `inbox`) quyết định làm gì với kết quả.
 // - Messenger: `sender.id` = PSID, `recipient.id` = id Fanpage. IG Direct: `sender.id` = IGSID, `recipient.id` = id
 //   tài khoản IG. `timestamp` là mili giây epoch.
-// - Echo (`is_echo`), tin bị thu hồi (`is_deleted`), postback, reaction, delivery/read → `skip` kèm lý do.
+// - Story 4.5: tin của chính trang (`is_echo`, hoặc `sender.id` = id trang) → `echo` (khách = `recipient.id`, kèm
+//   `app_id`/`metadata` để `inbox` nhận diện tin của app). Tin bị thu hồi (`is_deleted`), postback, reaction → `skip`.
+// - Story 4.5: "đã nhận / đã xem" (`delivery`, `read`) → `normalizeMessagingReceipt`.
 // - URL đính kèm là link CDN có chữ ký, hết hạn sau một thời gian → phải tải về lúc ingest (AD-11, AD-14).
 import type { AttachmentKind } from '@ottm/shared'
 
@@ -26,19 +28,30 @@ export interface DmMessage {
   attachments: DmAttachment[]
 }
 
+/** Tin do chính trang gửi (echo) — từ app này, app khác (Business Suite, app Facebook) hay Send API của bên thứ ba. */
+export interface DmEcho {
+  kind: 'echo'
+  /** PSID / IGSID của khách nhận tin — `thread_key` của hội thoại DM. */
+  customerId: string
+  mid: string
+  timestamp: Date
+  text: string | null
+  attachments: DmAttachment[]
+  /** `message.app_id`: app đã gửi tin; `null` khi Meta không gửi (IG có thể thiếu). */
+  appId: string | null
+  /** `message.metadata`: chuỗi app gửi kèm khi gọi Send API (app này gửi `messages.id`); `null` khi không có. */
+  metadata: string | null
+}
+
 export type DmSkipReason =
-  /** Tin của chính trang (`is_echo`) — Story 4.5 phân loại echo. */
-  | 'echo'
-  /** Người gửi là chính trang dù không có cờ echo. */
-  | 'from_page'
   /** Khách thu hồi tin (IG `is_deleted`). */
   | 'deleted'
   /** Không phải tin nhắn (postback, reaction, delivery, read…). */
   | 'not_message'
-  /** Thiếu `sender.id` / `mid`. */
+  /** Thiếu `sender.id` / `mid` (echo: thiếu `recipient.id` hoặc người nhận là chính trang). */
   | 'malformed'
 
-export type NormalizedDm = DmMessage | { kind: 'skip'; reason: DmSkipReason }
+export type NormalizedDm = DmMessage | DmEcho | { kind: 'skip'; reason: DmSkipReason }
 
 const asRecord = (v: unknown): Record<string, unknown> | null =>
   typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null
@@ -63,26 +76,48 @@ const ATTACHMENT_KIND: Readonly<Record<string, AttachmentKind>> = {
   file: 'file',
 }
 
+/** `timestamp` mili giây epoch của mục (số hoặc chuỗi số); không đọc được → `null`. */
+function epochMs(raw: unknown): Date | null {
+  const ms = typeof raw === 'number' && Number.isFinite(raw) ? raw : typeof raw === 'string' && /^\d+$/.test(raw) ? Number(raw) : NaN
+  return Number.isFinite(ms) && ms > 0 ? new Date(ms) : null
+}
+
 /**
- * Mục `messaging` → tin DM chuẩn hoặc lý do bỏ qua. `pagePlatformId` là id nền tảng của trang đã khớp (để nhận
- * diện tin do chính trang gửi). `now` dùng khi Meta không gửi `timestamp`.
+ * Mục `messaging` → tin DM chuẩn, tin của chính trang (`echo`) hoặc lý do bỏ qua. `pagePlatformId` là id nền tảng
+ * của trang đã khớp (để nhận diện tin do chính trang gửi). `now` dùng khi Meta không gửi `timestamp`.
  */
 export function normalizeMessagingItem(item: unknown, pagePlatformId: string, now: Date = new Date()): NormalizedDm {
   const rec = asRecord(item)
   const message = asRecord(rec?.message)
   if (!rec || !message) return { kind: 'skip', reason: 'not_message' }
-  if (message.is_echo === true) return { kind: 'skip', reason: 'echo' }
   if (message.is_deleted === true) return { kind: 'skip', reason: 'deleted' }
   const senderId = str(asRecord(rec.sender)?.id)
+  const recipientId = str(asRecord(rec.recipient)?.id)
   const mid = str(message.mid)
+  const timestamp = epochMs(rec.timestamp) ?? now
+  const text = typeof message.text === 'string' && message.text.trim() !== '' ? message.text : null
+
+  // Tin của chính trang: khách là người NHẬN. Người nhận thiếu / là chính trang → không biết luồng nào.
+  if (message.is_echo === true || (senderId !== undefined && senderId === pagePlatformId)) {
+    if (!mid || !recipientId || recipientId === pagePlatformId) return { kind: 'skip', reason: 'malformed' }
+    return {
+      kind: 'echo',
+      customerId: recipientId,
+      mid,
+      timestamp,
+      text,
+      attachments: attachmentsOf(message),
+      appId: str(message.app_id) ?? null,
+      metadata: str(message.metadata) ?? null,
+    }
+  }
+
   if (!senderId || !mid) return { kind: 'skip', reason: 'malformed' }
-  if (senderId === pagePlatformId) return { kind: 'skip', reason: 'from_page' }
-  const recipientId = str(asRecord(rec.recipient)?.id) ?? pagePlatformId
+  return { kind: 'dm', senderId, recipientId: recipientId ?? pagePlatformId, mid, timestamp, text, attachments: attachmentsOf(message) }
+}
 
-  const rawTs = rec.timestamp
-  const ms = typeof rawTs === 'number' && Number.isFinite(rawTs) ? rawTs : typeof rawTs === 'string' && /^\d+$/.test(rawTs) ? Number(rawTs) : NaN
-  const timestamp = Number.isFinite(ms) && ms > 0 ? new Date(ms) : now
-
+/** Đính kèm là FILE của tin (bỏ loại liên kết, thiếu URL). */
+function attachmentsOf(message: Record<string, unknown>): DmAttachment[] {
   const attachments: DmAttachment[] = []
   for (const raw of Array.isArray(message.attachments) ? message.attachments : []) {
     const att = asRecord(raw)
@@ -91,8 +126,37 @@ export function normalizeMessagingItem(item: unknown, pagePlatformId: string, no
     const url = str(asRecord(att?.payload)?.url)
     if (kind && url) attachments.push({ kind, url })
   }
-  const text = typeof message.text === 'string' && message.text.trim() !== '' ? message.text : null
-  return { kind: 'dm', senderId, recipientId, mid, timestamp, text, attachments }
+  return attachments
+}
+
+/**
+ * "Đã nhận / đã xem" của tin trang gửi (Story 4.5, AD-4). Messenger: `delivery {mids?, watermark}` (mọi tin trước
+ * `watermark` đã tới), `read {watermark}`; IG (`messaging_seen`): `read {mid}`. `customerId` = `sender.id` (khách).
+ */
+export interface DmReceipt {
+  kind: 'receipt'
+  status: 'delivered' | 'read'
+  customerId: string
+  mids: string[]
+  /** Mốc của Meta; `null` khi chỉ có `mid` (IG). */
+  watermark: Date | null
+}
+
+export type NormalizedReceipt = DmReceipt | { kind: 'skip'; reason: 'not_receipt' | 'malformed' }
+
+/** Mục `messaging` có `delivery` / `read` → receipt chuẩn. `pagePlatformId` để loại mục mà "khách" là chính trang. */
+export function normalizeMessagingReceipt(item: unknown, pagePlatformId: string): NormalizedReceipt {
+  const rec = asRecord(item)
+  const delivery = asRecord(rec?.delivery)
+  const read = asRecord(rec?.read)
+  const body = delivery ?? read
+  if (!rec || !body) return { kind: 'skip', reason: 'not_receipt' }
+  const customerId = str(asRecord(rec.sender)?.id)
+  if (!customerId || customerId === pagePlatformId) return { kind: 'skip', reason: 'malformed' }
+  const mids = (Array.isArray(body.mids) ? body.mids : [body.mid]).map(str).filter((m): m is string => m !== undefined)
+  const watermark = epochMs(body.watermark)
+  if (mids.length === 0 && !watermark) return { kind: 'skip', reason: 'malformed' }
+  return { kind: 'receipt', status: delivery ? 'delivered' : 'read', customerId, mids, watermark }
 }
 
 // ---------------------------------------------------------------------------------------------------------

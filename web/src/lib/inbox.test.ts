@@ -30,6 +30,7 @@ import {
   composerPlaceholder,
   isSendRefusal,
   isSendShortcut,
+  outboundAuthorLabel,
   outboundStatusLabel,
   sendErrorHint,
   aiSwitchAction,
@@ -239,6 +240,12 @@ describe('gửi tin (Story 4.7)', () => {
     expect(outboundStatusLabel('failed')).toBeNull()
     expect(outboundStatusLabel(null)).toBeNull()
     for (const s of MESSAGE_STATUSES) expect(() => outboundStatusLabel(s)).not.toThrow()
+  })
+
+  it('outboundAuthorLabel (Story 4.5): trả lời ngoài app ghi rõ, tin của app (kể cả chưa khớp echo) là "Bạn"', () => {
+    expect(outboundAuthorLabel('external_human')).toBe('Bạn · ngoài app')
+    expect(outboundAuthorLabel('app_human')).toBe('Bạn')
+    expect(outboundAuthorLabel('app_unmatched')).toBe('Bạn')
   })
 
   it('SEND_ERROR_TEXT: đủ mọi mã, câu đúng microcopy UX; gợi ý theo mã', () => {

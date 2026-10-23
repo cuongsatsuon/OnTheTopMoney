@@ -77,9 +77,6 @@
   summary: Bật lại AI cho hội thoại mà khách đang chờ (tin không phải `system` mới nhất là `customer`) → cần chạy cổng AI ngay cho tin chờ sẵn (hoặc chặn/cảnh báo), không để hội thoại nằm ở tab "AI đang trả lời" mà không ai trả lời.
   evidence: `applyUserAction('enable-ai')` đặt `waiting_since=null`, hội thoại rời "Cần xử lý"; `autoreply.triage` chỉ chạy khi có `message.received` mới. Trước Epic 5 cổng luôn đóng nên AI không bao giờ trả lời tin đó. Làm cùng chuỗi cổng AD-16 ở Epic 5 (kích hoạt quyết định khi bật lại AI).
 - source_spec: `spec-4-7-gui-tin-24-gio.md`
-  summary: Trạng thái `delivered`/`read` của tin outbound từ webhook (Messenger `message_deliveries`, `message_reads`; IG `messaging_seen`).
-  evidence: `MessageStatus` và nhãn web ("Đã nhận", "Đã xem") đã có nhưng `PAGE_SUBSCRIBED_FIELDS` chưa đăng ký các field này và `webhook.route` chưa có nhánh; tin dừng ở `sent`. Cần thêm field đăng ký (chạy bù đăng ký lại các trang) + chuẩn hoá + cập nhật theo `watermark`.
-- source_spec: `spec-4-7-gui-tin-24-gio.md`
   summary: Nhắn riêng tạo sẵn hội thoại `dm` với `origin_conversation_id` = hội thoại bình luận (AD-10/AD-11 bản đầy đủ), và gợi ý gộp khi `recipient_id` đã thuộc khách khác.
   evidence: 4.7 chỉ gắn định danh `(page, recipient_id)` vào cùng khách; khách trả lời qua Messenger thì vào hội thoại `dm` mới của cùng khách nhưng không có liên kết ngược. Định danh đã thuộc khách khác chỉ được log (gộp bằng tay ở Story 4.9).
 - source_spec: `spec-4-7-gui-tin-24-gio.md`
@@ -90,4 +87,13 @@
   evidence: Đường gửi mới chỉ chạy với Meta giả/fake client. Threads publish lỗi tạm thì retry tạo container mới (container cũ mồ côi, vô hại).
 - source_spec: `spec-4-7-gui-tin-24-gio.md`
   summary: Gửi tin hết giờ / lỗi mạng (không có phản hồi HTTP) hoặc 5xx có thể đã tới Meta → không retry tự động mà ghi `failed` `SEND_UNKNOWN` (hoặc tra lại trước khi retry); Threads tách retry bước publish khỏi bước tạo container.
-  evidence: `deliverMessage` (server/src/modules/inbox/send.ts) coi mọi `TRANSIENT` là retry được — `transientFailure()` của adapter gộp hết giờ, lỗi kết nối và 5xx — nên tin có thể tới khách 2–6 lần; Threads `threads_publish` hết giờ mà đã đăng thì retry tạo container mới và đăng lại. Cần adapter phân biệt "chưa gửi được" (DNS/kết nối bị từ chối) với "không rõ" (hết giờ sau khi gửi) và quyết định sản phẩm (AD-10 hiện ghi retry lỗi tạm). Khi có echo (Story 4.5) có thể khớp `metadata` để biết tin đã tới.
+  evidence: `deliverMessage` (server/src/modules/inbox/send.ts) coi mọi `TRANSIENT` là retry được — `transientFailure()` của adapter gộp hết giờ, lỗi kết nối và 5xx — nên tin có thể tới khách 2–6 lần; Threads `threads_publish` hết giờ mà đã đăng thì retry tạo container mới và đăng lại. Cần adapter phân biệt "chưa gửi được" (DNS/kết nối bị từ chối) với "không rõ" (hết giờ sau khi gửi) và quyết định sản phẩm (AD-10 hiện ghi retry lỗi tạm). Story 4.5 giảm bớt: echo Messenger (`metadata`) tới trong 5 giây backoff đầu đặt tin `sent` nên lần retry không chiếm lại được; IG/Threads/bình luận và echo tới muộn vẫn có thể gửi trùng.
+- source_spec: `spec-4-5-nhan-dien-echo.md`
+  summary: Xác nhận bằng sự kiện Meta thật: echo IG có `app_id`/`metadata` không, bình luận FB/IG của trang và trả lời Threads của tài khoản có về webhook không, IG `messaging_seen` dạng `read.mid`, Business Suite gửi `app_id` riêng.
+  evidence: Phân loại echo (`server/src/modules/inbox/echo.ts`) theo tài liệu Meta; echo không `app_id` (bình luận, Threads, có thể IG) chỉ khớp được theo id/nội dung, không khớp thì sau ~15 giây coi là chủ shop trả lời ngoài app (`external_human`) — nếu Meta đổi chữ tin app gửi (vd rút gọn link) thì tin app có thể bị tính là ngoài app và tắt AI.
+- source_spec: `spec-4-5-nhan-dien-echo.md`
+  summary: Tin của trang vào luồng chưa có hội thoại (khách cũ trước khi kết nối, nhắn riêng từ Business Suite) đang bị bỏ (`ignored`).
+  evidence: `ingestEcho` trả `no_conversation`, không tạo khách/hội thoại từ tin của trang; khi khách trả lời thì hội thoại mới không có tin trước đó của trang. Cân nhắc khi làm hội thoại `dm` từ nhắn riêng (việc hoãn của 4.7).
+- source_spec: `spec-4-5-nhan-dien-echo.md`
+  summary: Phản hồi tự động của Meta (Instant Reply, tin vắng mặt, câu hỏi thường gặp cấu hình trong Business Suite) bị coi là chủ shop trả lời ngoài app → hội thoại sang `human` và tắt AI.
+  evidence: `echoAuthor` (server/src/modules/inbox/echo.ts) xếp mọi echo có `app_id` khác app mình vào `other_app` → `external_human` + `applyHumanReply` ngay; tin tự động của Meta có `app_id` của app Meta, payload không có cờ "tự động". Cần sự kiện thật để tìm dấu hiệu (app_id riêng, `metadata`, thời điểm ngay sau tin đầu của khách…) và quyết định sản phẩm (bỏ qua / chèn không đổi trạng thái) trước khi AI trả lời thật ở Epic 5.

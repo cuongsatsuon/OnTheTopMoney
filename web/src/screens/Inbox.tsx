@@ -52,6 +52,7 @@ import {
   isSendShortcut,
   listTimeLabel,
   messageTimeLabel,
+  outboundAuthorLabel,
   outboundStatusLabel,
   postLine,
   previewText,
@@ -613,7 +614,7 @@ function Bubble({
               <Sparkles size={11} /> AI trả lời
             </span>
           ) : (
-            <span className="font-medium">Bạn</span>
+            <span className="font-medium">{outboundAuthorLabel(msg.origin)}</span>
           )}
           {msg.delivery === 'private_reply' && (
             <span className="inline-flex items-center gap-0.5">

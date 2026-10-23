@@ -347,11 +347,14 @@ async function markFailed(deps: DeliverDeps, msg: MessageRow, code: SendErrorCod
   return 'failed'
 }
 
-/** Trả tin về `pending` để lần retry (hoặc job hoãn) chiếm lại. */
+/**
+ * Trả tin về `pending` để lần retry (hoặc job hoãn) chiếm lại. Giữ `sending_at`: tin đã từng gọi Meta (có thể đã tới
+ * khách) — nhận diện echo (Story 4.5) chỉ khớp theo nội dung với tin `pending` đã từng gửi.
+ */
 async function returnToPending(db: DbExecutor, messageId: string): Promise<void> {
   await db
     .update(messages)
-    .set({ status: 'pending', sendingAt: null })
+    .set({ status: 'pending' })
     .where(and(eq(messages.id, messageId), eq(messages.status, 'sending')))
 }
 
@@ -429,8 +432,10 @@ export async function deliverMessage(deps: DeliverDeps, messageId: string, opts:
         .set({ status: 'sent', platformMessageId: res.platformMessageId, errorCode: null })
         .where(and(eq(messages.id, msg.id), eq(messages.status, 'sending')))
         .returning({ id: messages.id })
-      if (!row) return
+      // Gắn định danh nhắn riêng kể cả khi echo (Story 4.5) đã đặt `sent` trước khi Meta trả lời: `recipient_id` chỉ có
+      // trong phản hồi Send API, bỏ lỡ ở đây thì khách trả lời qua Messenger thành khách mới.
       if (delivery === 'private_reply' && res.recipientId) await linkRecipient(tx, deps, msg, res.recipientId, now)
+      if (!row) return
       await deps.events.publishEvent(tx, 'message.sent', { id: msg.id, pageId: msg.pageId, conversationId: msg.conversationId })
     })
     if (!res.platformMessageId) deps.log?.warn({ messageId }, 'inbox: Meta nhận tin nhưng không trả id')

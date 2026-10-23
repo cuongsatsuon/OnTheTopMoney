@@ -4,12 +4,13 @@ import { z } from 'zod'
 import { Platform, WebhookEventStatus, WebhookHealthStatus, WebhookProduct } from './enums.ts'
 
 /**
- * Field tối thiểu đăng ký ở cấp app cho từng sản phẩm (AD-4). Chỉ để Cài đặt › Webhook hiển thị cho chủ shop
- * biết cần bật gì ở Meta — không phải cấu hình chạy của server.
+ * Field tối thiểu đăng ký ở cấp app cho từng sản phẩm (AD-4). Cài đặt › Webhook hiển thị cho chủ shop biết cần bật gì
+ * ở Meta; `page` cũng là `subscribed_fields` của job `connections.subscribe_page`. Story 4.5: thêm "đã nhận / đã xem"
+ * của tin outbound (`message_deliveries`, `message_reads`; IG `messaging_seen` chỉ bật ở cấp app).
  */
 export const WEBHOOK_FIELDS = {
-  page: ['messages', 'messaging_postbacks', 'message_echoes', 'feed'],
-  instagram: ['messages', 'comments'],
+  page: ['messages', 'messaging_postbacks', 'message_echoes', 'message_deliveries', 'message_reads', 'feed'],
+  instagram: ['messages', 'messaging_seen', 'comments'],
   threads: ['replies'],
 } as const
 export type WebhookFields = { [K in keyof typeof WEBHOOK_FIELDS]: string[] }

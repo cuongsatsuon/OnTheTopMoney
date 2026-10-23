@@ -66,10 +66,10 @@ development_status:
   4-2-tự-đăng-ký-webhook-trang-và-theo-dõi-sức-khoẻ-webhook: review
   4-3-tin-messenger-và-instagram-direct-vào-hộp-thư: review
   4-4-bình-luận-facebook-instagram-và-trả-lời-threads-vào-hộp-thư: review
-  4-5-nhận-diện-tin-của-chính-trang-echo: in-progress
+  4-5-nhận-diện-tin-của-chính-trang-echo: review
   4-6-tab-hộp-thư-tiếp-quản-và-đánh-dấu-xong: review
   4-7-gửi-tin-từ-hộp-thư-đúng-luật-24-giờ: review
-  4-8-gợi-ý-bằng-ai-khi-trả-lời: backlog
+  4-8-gợi-ý-bằng-ai-khi-trả-lời: in-progress
   4-9-khách-hàng-danh-sách-thẻ-giai-đoạn-lịch-sử: backlog
   4-10-tìm-nhanh-bằng-k: backlog
   epic-4-retrospective: optional
