@@ -131,7 +131,7 @@ async function runTriage() {
   triaged = emittedOf('message.received').length
   for (const e of received) {
     const envelope: EventEnvelope = { event: 'message.received', payload: e.payload as never }
-    await handleTriageEvent({ db: handle.db, events }, envelope)
+    await handleTriageEvent({ db: handle.db, events, jobs, cipher: null }, envelope)
   }
 }
 beforeEach(() => {
@@ -173,7 +173,7 @@ describe('bình luận vào Hộp thư', () => {
     await runTriage()
     const [after] = await conversationsRows()
     expect(after!.state).toBe('human')
-    expect(emittedOf('conversation.state_changed')[0]!.payload).toMatchObject({ to: 'human', reasonCode: 'AI_OFF' })
+    expect(emittedOf('conversation.state_changed')[0]!.payload).toMatchObject({ to: 'human', reasonCode: 'CONFIG_MISSING' })
   })
 
   it('trả lời trong luồng → cùng hội thoại; người khác trả lời → khách riêng, khách của hội thoại không đổi', async () => {

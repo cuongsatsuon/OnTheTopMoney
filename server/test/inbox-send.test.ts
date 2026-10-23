@@ -611,7 +611,7 @@ describe('Gửi lại', () => {
     expect(rows.filter((r) => r.origin !== 'system').at(-1)!.id).toBe(id)
   })
 
-  it('bị từ chối lại → 409 với mã mới, tin giữ failed; tin không failed / của AI → 409 VERSION_CONFLICT; không có → 404', async () => {
+  it('bị từ chối lại → 409 với mã mới, tin giữ failed; tin không failed / ngoài app → 409 VERSION_CONFLICT; không có → 404', async () => {
     const p = await page('facebook', 'FB_RS2')
     const c = await dm(p, 'PSID_RS2', ago(HOUR))
     const id = await queued(c, { text: 'x' })
@@ -626,9 +626,12 @@ describe('Gửi lại', () => {
     expect(refused.json<{ error: { code: string } }>().error.code).toBe('OUTSIDE_24H')
     expect(await msgRow(id)).toMatchObject({ status: 'failed', error_code: 'OUTSIDE_24H' })
 
-    const [ai] = await handle.sql<{ id: string }[]>`insert into messages (conversation_id, page_id, direction, origin, status, error_code, delivery, text, platform_timestamp)
-      values (${c}, ${p}, 'outbound', 'app_ai', 'failed', 'SEND_FAILED', 'dm', 'AI', now()) returning id`
-    expect((await post(`/api/v1/messages/${ai!.id}/resend`)).statusCode).toBe(409)
+    // Story 5.4: tin AI lỗi gửi lại được (xem autoreply-run.test.ts); tin không phải của app (ngoài app) thì không.
+    const [other] = await handle.sql<{ id: string }[]>`insert into messages (conversation_id, page_id, direction, origin, status, error_code, delivery, text, platform_timestamp)
+      values (${c}, ${p}, 'outbound', 'external_human', 'failed', 'SEND_FAILED', 'dm', 'ngoài app', now()) returning id`
+    const otherRes = await post(`/api/v1/messages/${other!.id}/resend`)
+    expect(otherRes.statusCode).toBe(409)
+    expect(otherRes.json<{ error: { code: string } }>().error.code).toBe('VERSION_CONFLICT')
     expect((await post('/api/v1/messages/019a0000-0000-7000-8000-000000000000/resend')).statusCode).toBe(404)
   })
 

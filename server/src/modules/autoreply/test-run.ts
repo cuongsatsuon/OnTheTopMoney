@@ -16,7 +16,7 @@ import {
 import type { ReplyTurn } from '../ai/index.ts'
 import { autoreplyTestSources, type AutoreplyTestSources } from '../profiles/index.ts'
 import { AppError } from '../../platform/errors/index.ts'
-import { aiAvailabilityGate, decideReply, handoffDecision, type AutoreplyDecision, type DecideBrand, type DecideDeps } from './decide.ts'
+import { aiAvailabilityGate, brandOrEmpty, decideReply, handoffDecision, type AutoreplyDecision, type DecideDeps } from './decide.ts'
 
 /** Cắt mỗi lượt đưa vào prompt (chi phí, AD-7). */
 const TURN_TEXT_MAX = 1000
@@ -41,23 +41,6 @@ function platformFor(sources: AutoreplyTestSources, channel: AutoreplyChannel): 
     return platform
   }
   return supported.find((p) => sources.platforms.includes(p)) ?? supported[0]!
-}
-
-/** Hồ sơ rỗng khi chủ chưa có hồ sơ thương hiệu — thử vẫn chạy với kịch bản + kho, tên lấy từ trang/nhóm. */
-function brandOf(sources: AutoreplyTestSources): DecideBrand {
-  const b = sources.brand
-  return {
-    name: b?.name ?? '',
-    industry: b?.industry ?? '',
-    tones: b?.tones ?? [],
-    formality: b?.formality ?? 60,
-    pronoun: b?.pronoun ?? '',
-    emoji: b?.emoji ?? 'some',
-    products: b?.products ?? [],
-    audience: b?.audience ?? '',
-    bannedWords: b?.bannedWords ?? [],
-    allowedDomains: b?.allowedDomains ?? [],
-  }
 }
 
 const kindOf = (reason: HandoffReason) => HANDOFF_REASON_KIND[reason]
@@ -106,7 +89,7 @@ export async function runAutoreplyTest(
         pageId: sources.pageId,
         ref: req.ownerId,
         config: cfg,
-        brand: brandOf(sources),
+        brand: brandOrEmpty(sources.brand),
         knowledge: sources.knowledge,
         platform,
         modes: [mode],

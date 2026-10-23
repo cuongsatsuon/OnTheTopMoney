@@ -11,6 +11,8 @@
 // vẫn gõ tay và gửi được.
 // Story 4.9: panel khách sửa được giai đoạn, thẻ, SĐT, ghi chú và "Tóm tắt bằng AI" (`ContactProfile`, API thật); liên
 // kết tới hồ sơ + lịch sử ở `/khach-hang`; báo khi có gợi ý gộp khách.
+// Story 5.4: AI tự trả lời — chip "AI đang trả lời" kèm chấm "đang gõ" và bong bóng "AI đang trả lời…" cuối khung chat
+// theo `aiTyping` (UX-DR4); tin AI lỗi có "Gửi lại" (= bạn tiếp quản).
 import {
   INBOX_TABS,
   type AiViolation,
@@ -64,6 +66,7 @@ import {
   postLine,
   previewText,
   remainingViolations,
+  resendTitle,
   sendErrorHint,
   senderLabel,
   suggestErrorMessage,
@@ -321,6 +324,7 @@ function StateChip({ conv, now }: { conv: ConversationDto; now: Date }) {
       return (
         <Chip tone="ai" icon={<Sparkles size={11} />}>
           AI đang trả lời
+          {conv.aiTyping && <TypingDots />}
         </Chip>
       )
     case 'handoff':
@@ -336,6 +340,17 @@ function StateChip({ conv, now }: { conv: ConversationDto; now: Date }) {
     case 'done':
       return <Chip tone="success">✓ Đã xong</Chip>
   }
+}
+
+/** Chấm "đang gõ" của AI (UX-DR4) — lượt AI trả lời đang soạn câu (`conversation.aiTyping`). */
+function TypingDots() {
+  return (
+    <span className="ml-1 inline-flex items-center gap-0.5" aria-label="đang gõ" role="status">
+      {[0, 150, 300].map((delay) => (
+        <span key={delay} className="size-1 animate-bounce rounded-full bg-current" style={{ animationDelay: `${delay}ms` }} />
+      ))}
+    </span>
+  )
 }
 
 function ConversationRow({ conv, now, active, onClick, buttonRef }: { conv: ConversationDto; now: Date; active: boolean; onClick: () => void; buttonRef: (el: HTMLButtonElement | null) => void }) {
@@ -464,10 +479,10 @@ function ChatBody({ conv, platform, now }: { conv: ConversationDto; platform: Pl
   const items = useMemo(() => flattenMessages(messages.data?.pages), [messages.data])
   const endRef = useRef<HTMLDivElement>(null)
   const lastId = items.at(-1)?.id
-  // Tin mới nhất đổi (mở hội thoại / tin mới tới) → cuộn xuống cuối; tải tin cũ hơn thì không.
+  // Tin mới nhất đổi (mở hội thoại / tin mới tới / AI bắt đầu gõ) → cuộn xuống cuối; tải tin cũ hơn thì không.
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: 'end' })
-  }, [conv.id, lastId])
+  }, [conv.id, lastId, conv.aiTyping])
 
   return (
     <div className="scrollbar-thin flex-1 overflow-y-auto px-6 py-5">
@@ -503,6 +518,14 @@ function ChatBody({ conv, platform, now }: { conv: ConversationDto; platform: Pl
                 onResend={onResend}
               />
             ))}
+            {conv.aiTyping && (
+              <div className="flex justify-end">
+                <div className="inline-flex items-center gap-1.5 rounded-lg rounded-br-sm border border-violet-200 bg-ai-soft px-3.5 py-2 text-[13px] font-medium text-ai">
+                  <Sparkles size={12} /> AI đang trả lời
+                  <TypingDots />
+                </div>
+              </div>
+            )}
           </>
         )}
         <div ref={endRef} />
@@ -635,7 +658,15 @@ function SendFailure({ msg, channel, resending, onResend }: { msg: MessageDto; c
           {hint && <div className="mt-0.5 text-red-900/80">{hint}</div>}
         </div>
         {canResend(msg) && (
-          <Button size="sm" variant="ghost" className="-my-1 h-7 px-2 text-danger-foreground" icon={<RotateCw size={13} />} disabled={resending} onClick={() => onResend(msg.id)}>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="-my-1 h-7 px-2 text-danger-foreground"
+            icon={<RotateCw size={13} />}
+            disabled={resending}
+            title={resendTitle(msg.origin)}
+            onClick={() => onResend(msg.id)}
+          >
             {resending ? 'Đang gửi…' : 'Gửi lại'}
           </Button>
         )}

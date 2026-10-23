@@ -159,7 +159,10 @@ async function attachEcho(tx: DbExecutor, deps: EchoDeps, row: MessageRow, echo:
   if (!toSent && row.platformMessageId === echo.platformMessageId) return { status: 'duplicate', messageId: row.id }
   await tx
     .update(messages)
-    .set({ platformMessageId: echo.platformMessageId, ...(toSent ? { status: 'sent', errorCode: null } : {}) })
+    .set({
+      platformMessageId: echo.platformMessageId,
+      ...(toSent ? { status: 'sent', errorCode: null, sentAt: sql`coalesce(${messages.sentAt}, now())` } : {}),
+    })
     .where(eq(messages.id, row.id))
   const payload = { id: row.id, pageId: row.pageId, conversationId: row.conversationId }
   await deps.events.publishEvent(tx, toSent ? 'message.sent' : 'message.updated', payload)

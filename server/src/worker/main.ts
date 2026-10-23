@@ -8,7 +8,7 @@ import { QUEUES, createBoss, createJobSender, ensureQueues, isCriticalQueue, sta
 import { createSecretCipher } from '../adapters/crypto/index.ts'
 import { createMediaStores } from '../adapters/media/index.ts'
 import { gcReservations, handleAiEvent } from '../modules/ai/index.ts'
-import { handleTriageEvent } from '../modules/autoreply/index.ts'
+import { handleRunJob, handleTriageEvent } from '../modules/autoreply/index.ts'
 import {
   cleanupExpiredOAuth,
   createMetaClients,
@@ -141,10 +141,18 @@ try {
           },
           job as JobWithMetadata<unknown>,
         ),
-      // Story 4.3: tin khách → giải `triage` ngay (trước Epic 5: `human` với `AI_OFF`).
+      // Story 4.3 / 5.4: tin khách → giải `triage` ngay theo cổng AD-16; hội thoại `ai` / bật lại AI → `autoreply.run`.
       'autoreply.triage': async (job) => {
-        const result = await handleTriageEvent({ db: dbHandle.db, events }, job.data)
+        const result = await handleTriageEvent({ db: dbHandle.db, events, jobs, cipher }, job.data)
         logger.debug({ jobId: job.id, result }, 'autoreply.triage')
+      },
+      // Story 5.4: một lượt AI trả lời (stately theo hội thoại). Lỗi bất ngờ ném để retry; lần cuối chuyển người.
+      'autoreply.run': async (job) => {
+        const result = await handleRunJob(
+          { db: dbHandle.db, events, jobs, cipher, log: logger.child({ component: 'autoreply_run' }) },
+          job as JobWithMetadata<unknown>,
+        )
+        logger.debug({ jobId: job.id, result }, 'autoreply.run')
       },
       // Story 4.3: tải đính kèm của khách về kho riêng tư. Lỗi tạm ném lại; lần thử cuối ghi `failed`.
       'inbox.fetch_attachment': async (job) => {

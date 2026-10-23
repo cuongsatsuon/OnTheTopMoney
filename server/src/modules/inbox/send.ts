@@ -9,6 +9,8 @@
 //   hạng `interactive`, Messenger kèm `metadata = messages.id` (AD-20). Lỗi retry được trả tin về `pending` trước khi
 //   ném; `RATE_LIMITED` hoãn bằng job mới `startAfter` (không đốt lượt retry); lỗi khác → `failed` + mã.
 // - Cron `inbox.send_sweep`: tin kẹt `sending` quá 15 phút → `failed` `SEND_UNKNOWN` (có thể đã tới khách, không tự gửi lại).
+// - Story 5.4: tin `app_ai` đi cùng job; gửi lỗi (job, cron) → hội thoại còn `ai` sang `handoff`; "Gửi lại" nhận cả tin AI
+//   (= chủ shop gửi); `sent_at` lúc tin thành `sent`.
 // Không log nội dung tin hay token.
 import { sendModesFor, sendTextLimit, type MessageDelivery, type Platform, type SendErrorCode } from '@ottm/shared'
 import { and, desc, eq, isNull, lt, ne, or, sql } from 'drizzle-orm'
@@ -23,7 +25,7 @@ import { getPage, getPlatformAccountId } from '../pages/index.ts'
 import { reportTokenInvalid } from './meta-token.ts'
 import { suggestMerge } from './contacts.ts'
 import { contactIdentities, conversations, messages } from './schema.ts'
-import { applyHumanReply, lockConversation } from './state.ts'
+import { applyHumanReply, lockConversation, onAiMessageFailed } from './state.ts'
 
 /** Cửa sổ tin thường của DM (Messenger / Instagram) tính từ tin cuối của khách. */
 export const DM_WINDOW_MS = 24 * 60 * 60_000
@@ -192,7 +194,10 @@ export async function sendMessage(deps: SendDeps, conversationId: string, input:
   })
 }
 
-/** "Gửi lại" tin `failed` của chủ shop: kiểm lại cửa sổ, đặt `pending`, dời về cuối hội thoại, enqueue job MỚI. */
+/**
+ * "Gửi lại" tin `failed` của chủ shop — hoặc tin AI (Story 5.4: chủ shop chọn gửi lại câu của AI = chủ shop gửi →
+ * `HUMAN_REPLIED`, tắt AI): kiểm lại cửa sổ, đặt `pending`, dời về cuối hội thoại, enqueue job MỚI.
+ */
 export async function resendMessage(deps: SendDeps, messageId: string): Promise<ResendResult> {
   const now = deps.now?.() ?? new Date()
   return deps.db.transaction(async (tx): Promise<ResendResult> => {
@@ -203,7 +208,7 @@ export async function resendMessage(deps: SendDeps, messageId: string): Promise<
     if (!conv || !page) return { status: 'missing' }
     const [msg] = await tx.select().from(messages).where(eq(messages.id, messageId)).for('update')
     if (!msg) return { status: 'missing' }
-    if (msg.status !== 'failed' || msg.origin !== 'app_human' || msg.direction !== 'outbound') return { status: 'conflict' }
+    if (msg.status !== 'failed' || (msg.origin !== 'app_human' && msg.origin !== 'app_ai') || msg.direction !== 'outbound') return { status: 'conflict' }
 
     const mode = (msg.delivery as MessageDelivery | null) ?? sendModesFor(page.platform, conv.channel as 'dm' | 'comment')[0]!
     const check = await canSend(tx, conv.id, mode, { now, excludeMessageId: msg.id })
@@ -218,7 +223,7 @@ export async function resendMessage(deps: SendDeps, messageId: string): Promise<
       .set({ status: 'pending', errorCode: null, delivery: mode, replyToPlatformId: check.replyTo, queuedAt: now, sendingAt: null, platformTimestamp: at })
       .where(eq(messages.id, msg.id))
     await deps.jobs.send('inbox.send', { messageId: msg.id }, { db: bossDbFor(tx) })
-    await applyHumanReply(tx, deps, conv, at, now)
+    await applyHumanReply(tx, deps, conv, at, now, { keepMessageId: msg.id })
     return { status: 'queued', messageId: msg.id }
   })
 }
@@ -335,15 +340,22 @@ async function callMeta(ctx: CallContext): Promise<Delivered | MetaFailure> {
   return { ok: true, platformMessageId: idOf(res.data?.message_id), recipientId: idOf(res.data?.recipient_id) }
 }
 
-/** Ghi `failed` + mã cho tin đang `sending`, phát `message.failed`. */
+/**
+ * Ghi `failed` + mã cho tin đang `sending`, phát `message.failed`. Tin AI (Story 5.4): khoá luồng TRƯỚC khi đổi dòng tin
+ * (cùng thứ tự với Gửi lại / Tiếp quản — tránh deadlock), hội thoại còn `ai` → `handoff` (`onAiMessageFailed`).
+ */
 async function markFailed(deps: DeliverDeps, msg: MessageRow, code: SendErrorCode): Promise<DeliverOutcome> {
   await deps.db.transaction(async (tx) => {
+    const ai = msg.origin === 'app_ai'
+    if (ai) await lockConversation(tx, msg.conversationId)
     const [row] = await tx
       .update(messages)
       .set({ status: 'failed', errorCode: code })
       .where(and(eq(messages.id, msg.id), eq(messages.status, 'sending')))
       .returning({ id: messages.id })
-    if (row) await deps.events.publishEvent(tx, 'message.failed', { id: msg.id, pageId: msg.pageId, conversationId: msg.conversationId, errorCode: code })
+    if (!row) return
+    await deps.events.publishEvent(tx, 'message.failed', { id: msg.id, pageId: msg.pageId, conversationId: msg.conversationId, errorCode: code })
+    if (ai) await onAiMessageFailed(tx, deps, msg.conversationId, code)
   })
   return 'failed'
 }
@@ -437,7 +449,7 @@ export async function deliverMessage(deps: DeliverDeps, messageId: string, opts:
     await deps.db.transaction(async (tx) => {
       const [row] = await tx
         .update(messages)
-        .set({ status: 'sent', platformMessageId: res.platformMessageId, errorCode: null })
+        .set({ status: 'sent', platformMessageId: res.platformMessageId, errorCode: null, sentAt: deps.now?.() ?? new Date() })
         .where(and(eq(messages.id, msg.id), eq(messages.status, 'sending')))
         .returning({ id: messages.id })
       // Gắn định danh nhắn riêng kể cả khi echo (Story 4.5) đã đặt `sent` trước khi Meta trả lời: `recipient_id` chỉ có
@@ -487,19 +499,26 @@ export async function handleSendJob(deps: DeliverDeps, job: { data: unknown; ret
 // Cron `inbox.send_sweep`
 // ---------------------------------------------------------------------------------------------------------
 
-/** Tin kẹt `sending` quá 15 phút → `failed` `SEND_UNKNOWN` + `message.failed`. Trả số tin đã đổi. */
+/**
+ * Tin kẹt `sending` quá 15 phút → `failed` `SEND_UNKNOWN` + `message.failed`. Trả số tin đã đổi. Story 5.4: tin AI kẹt
+ * → hội thoại còn `ai` sang `handoff` (transaction riêng, khoá luồng trước — như `markFailed`).
+ */
 export async function sweepStuckSending(deps: { db: Db; events: EventPublisher; now?: () => Date }): Promise<number> {
   const now = deps.now?.() ?? new Date()
   const cutoff = new Date(now.getTime() - SENDING_STUCK_MS)
-  return deps.db.transaction(async (tx) => {
-    const rows = await tx
+  const rows = await deps.db.transaction(async (tx) => {
+    const swept = await tx
       .update(messages)
       .set({ status: 'failed', errorCode: 'SEND_UNKNOWN' })
       .where(and(eq(messages.status, 'sending'), lt(messages.sendingAt, cutoff)))
-      .returning({ id: messages.id, pageId: messages.pageId, conversationId: messages.conversationId })
-    for (const r of rows) {
+      .returning({ id: messages.id, pageId: messages.pageId, conversationId: messages.conversationId, origin: messages.origin })
+    for (const r of swept) {
       await deps.events.publishEvent(tx, 'message.failed', { id: r.id, pageId: r.pageId, conversationId: r.conversationId, errorCode: 'SEND_UNKNOWN' })
     }
-    return rows.length
+    return swept
   })
+  for (const r of rows.filter((x) => x.origin === 'app_ai')) {
+    await deps.db.transaction((tx) => onAiMessageFailed(tx, deps, r.conversationId, 'SEND_UNKNOWN'))
+  }
+  return rows.length
 }

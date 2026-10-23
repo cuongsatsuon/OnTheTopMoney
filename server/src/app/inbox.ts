@@ -8,7 +8,7 @@
 //   không hợp lệ → 409 VERSION_CONFLICT; đã ở đích → 200 không đổi.
 // - Story 4.7: `POST …/:id/messages` gửi tin (201 `MessageDto` `pending`), `POST /api/v1/messages/:id/resend` gửi lại
 //   tin `failed` (200). `canSend` từ chối → 409 với mã gửi tin + `details.messageId` (tin vẫn lưu `failed`). Không gọi
-//   Meta trong request: job `inbox.send` gửi.
+//   Meta trong request: job `inbox.send` gửi. Story 5.4: gửi lại nhận cả tin AI lỗi (= chủ shop gửi, tắt AI).
 import {
   CONVERSATION_ACTIONS,
   ConversationCountQuery,
@@ -110,7 +110,7 @@ export function registerInbox(
       if (!current || !(await getConversation(deps.db, current.conversationId))) throw notFound('Tin không tồn tại')
       const result = await resendMessage(sendDeps, id)
       if (result.status === 'missing') throw notFound('Tin không tồn tại')
-      if (result.status === 'conflict') throw new AppError('VERSION_CONFLICT', 409, { message: 'Chỉ gửi lại được tin của bạn đang lỗi' })
+      if (result.status === 'conflict') throw new AppError('VERSION_CONFLICT', 409, { message: 'Chỉ gửi lại được tin của bạn hoặc tin AI đang lỗi' })
       if (result.status === 'refused') throw refused(result.code, result.messageId)
       const msg = await getMessage(deps.db, id)
       if (!msg) throw notFound('Tin không tồn tại')

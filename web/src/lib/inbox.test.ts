@@ -26,6 +26,7 @@ import {
   SEND_ERROR_TEXT,
   SEND_MODE_LABEL,
   canResend,
+  resendTitle,
   composerLimit,
   composerModes,
   composerPlaceholder,
@@ -267,10 +268,14 @@ describe('gửi tin (Story 4.7)', () => {
     expect(sendErrorHint('SEND_FAILED', 'dm')).toBeNull()
   })
 
-  it('canResend: chỉ tin của chủ shop đang lỗi', () => {
+  it('canResend: tin của chủ shop hoặc của AI đang lỗi (Story 5.4); tooltip nêu tiếp quản khi là tin AI', () => {
     expect(canResend({ origin: 'app_human', status: 'failed' })).toBe(true)
     expect(canResend({ origin: 'app_human', status: 'sent' })).toBe(false)
-    expect(canResend({ origin: 'app_ai', status: 'failed' })).toBe(false)
+    expect(canResend({ origin: 'app_ai', status: 'failed' })).toBe(true)
+    expect(canResend({ origin: 'app_ai', status: 'pending' })).toBe(false)
+    expect(canResend({ origin: 'external_human', status: 'failed' })).toBe(false)
+    expect(resendTitle('app_ai')).toContain('tiếp quản')
+    expect(resendTitle('app_human')).toBeUndefined()
   })
 
   it('isSendRefusal: 409 với mã gửi tin → tin đã lưu failed; lỗi khác → toast', () => {

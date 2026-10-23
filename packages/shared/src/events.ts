@@ -41,6 +41,8 @@ export const EVENTS = {
   }),
   // Story 4.4: hội thoại đổi phần hiển thị không phải trạng thái (caption bài được bình luận lấy xong).
   'conversation.updated': event(true, { pageId: Id }),
+  // Story 5.4: lượt AI trả lời bắt đầu/kết thúc gõ (`aiTyping` của `ConversationDto`) — web chỉ làm cũ hội thoại + tin.
+  'conversation.ai_typing': event(true, { pageId: Id }),
   'message.received': event(true, { pageId: Id, conversationId: Id }),
   'message.sent': event(true, { pageId: Id, conversationId: Id }),
   'message.failed': event(true, { pageId: Id, conversationId: Id, errorCode: ErrorCode }),

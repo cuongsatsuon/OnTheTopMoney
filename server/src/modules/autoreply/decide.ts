@@ -3,7 +3,8 @@
 // - `aiAvailabilityGate`: cổng khoá OpenAI → hạn mức (tạm đóng). Lượt chạy thật chèn `canSend` + "tin có chữ" ngay sau.
 // - `decideReply`: luật chuyển người xác định (không gọi AI) → LLM structured output `{action, reply, mode, reasonCode,
 //   confidence}` qua gateway → ngưỡng tin cậy → `checkOutput` (vi phạm → sinh lại MỘT lần → vẫn vi phạm thì
-//   `AI_POLICY_BLOCKED`). Lỗi gateway thành quyết định chuyển người (bảng ánh xạ AD-9); huỷ (`AbortError`) ném tiếp.
+//   `AI_POLICY_BLOCKED`; Story 5.4: lần sinh lại kèm ghi chú vi phạm vừa gặp). Lỗi gateway thành quyết định chuyển
+//   người (bảng ánh xạ AD-9); huỷ (`AbortError`) ném tiếp.
 // Không ghi DB ngoài `ai_usage` của gateway, không gửi gì. Không log prompt / nội dung tin / câu trả lời.
 import {
   AI_OUTPUT_MAX_CHARS,
@@ -12,6 +13,7 @@ import {
   type AiOutputKind,
   type AiViolation,
   type AutoreplyOutMessage,
+  type BrandProfileDto,
   type HandoffReason,
   type MessageDelivery,
   type Platform,
@@ -24,6 +26,7 @@ import {
   generateText,
   getBudgetSummary,
   getOpenAiKeyStatus,
+  retryNote,
   type AiDeps,
   type AutoreplyKnowledgeEntry,
   type CheckBrand,
@@ -70,7 +73,7 @@ export interface DecideInput {
   signal?: AbortSignal
 }
 
-export type AutoreplyDecision =
+export type AutoreplyDecision = (
   | { action: 'reply'; messages: AutoreplyOutMessage[]; confidence: number }
   | {
       action: 'handoff'
@@ -80,6 +83,10 @@ export type AutoreplyDecision =
       keyword: string | null
       violations: AiViolation[]
     }
+) & {
+  /** Số lời gọi LLM đã dùng (0–2) — ghi vào `autoreply_runs` (Story 5.4). */
+  llmCalls: number
+}
 
 /**
  * Quyết định chuyển người. Lý do chủ ý (`sticky`) kèm câu chuyển tiếp của cấu hình; tạm đóng / không áp dụng không gửi gì
@@ -97,6 +104,23 @@ export function handoffDecision(
     messages: withMessage ? [{ mode: opts.mode!, text: text! }] : [],
     keyword: opts.keyword ?? null,
     violations: opts.violations ?? [],
+    llmCalls: 0,
+  }
+}
+
+/** Hồ sơ rỗng khi chủ chưa có hồ sơ thương hiệu — AI vẫn trả lời theo kịch bản + kho (dùng chung thử / chạy thật). */
+export function brandOrEmpty(b: BrandProfileDto | null): DecideBrand {
+  return {
+    name: b?.name ?? '',
+    industry: b?.industry ?? '',
+    tones: b?.tones ?? [],
+    formality: b?.formality ?? 60,
+    pronoun: b?.pronoun ?? '',
+    emoji: b?.emoji ?? 'some',
+    products: b?.products ?? [],
+    audience: b?.audience ?? '',
+    bannedWords: b?.bannedWords ?? [],
+    allowedDomains: b?.allowedDomains ?? [],
   }
 }
 
@@ -169,8 +193,11 @@ const replyLimit = (platform: Platform, mode: MessageDelivery): number =>
 export async function decideReply(deps: DecideDeps, input: DecideInput): Promise<AutoreplyDecision> {
   const { config } = input
   const defaultMode = input.modes[0]!
-  const handoff = (reason: HandoffReason, extra: { mode?: MessageDelivery; keyword?: string | null; violations?: AiViolation[] } = {}) =>
-    handoffDecision(reason, { config, mode: extra.mode ?? defaultMode, keyword: extra.keyword ?? null, violations: extra.violations ?? [] })
+  let llmCalls = 0
+  const handoff = (reason: HandoffReason, extra: { mode?: MessageDelivery; keyword?: string | null; violations?: AiViolation[] } = {}) => ({
+    ...handoffDecision(reason, { config, mode: extra.mode ?? defaultMode, keyword: extra.keyword ?? null, violations: extra.violations ?? [] }),
+    llmCalls,
+  })
 
   const rule = matchHandoffRule(input.latestText, config)
   if (rule) return handoff(rule.reasonCode, { keyword: rule.keyword })
@@ -193,13 +220,15 @@ export async function decideReply(deps: DecideDeps, input: DecideInput): Promise
   let violations: AiViolation[] = []
   for (let attempt = 0; attempt < 2; attempt++) {
     let text: string
+    llmCalls += 1
     try {
       const res = await generateText(deps, {
         feature: input.feature,
         pageId: input.pageId,
         ref: input.ref,
         instructions: prompt.instructions,
-        input: prompt.input,
+        // Lần sinh lại kèm đúng vi phạm vừa gặp (từ cấm, link lạ, quá dài) — không gửi y nguyên prompt.
+        input: violations.length ? `${prompt.input}\n\n${retryNote(violations)}` : prompt.input,
         maxOutputTokens: prompt.maxOutputTokens,
         jsonSchema: prompt.jsonSchema,
         ...(input.signal ? { signal: input.signal } : {}),
@@ -223,7 +252,7 @@ export async function decideReply(deps: DecideDeps, input: DecideInput): Promise
     const confidence = Number.isFinite(out.confidence) ? Math.min(1, Math.max(0, out.confidence)) : 0
     if (config.handoffOnUncertain && confidence < AUTOREPLY_CONFIDENCE_MIN) return handoff('AI_UNCERTAIN', { mode })
     const check = checkOutput(reply, { brand: checkBrand, kind: outputKind(mode), maxChars: replyLimit(input.platform, mode) })
-    if (check.clean) return { action: 'reply', messages: [{ mode, text: reply }], confidence }
+    if (check.clean) return { action: 'reply', messages: [{ mode, text: reply }], confidence, llmCalls }
     violations = check.violations
   }
   return handoff('AI_POLICY_BLOCKED', { violations })

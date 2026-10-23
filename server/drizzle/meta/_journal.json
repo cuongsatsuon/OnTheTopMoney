@@ -169,6 +169,13 @@
       "when": 1792779058285,
       "tag": "0023_silky_smasher",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1792782063915,
+      "tag": "0024_sour_pride",
+      "breakpoints": true
     }
   ]
 }

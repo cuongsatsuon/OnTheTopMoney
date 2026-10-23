@@ -1,8 +1,8 @@
 // Story 4.6 — tab Hộp thư, Tiếp quản và Đánh dấu xong (AD-9, AD-18): lọc + đếm theo tab ở server (`needs_human` =
 // `handoff` hoặc `human` mà tin không phải `system` mới nhất là của khách, chờ lâu nhất trước), phân trang theo mốc
 // chờ, phạm vi của số đếm; lệnh Tiếp quản / bật lại AI / Đánh dấu xong (khoá luồng, `state_version`, tin `system`,
-// `conversation.state_changed`, huỷ tin AI `pending`), xung đột / không đổi / 404 / phiên / Origin; đua với triage và
-// cổng AI của hội thoại `ai` trước Epic 5.
+// `conversation.state_changed`, huỷ tin AI `pending`), xung đột / không đổi / 404 / phiên / Origin; đua với triage;
+// hội thoại `ai` có tin khách mới → `autoreply.run` (Story 5.4).
 import { ConversationCountResponse, ConversationDto, ListConversationsResponse, type EventName } from '@ottm/shared'
 import type { FastifyInstance } from 'fastify'
 import type { PgBoss } from 'pg-boss'
@@ -86,7 +86,7 @@ async function customer(pageId: string, sender: string, ts: Date): Promise<strin
 
 /** Chạy consumer `autoreply.triage` cho hội thoại như worker. */
 const triage = (conversationId: string, pageId: string) =>
-  handleTriageEvent({ db: handle.db, events }, { event: 'message.received', payload: { id: conversationId, pageId, conversationId } } as EventEnvelope)
+  handleTriageEvent({ db: handle.db, events, jobs, cipher: null }, { event: 'message.received', payload: { id: conversationId, pageId, conversationId } } as EventEnvelope)
 
 /** Hội thoại ở trạng thái `state` với tin khách lúc `ts` (đi qua triage `human` rồi đặt thẳng trạng thái cần thử). */
 async function conversationIn(pageId: string, sender: string, state: 'triage' | 'ai' | 'handoff' | 'human' | 'done', ts: Date): Promise<string> {
@@ -155,7 +155,7 @@ describe('tab và badge ở server', () => {
   it('human mà tin không phải system mới nhất là của người → ra khỏi Cần xử lý; tin system không tính', async () => {
     const p = await page('FB_SYS')
     const id = await conversationIn(p, 'U', 'human', at(1))
-    // Tin system (AI_OFF) đứng sau tin khách nhưng không tính → vẫn cần xử lý.
+    // Tin system (CONFIG_MISSING) đứng sau tin khách nhưng không tính → vẫn cần xử lý.
     expect((await originsOf(id)).map((m) => m.origin)).toEqual(['customer', 'system'])
     expect(await countOf('tab=needs_human')).toBe(1)
     await outbound(id, p, 'app_human', 'sent', at(2))
@@ -279,16 +279,13 @@ describe('Bật lại AI', () => {
     expect((await list('tab=ai')).items.map((c) => c.id)).toEqual([id])
   })
 
-  it('ai + tin khách mới trước Epic 5 → cổng đóng → human AI_OFF, quay lại Cần xử lý', async () => {
+  it('ai + tin khách mới (Story 5.4) → triage giữ ai, enqueue autoreply.run; quyết định triage cũ → noop', async () => {
     const p = await page('FB_AI_GATE')
     const id = await conversationIn(p, 'U', 'human', at(1))
     await post(`/api/v1/conversations/${id}/enable-ai`)
     await customer(p, 'U', at(5))
-    expect(await triage(id, p)).toBe('applied')
-    expect(await row(id)).toMatchObject({ state: 'human', state_reason: 'AI_OFF', ai_enabled: true, waiting_since: at(5).getTime() })
-    expect(await countOf('tab=needs_human')).toBe(1)
-    // Cổng mở (Epic 5) với hội thoại đã `ai` → không ghi gì.
-    await handle.sql`update conversations set state = 'ai' where id = ${id}`
+    expect(await triage(id, p)).toBe('queued')
+    expect(await row(id)).toMatchObject({ state: 'ai', state_reason: 'AI_REENABLED', ai_enabled: true })
     const s = await getTriageState(handle.db, id)
     expect(await applyTriageDecision({ db: handle.db, events }, id, s!.stateVersion, { to: 'ai', reasonCode: 'GATE_OPEN' })).toEqual({ applied: false, reason: 'noop' })
   })
@@ -319,7 +316,7 @@ describe('Đánh dấu xong', () => {
     expect((await list('tab=done')).items.map((c) => c.id)).toEqual([id])
   })
 
-  it('đã done → 200 không đổi; khách nhắn lại → triage → human AI_OFF (Cần xử lý)', async () => {
+  it('đã done → 200 không đổi; khách nhắn lại → triage → human CONFIG_MISSING (Cần xử lý)', async () => {
     const p = await page('FB_DONE_AGAIN')
     const id = await conversationIn(p, 'U', 'human', at(1))
     await post(`/api/v1/conversations/${id}/done`)
@@ -329,7 +326,7 @@ describe('Đánh dấu xong', () => {
     await customer(p, 'U', at(9))
     expect(await row(id)).toMatchObject({ state: 'triage' })
     expect(await triage(id, p)).toBe('applied')
-    expect(await row(id)).toMatchObject({ state: 'human', state_reason: 'AI_OFF', waiting_since: at(9).getTime() })
+    expect(await row(id)).toMatchObject({ state: 'human', state_reason: 'CONFIG_MISSING', waiting_since: at(9).getTime() })
     expect(await countOf('tab=needs_human')).toBe(1)
   })
 })

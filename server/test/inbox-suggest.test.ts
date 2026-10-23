@@ -1,8 +1,8 @@
 // Story 4.8 — Gợi ý bằng AI khi trả lời (AD-2, AD-7, AD-8, AD-21): `POST /api/v1/conversations/:id/suggest`. Fake adapter
 // OpenAI (không gọi mạng), Postgres thật. Phủ: DM sạch (gateway `inbox_suggest`, page/ref, prompt có tin gần nhất + giọng,
 // không đổi trạng thái / không ghi tin), hồ sơ kế thừa nhóm, bình luận (caption bài, cách trả lời, giới hạn theo kind),
-// lọc ngữ cảnh (20 tin, bỏ `system`/`failed`/đã xoá, đính kèm → ghi chú), sinh lại một lần, vẫn vi phạm, mode sai kênh,
-// CONFIG_MISSING, thiếu khoá / hết hạn mức, Dừng (huỷ socket thật), 404 / trang gỡ / 401.
+// lọc ngữ cảnh (20 tin, bỏ `system`/`failed`/đã xoá, đính kèm → ghi chú), sinh lại một lần (kèm vi phạm — Story 5.4),
+// vẫn vi phạm, mode sai kênh, CONFIG_MISSING, thiếu khoá / hết hạn mức, Dừng (huỷ socket thật), 404 / trang gỡ / 401.
 import { randomBytes } from 'node:crypto'
 import { ErrorResponse, SaveBrandProfileRequest, SuggestReplyResponse, type MessageDto } from '@ottm/shared'
 import type { FastifyInstance } from 'fastify'
@@ -244,6 +244,11 @@ describe('POST /api/v1/conversations/:id/suggest', () => {
       { kind: 'disallowed_url', text: 'http://evil.com' },
     ])
     expect(fake.responseRequests).toHaveLength(2)
+    // Story 5.4: lần sinh lại kèm đúng vi phạm vừa gặp, lần đầu thì không.
+    expect(String(fake.responseRequests[0]!.input)).not.toContain('Bản trả lời trước bị chặn')
+    expect(lastInput()).toContain('Bản trả lời trước bị chặn')
+    expect(lastInput()).toContain('"giảm giá"')
+    expect(lastInput()).toContain('http://evil.com')
   })
 
   it('mode sai kênh (nhắn riêng ở DM / ở Threads) → 400 VALIDATION_FAILED, không gọi AI', async () => {

@@ -3,6 +3,7 @@
 // consumer `events.profiles` lo (Story 3.3) — file này không lặp lại luật nào trong số đó.
 // Luật hợp lệ (bật cần kịch bản + kênh…) lấy từ shared (`SaveAutoreplyConfigRequest`, `autoreplyEnableIssues`).
 // Story 5.2: lưu ở trạng thái bật (kể cả hàng loạt) khi kho kiến thức vượt giới hạn token → `KNOWLEDGE_TOO_LARGE`.
+// Story 5.4: `autoreplyRunSources` — nguồn prompt (cấu hình hiệu lực, hồ sơ, kho) cho lượt AI trả lời thật.
 import type {
   AutoreplyConfigDto,
   AutoreplyOverviewResponse,
@@ -10,6 +11,7 @@ import type {
   AutoreplyScriptTemplateResponse,
   BrandProfileDto,
   BulkSetAutoreplyResponse,
+  ConfigSource,
   EffectiveAutoreplyConfigResponse,
   EffectiveConfig,
   ParsedAutoreplyConfig,
@@ -210,4 +212,36 @@ export async function autoreplyTestSources(db: DbExecutor, owner: ProfileOwner):
   const tokens = await readyKnowledgeTokens(db, kbOwner)
   if (tokens > KNOWLEDGE_MAX_TOKENS) throw tooLarge(tokens)
   return { ...sources, knowledge: await listReadyKnowledge(db, kbOwner) }
+}
+
+/* ---------- Lượt AI trả lời thật (Story 5.4) ---------- */
+
+/** Nguồn prompt cho một lượt AI trả lời tin của trang — cấu hình HIỆU LỰC (đã lưu), hồ sơ hiệu lực, kho của cấu hình. */
+export interface AutoreplyRunSources {
+  config: AutoreplyConfigDto
+  /** Cấu hình đã dùng (AD-8) — lưu vào `autoreply_runs`. */
+  source: ConfigSource
+  /** Hồ sơ hiệu lực `resolveEffective(page,'brand')`; `null` = chưa có (vẫn trả lời theo kịch bản + kho). */
+  brand: BrandProfileDto | null
+  /** Văn bản kho `ready` của CHỦ cấu hình hiệu lực (nhóm khi trang theo nhóm). */
+  knowledge: ReadyKnowledgeEntry[]
+  pageName: string
+}
+
+/**
+ * Nguồn cho lượt chạy thật: cấu hình hiệu lực qua `resolveEffective` (không có → ném `CONFIG_MISSING`), kho kiến thức
+ * của đúng chủ cấu hình đó. Không chặn kho vượt giới hạn ở đây — đã chặn lúc bật/lưu (Story 5.2).
+ */
+export async function autoreplyRunSources(db: DbExecutor, pageId: string): Promise<AutoreplyRunSources> {
+  const effective = await resolveEffective<AutoreplyConfigDto>(db, pageId, 'autoreply')
+  const page = await getPage(db, pageId)
+  const brand = await effectiveOrNull<BrandProfileDto>(db, pageId, 'brand')
+  const kbOwner: ProfileOwner = { ownerType: effective.source.ownerType, ownerId: effective.source.ownerId }
+  return {
+    config: effective.config,
+    source: effective.source,
+    brand: brand?.config ?? null,
+    knowledge: await listReadyKnowledge(db, kbOwner),
+    pageName: page?.name ?? effective.source.name,
+  }
 }

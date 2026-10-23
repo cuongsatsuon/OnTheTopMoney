@@ -1,0 +1,198 @@
+// Lượt AI trả lời một hội thoại (Story 5.4, AD-16, AD-9, AD-21) — handler queue `autoreply.run` (stately theo
+// `conversationId`: một job chờ + một job chạy mỗi hội thoại; tin tới trong 4 giây trễ gộp vào một lượt).
+// 1. Ảnh chụp `inbox.readAutoreplyTurn`: chỉ chạy khi `state=ai` và còn tin khách chưa trả lời; ngược lại `skipped`
+//    (không ghi run — job trùng / đã có người trả lời / bật lại AI khi khách không chờ).
+// 2. Ghi `autoreply_runs` (id, mốc, không nội dung).
+// 3. Cổng 1–5 (`gates.ts`) → `canSend(dm)` (`OUTSIDE_24H`) → tin có chữ (`NON_TEXT_MESSAGE`) → `decideReply` (luật → LLM
+//    → hậu kiểm). Chấm "đang gõ" bật ngay trước bước quyết định.
+// 4. `inbox.applyAutoreplyDecision` với `{stateVersion, lastInboundId}` — lệch (Tiếp quản, khách nhắn thêm) →
+//    `superseded`, không gửi gì; lượt sau (job đã chờ sẵn) trả lời gộp.
+// Lỗi bất ngờ: ném để retry; lần thử cuối áp `handoff` `AI_PROVIDER_ERROR` để khách không kẹt ở `ai` trong im lặng.
+// Không log prompt / nội dung tin / câu trả lời.
+import { HANDOFF_REASON_KIND, type ConfigSource, type HandoffReason } from '@ottm/shared'
+import { eq } from 'drizzle-orm'
+import {
+  applyAutoreplyDecision,
+  canSend,
+  readAutoreplyTurn,
+  setAiTyping,
+  type AutoreplyApplyInput,
+  type AutoreplyTurn,
+} from '../inbox/index.ts'
+import { autoreplyRunSources } from '../profiles/index.ts'
+import type { JobSender } from '../../platform/jobs/index.ts'
+import { brandOrEmpty, decideReply, handoffDecision, type AutoreplyDecision, type DecideDeps } from './decide.ts'
+import { preGates } from './gates.ts'
+import { autoreplyRuns, type AutoreplyRunOutcome } from './schema.ts'
+
+/** Trễ gộp tin [ASSUMPTION AD-16]: job đầu chạy sau chừng này, tin tới trong lúc chờ đi chung một lượt. */
+export const AUTOREPLY_RUN_DELAY_MS = 4_000
+
+export interface RunDeps extends DecideDeps {
+  jobs: JobSender
+}
+
+export type RunOutcome = AutoreplyRunOutcome | 'skipped'
+
+/** Đưa hội thoại vào hàng AI trả lời (stately: đã có job chờ thì bỏ — job đó sẽ đọc cả tin mới). */
+export async function enqueueAutoreplyRun(deps: Pick<RunDeps, 'jobs' | 'now'>, conversationId: string, delayMs = AUTOREPLY_RUN_DELAY_MS): Promise<void> {
+  const now = deps.now?.() ?? new Date()
+  await deps.jobs.send('autoreply.run', { conversationId }, delayMs > 0 ? { startAfter: new Date(now.getTime() + delayMs) } : {})
+}
+
+/** Bản ghi kết quả của lượt (cập nhật dần, ghi một lần ở cuối). */
+interface RunRecord {
+  outcome: AutoreplyRunOutcome
+  reasonCode: HandoffReason | null
+  source: ConfigSource | null
+  llmCalls: number
+  confidence: number | null
+  messageIds: string[]
+}
+
+/** Quyết định → đầu vào `applyAutoreplyDecision` (đích theo loại lý do AD-9). */
+function toApply(decision: AutoreplyDecision): AutoreplyApplyInput {
+  if (decision.action === 'reply') return { messages: decision.messages, transition: null }
+  const kind = HANDOFF_REASON_KIND[decision.reasonCode]
+  return { messages: decision.messages, transition: { to: kind === 'not_applicable' ? 'human' : 'handoff', reasonCode: decision.reasonCode } }
+}
+
+/** Cổng 1–7 rồi `decideReply`. `onTyping` gọi ngay trước bước quyết định (luật / LLM). */
+async function decide(
+  deps: RunDeps,
+  turn: AutoreplyTurn,
+  record: RunRecord,
+  onTyping: () => Promise<void>,
+): Promise<AutoreplyDecision> {
+  const gate = await preGates(deps, { pageId: turn.pageId, platform: turn.platform, channel: turn.channel, aiEnabled: turn.aiEnabled })
+  record.source = gate.source
+  if (!gate.open) return handoffDecision(gate.reason)
+
+  const now = deps.now?.() ?? new Date()
+  const mode = gate.modes[0]!
+  const send = await canSend(deps.db, turn.conversationId, mode, { now })
+  // AD-9: `canSend` từ chối khi AI định trả lời → `OUTSIDE_24H` (sticky). Không gửi được gì nên không có câu chuyển tiếp.
+  if (!send.ok) return handoffDecision('OUTSIDE_24H')
+
+  const sources = await autoreplyRunSources(deps.db, turn.pageId)
+  record.source = sources.source
+  const latestText = turn.pending
+    .map((m) => m.text?.trim() ?? '')
+    .filter(Boolean)
+    .join('\n')
+  // Khách chỉ gửi ảnh / sticker / voice: AI chưa đọc được → chuyển người, kèm câu chuyển tiếp (chủ ý).
+  if (!latestText) return handoffDecision('NON_TEXT_MESSAGE', { config: sources.config, mode })
+
+  await onTyping()
+  return decideReply(deps, {
+    feature: 'autoreply',
+    pageId: turn.pageId,
+    ref: turn.conversationId,
+    config: sources.config,
+    brand: brandOrEmpty(sources.brand),
+    knowledge: sources.knowledge,
+    platform: turn.platform,
+    modes: gate.modes,
+    pageName: sources.pageName,
+    postText: turn.postText,
+    turns: turn.turns,
+    latestText,
+  })
+}
+
+/** Một lượt cho hội thoại. `finalAttempt`: lần thử cuối của job → lỗi bất ngờ thì chuyển người trước khi ném. */
+export async function runAutoreply(deps: RunDeps, conversationId: string, opts: { finalAttempt: boolean } = { finalAttempt: true }): Promise<RunOutcome> {
+  const turn = await readAutoreplyTurn(deps.db, conversationId)
+  if (!turn || turn.state !== 'ai' || !turn.lastInboundId || turn.pending.length === 0) return 'skipped'
+  const expected = { stateVersion: turn.stateVersion, lastInboundId: turn.lastInboundId }
+  const startedAt = deps.now?.() ?? new Date()
+  const [run] = await deps.db
+    .insert(autoreplyRuns)
+    .values({
+      conversationId,
+      pageId: turn.pageId,
+      lastInboundId: turn.lastInboundId,
+      stateVersion: turn.stateVersion,
+      inboundAt: turn.pending[0]!.createdAt,
+      startedAt,
+    })
+    .returning({ id: autoreplyRuns.id })
+
+  const record: RunRecord = { outcome: 'failed', reasonCode: null, source: null, llmCalls: 0, confidence: null, messageIds: [] }
+  let typing = false
+  try {
+    const decision = await decide(deps, turn, record, async () => {
+      typing = true
+      await setAiTyping(deps, conversationId, true)
+    })
+    record.llmCalls = decision.llmCalls
+    if (decision.action === 'reply') record.confidence = decision.confidence
+    const applied = await applyAutoreplyDecision(deps, conversationId, expected, toApply(decision))
+    if (!applied.applied) {
+      record.outcome = 'superseded'
+      record.reasonCode = decision.action === 'handoff' ? decision.reasonCode : null
+    } else {
+      record.messageIds = applied.messageIds
+      record.outcome = applied.state === 'ai' ? 'replied' : applied.state === 'handoff' ? 'handoff' : 'not_applicable'
+      record.reasonCode = (applied.reasonCode as HandoffReason | null) ?? null
+      typing = false // đã tắt trong transaction áp
+    }
+    return record.outcome
+  } catch (err) {
+    record.outcome = 'failed'
+    if (opts.finalAttempt) {
+      // Hết lượt retry: đưa khách vào "Cần xử lý" (tạm đóng) thay vì để hội thoại `ai` không ai trả lời.
+      const fallback = await applyAutoreplyDecision(deps, conversationId, expected, {
+        messages: [],
+        transition: { to: 'handoff', reasonCode: 'AI_PROVIDER_ERROR' },
+      }).catch(() => null)
+      if (fallback?.applied) {
+        record.reasonCode = 'AI_PROVIDER_ERROR'
+        typing = false
+      }
+    }
+    throw err
+  } finally {
+    if (typing) await setAiTyping(deps, conversationId, false).catch(() => {})
+    const finishedAt = deps.now?.() ?? new Date()
+    await deps.db
+      .update(autoreplyRuns)
+      .set({
+        finishedAt,
+        outcome: record.outcome,
+        reasonCode: record.reasonCode,
+        configSourceType: record.source?.ownerType ?? null,
+        configSourceId: record.source?.ownerId ?? null,
+        llmCalls: record.llmCalls,
+        confidence: record.confidence,
+        messageIds: record.messageIds,
+      })
+      .where(eq(autoreplyRuns.id, run!.id))
+      .catch((err: unknown) => deps.log?.error({ err, runId: run!.id }, 'autoreply: không ghi được kết quả lượt chạy'))
+    deps.log?.info(
+      {
+        runId: run!.id,
+        conversationId,
+        pageId: turn.pageId,
+        outcome: record.outcome,
+        reasonCode: record.reasonCode,
+        llmCalls: record.llmCalls,
+        // Độ trễ tới lúc quyết định (gồm 4 giây gộp tin); tới lúc gửi xong đo bằng `messages.sent_at`.
+        decideMs: finishedAt.getTime() - turn.pending[0]!.createdAt.getTime(),
+      },
+      'autoreply: lượt chạy',
+    )
+  }
+}
+
+export function parseRunJobData(data: unknown): { conversationId: string } {
+  const id = (data as { conversationId?: unknown } | null)?.conversationId
+  if (typeof id !== 'string' || id === '') throw new Error('autoreply.run: thiếu conversationId')
+  return { conversationId: id }
+}
+
+/** Handler job `autoreply.run` cho worker. */
+export async function handleRunJob(deps: RunDeps, job: { data: unknown; retryCount: number; retryLimit: number }): Promise<RunOutcome> {
+  const { conversationId } = parseRunJobData(job.data)
+  return runAutoreply(deps, conversationId, { finalAttempt: job.retryCount >= job.retryLimit })
+}

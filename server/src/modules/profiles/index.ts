@@ -39,7 +39,9 @@ export {
   getEffectiveAutoreply,
   saveAutoreplyConfig,
   setAutoreplyUseOwn,
+  autoreplyRunSources,
   autoreplyTestSources,
+  type AutoreplyRunSources,
   type AutoreplyTestSources,
 } from './autoreply.ts'
 export { listReadyKnowledge, type ReadyKnowledgeEntry } from './knowledge-row.ts'

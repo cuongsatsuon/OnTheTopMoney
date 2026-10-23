@@ -159,6 +159,8 @@ export const ConversationDto = z.object({
   channel: ConversationChannel,
   state: ConversationState,
   aiEnabled: z.boolean(),
+  /** Story 5.4: AI đang soạn câu trả lời (lượt `autoreply.run` đang gọi LLM) — chấm "đang gõ". */
+  aiTyping: z.boolean(),
   /** Lý do của lần chuyển trạng thái gần nhất; `null` khi chưa chuyển lần nào. */
   stateReason: StateChangeReason.nullable(),
   /** Khách đang chờ trả lời từ lúc này (AD-9); `null` khi không chờ. */

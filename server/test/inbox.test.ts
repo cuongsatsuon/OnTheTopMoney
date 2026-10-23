@@ -1,5 +1,5 @@
 // Story 4.3 — tin Messenger / IG Direct vào Hộp thư: `webhook.route` → `inbox.ingest` (định danh → khách → hội thoại
-// → tin, chống trùng, chỉ tăng, thứ tự theo platform_timestamp), triage (`autoreply.triage` → `human` `AI_OFF`, khoá
+// → tin, chống trùng, chỉ tăng, thứ tự theo platform_timestamp), triage (`autoreply.triage` → trang chưa có cấu hình AI → `human` `CONFIG_MISSING`, khoá
 // lạc quan), đính kèm (job → kho riêng tư, lỗi tạm/cố định), tên khách (job hồ sơ), trang không có/đã gỡ, mục bị bỏ
 // qua, API Hộp thư (phạm vi, phân trang, đính kèm) và hint realtime.
 import { randomBytes } from 'node:crypto'
@@ -82,7 +82,7 @@ beforeEach(async () => {
   await handle.sql`delete from pages`
   await handle.sql`delete from contacts`
   await handle.sql`delete from sessions`
-  await handle.sql`delete from pgboss.job where name in ('inbox.fetch_attachment', 'inbox.fetch_profile', 'webhook.route')`
+  await handle.sql`delete from pgboss.job where name in ('inbox.fetch_attachment', 'inbox.fetch_profile', 'webhook.route', 'autoreply.run')`
   emitted.length = 0
   realtime.messages.length = 0
 })
@@ -141,7 +141,7 @@ async function runTriage() {
   const out = []
   for (const e of received) {
     const envelope: EventEnvelope = { event: 'message.received', payload: e.payload as never }
-    out.push(await handleTriageEvent({ db: handle.db, events }, envelope))
+    out.push(await handleTriageEvent({ db: handle.db, events, jobs, cipher: null }, envelope))
   }
   return out
 }
@@ -169,7 +169,7 @@ const count = async (table: string) => (await handle.sql.unsafe<{ n: number }[]>
 // ---------------------------------------------------------------------------------------------------------
 
 describe('ingest DM + triage', () => {
-  it('tin Messenger đầu tiên → khách + định danh + hội thoại triage + tin; triage → human AI_OFF + tin system', async () => {
+  it('tin Messenger đầu tiên → khách + định danh + hội thoại triage + tin; triage → human CONFIG_MISSING + tin system', async () => {
     const pageId = await page('facebook', 'FB_1')
     const ts = at(10)
     expect(await dm('FB_1', { sender: 'PSID_1', mid: 'm_first', text: 'Chào shop', ts })).toEqual({ result: 'routed', status: 'routed' })
@@ -187,17 +187,17 @@ describe('ingest DM + triage', () => {
 
     expect(await runTriage()).toEqual(['applied'])
     const [after] = await conversationsRows()
-    expect(after).toMatchObject({ state: 'human', state_version: 1, state_reason: 'AI_OFF' })
+    expect(after).toMatchObject({ state: 'human', state_version: 1, state_reason: 'CONFIG_MISSING' })
     expect(after!.waiting_since!).toBe(ts)
     const msgs = await messagesOf(conv!.id)
     expect(msgs.map((m) => m.origin)).toEqual(['customer', 'system'])
-    expect(msgs[1]).toMatchObject({ direction: null, reason_code: 'AI_OFF' })
+    expect(msgs[1]).toMatchObject({ direction: null, reason_code: 'CONFIG_MISSING' })
     expect(emittedOf('conversation.state_changed').map((e) => e.payload)).toEqual([
-      { id: conv!.id, pageId, from: 'triage', to: 'human', reasonCode: 'AI_OFF', version: 1 },
+      { id: conv!.id, pageId, from: 'triage', to: 'human', reasonCode: 'CONFIG_MISSING', version: 1 },
     ])
     // Triage chạy lại (retry) → hội thoại không còn `triage` → bỏ qua, không ghi thêm.
     const envelope: EventEnvelope = { event: 'message.received', payload: received[0]!.payload as never }
-    expect(await handleTriageEvent({ db: handle.db, events }, envelope)).toBe('skipped')
+    expect(await handleTriageEvent({ db: handle.db, events, jobs, cipher: null }, envelope)).toBe('skipped')
     expect(emittedOf('conversation.state_changed')).toHaveLength(1)
   })
 
@@ -247,7 +247,7 @@ describe('ingest DM + triage', () => {
     expect(emittedOf('conversation.state_changed')).toHaveLength(1)
   })
 
-  it('hội thoại done → tin khách mới đưa về triage (tăng version) → human AI_OFF', async () => {
+  it('hội thoại done → tin khách mới đưa về triage (tăng version) → human CONFIG_MISSING', async () => {
     await page('facebook', 'FB_X')
     await dm('FB_X')
     await runTriage()
@@ -257,11 +257,11 @@ describe('ingest DM + triage', () => {
     expect(conv).toMatchObject({ state: 'triage', state_version: 2 })
     expect(await runTriage()).toEqual(['applied'])
     ;[conv] = await conversationsRows()
-    expect(conv).toMatchObject({ state: 'human', state_version: 3, state_reason: 'AI_OFF' })
+    expect(conv).toMatchObject({ state: 'human', state_version: 3, state_reason: 'CONFIG_MISSING' })
     expect(emittedOf('conversation.state_changed').map((e) => (e.payload as { version: number }).version)).toEqual([1, 3])
   })
 
-  it('hội thoại handoff → giữ trạng thái (Epic 5 xử lý), triage bỏ qua', async () => {
+  it('hội thoại handoff → giữ trạng thái (quay lại AI là Story 5.6), triage bỏ qua', async () => {
     await page('facebook', 'FB_S')
     await dm('FB_S')
     await runTriage()
@@ -272,18 +272,16 @@ describe('ingest DM + triage', () => {
     expect(conv!.state).toBe('handoff')
   })
 
-  it('hội thoại ai (Story 4.6: bật lại AI) + tin khách → cổng AI đóng trước Epic 5 → human AI_OFF', async () => {
+  it('hội thoại ai + tin khách → triage không đổi trạng thái, enqueue autoreply.run (Story 5.4)', async () => {
     await page('facebook', 'FB_S2')
     await dm('FB_S2', { ts: at(5) })
     await runTriage()
     await handle.sql`update conversations set state = 'ai', waiting_since = null`
     await dm('FB_S2', { ts: at(6) })
-    expect(await runTriage()).toEqual(['applied'])
+    expect(await runTriage()).toEqual(['queued'])
     const [conv] = await conversationsRows()
-    expect(conv).toMatchObject({ state: 'human', state_reason: 'AI_OFF', state_version: 2 })
-    // `ai` không đếm chờ → mốc chờ lấy từ tin khách cuối.
-    expect(conv!.waiting_since!).toBe(at(6))
-    expect(emittedOf('conversation.state_changed').at(-1)!.payload).toMatchObject({ from: 'ai', to: 'human', reasonCode: 'AI_OFF' })
+    expect(conv).toMatchObject({ state: 'ai', state_version: 1 })
+    expect((await jobsOf('autoreply.run')).map((j) => j.data)).toEqual([{ conversationId: conv!.id }])
   })
 
   it('cùng người, trang khác (PSID khác) → định danh + khách riêng, không gộp', async () => {
@@ -534,8 +532,9 @@ describe('API Hộp thư', () => {
     expect(all.items.map((i) => i.pageId)).toEqual([b, a])
     expect(all.items[0]).toMatchObject({
       state: 'human',
-      stateReason: 'AI_OFF',
+      stateReason: 'CONFIG_MISSING',
       needsAttention: true,
+      aiTyping: false,
       channel: 'dm',
       aiEnabled: true,
       preview: { text: 'mới', origin: 'customer', attachmentCount: 0 },

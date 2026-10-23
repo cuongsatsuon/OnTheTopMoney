@@ -55,6 +55,8 @@ export interface QueuePayloads {
   'connections.subscribe_page': { pageId: string }
   'webhooks.health': Record<string, never>
   'autoreply.triage': EventEnvelope
+  /** Story 5.4: một lượt AI trả lời hội thoại (stately theo `conversationId`). */
+  'autoreply.run': { conversationId: string }
   'inbox.fetch_attachment': { attachmentId: string }
   'inbox.fetch_profile': { identityId: string }
   'inbox.fetch_post_text': { conversationId: string }
@@ -194,8 +196,10 @@ export const QUEUES = {
     cron: { expression: '*/5 * * * *', tz: CRON_TZ },
   },
   // Module `autoreply` (Story 4.3, AD-16, AD-24): tin khách (`message.received`) → đưa hội thoại `triage` về đích
-  // NGAY. Trước Epic 5 luôn `human` với `AI_OFF`. Idempotent (chỉ áp khi còn `triage` + đúng `state_version`) nên
-  // retry an toàn. Hỏi job 0,5 giây để chip trạng thái đổi trong ≤3 giây.
+  // NGAY theo cổng AD-16 (Story 5.4); hội thoại `ai` → enqueue `autoreply.run`. Story 5.4: nghe thêm
+  // `conversation.state_changed` (bật lại AI → lượt chạy ngay). Idempotent (chỉ áp khi còn `triage` + đúng
+  // `state_version`; enqueue trùng bị queue stately bỏ) nên retry an toàn. Hỏi job 0,5 giây để chip trạng thái đổi
+  // trong ≤3 giây.
   'autoreply.triage': {
     policy: 'standard',
     retryLimit: 3,
@@ -204,7 +208,22 @@ export const QUEUES = {
     concurrency: 10,
     expireInSeconds: 60,
     pollingIntervalSeconds: 0.5,
-    subscribes: ['message.received'],
+    subscribes: ['message.received', 'conversation.state_changed'],
+  },
+  // Module `autoreply` (Story 5.4, AD-16, AD-24): một lượt AI trả lời hội thoại. `stately` theo `conversationId`: tối đa
+  // một job chờ + một job chạy mỗi hội thoại — tin tới trong 4 giây trễ (hoặc giữa lúc lượt đang chạy) gộp vào đúng MỘT
+  // lượt kế tiếp; không hai lượt song song. Khoá lạc quan ở `inbox.applyAutoreplyDecision` nên retry an toàn (lượt đã
+  // trả lời → `skipped`). Retry 2 backoff, concurrency 5. Hạn 300 giây > 2 lời gọi OpenAI (mỗi lời ≤120 giây). Hỏi
+  // job 0,5 giây (NFR1: p95 webhook → tin AI đã gửi ≤15 giây).
+  'autoreply.run': {
+    policy: 'stately',
+    singletonKey: (data: { conversationId: string }) => data.conversationId,
+    retryLimit: 2,
+    retryDelay: 5,
+    retryBackoff: true,
+    concurrency: 5,
+    expireInSeconds: 300,
+    pollingIntervalSeconds: 0.5,
   },
   // Module `inbox` (Story 4.3, AD-11, AD-14): tải đính kèm của khách từ CDN Meta về kho riêng tư. Chống trùng bằng
   // `UPDATE … WHERE status='pending'`. Chỉ lỗi tạm (CDN/kho 5xx, chặn tần suất) ném để retry; lần thử cuối ghi

@@ -8,6 +8,7 @@
 // theo mã gửi tin (bong bóng "Gửi tin lỗi"). Server từ chối gửi (409 mã gửi tin) → tin đã lưu `failed`: chỉ làm cũ tin.
 // Story 4.8: Gợi ý bằng AI (`useSuggestReply`, huỷ bằng `signal`), khoá nút theo nguồn (khoá OpenAI, hạn mức, hồ sơ, mã
 // lỗi server — `suggestLock`), cụm vi phạm còn trong chữ (`remainingViolations`).
+// Story 5.4: AI tự trả lời — `aiTyping` (chấm "đang gõ", realtime `conversation.ai_typing`), "Gửi lại" cho tin AI lỗi.
 import {
   ListConversationsResponse,
   ConversationCountResponse,
@@ -334,8 +335,13 @@ export function outboundStatusLabel(status: MessageStatus | null): string | null
  */
 export const outboundAuthorLabel = (origin: MessageOrigin): string => (origin === 'external_human' ? 'Bạn · ngoài app' : 'Bạn')
 
-/** "Gửi lại" chỉ cho tin của chủ shop đang lỗi (server cũng kiểm). */
-export const canResend = (msg: Pick<MessageDto, 'origin' | 'status'>): boolean => msg.origin === 'app_human' && msg.status === 'failed'
+/** "Gửi lại" cho tin đang lỗi của chủ shop hoặc của AI (Story 5.4) — server cũng kiểm. */
+export const canResend = (msg: Pick<MessageDto, 'origin' | 'status'>): boolean =>
+  (msg.origin === 'app_human' || msg.origin === 'app_ai') && msg.status === 'failed'
+
+/** Tooltip nút "Gửi lại": gửi lại câu của AI = chủ shop gửi → hội thoại về tay bạn, AI tạm dừng (server: `HUMAN_REPLIED`). */
+export const resendTitle = (origin: MessageOrigin): string | undefined =>
+  origin === 'app_ai' ? 'Gửi lại câu AI đã soạn — bạn sẽ tiếp quản hội thoại này' : undefined
 
 export interface ConversationControls {
   /** Nút "Tiếp quản" (và phím `T`). */
@@ -463,7 +469,8 @@ export const REASON_TEXT: Record<StateChangeReason, string> = {
   TAKEOVER: 'Bạn đã tiếp quản — AI tạm dừng ở hội thoại này',
   AI_REENABLED: 'Đã bật lại AI cho hội thoại này',
   MARKED_DONE: 'Đã đánh dấu xong',
-  GATE_OPEN: 'AI trả lời lại được — AI tiếp tục hội thoại',
+  // Story 5.4: tin đầu của hội thoại mới cũng qua đây (triage → ai), không chỉ lúc AI chạy lại (5.6).
+  GATE_OPEN: 'AI đang trả lời hội thoại này',
 }
 
 export const ATTACHMENT_ERROR_TEXT: Record<AttachmentError, string> = {

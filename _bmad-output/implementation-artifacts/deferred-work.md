@@ -70,15 +70,9 @@
 - source_spec: `spec-4-4-binh-luan-vao-hop-thu.md`
   summary: Trả lời Threads lồng nhiều cấp tới trước tin cha → `thread_key` = id tin cha, tách thành hội thoại riêng.
   evidence: `ingestComment` tra hội thoại của tin cha ngoài khoá luồng; tin cha chưa ingest thì dùng `parentId`. FB/IG không bị (cha luôn là bình luận gốc). Làm khi xác nhận payload Threads thật (có `root` id của luồng hay không).
-- source_spec: `spec-4-6-tab-tiep-quan-danh-dau-xong.md`
-  summary: Bật lại AI cho hội thoại mà khách đang chờ (tin không phải `system` mới nhất là `customer`) → cần chạy cổng AI ngay cho tin chờ sẵn (hoặc chặn/cảnh báo), không để hội thoại nằm ở tab "AI đang trả lời" mà không ai trả lời.
-  evidence: `applyUserAction('enable-ai')` đặt `waiting_since=null`, hội thoại rời "Cần xử lý"; `autoreply.triage` chỉ chạy khi có `message.received` mới. Trước Epic 5 cổng luôn đóng nên AI không bao giờ trả lời tin đó. Làm cùng chuỗi cổng AD-16 ở Epic 5 (kích hoạt quyết định khi bật lại AI).
 - source_spec: `spec-4-7-gui-tin-24-gio.md`
   summary: Nhắn riêng tạo sẵn hội thoại `dm` với `origin_conversation_id` = hội thoại bình luận (AD-10/AD-11 bản đầy đủ).
   evidence: 4.7 chỉ gắn định danh `(page, recipient_id)` vào cùng khách; khách trả lời qua Messenger thì vào hội thoại `dm` mới của cùng khách nhưng không có liên kết ngược. (Phần "gợi ý gộp khi `recipient_id` đã thuộc khách khác" đã làm ở Story 4.9 — `contact_merge_suggestions`.)
-- source_spec: `spec-4-7-gui-tin-24-gio.md`
-  summary: Gửi lại / xử lý tin `app_ai` gửi lỗi (Epic 5) — hiện "Gửi lại" chỉ cho tin `app_human`.
-  evidence: `resendMessage` trả `conflict` cho tin AI; khi Epic 5 ghi tin AI qua `inbox.send` cần quyết định: chủ shop gửi lại tin AI (thành `HUMAN_REPLIED`?) hay chỉ handoff.
 - source_spec: `spec-4-7-gui-tin-24-gio.md`
   summary: Xác nhận bằng Meta thật: Send API `/me/messages` cho IG (token Fanpage nguồn), `metadata` cho IG, Threads publish container trả lời ngay sau khi tạo (tài liệu khuyên chờ), giới hạn ký tự IG 1000.
   evidence: Đường gửi mới chỉ chạy với Meta giả/fake client. Threads publish lỗi tạm thì retry tạo container mới (container cũ mồ côi, vô hại).
@@ -93,7 +87,7 @@
   evidence: `ingestEcho` trả `no_conversation`, không tạo khách/hội thoại từ tin của trang; khi khách trả lời thì hội thoại mới không có tin trước đó của trang. Cân nhắc khi làm hội thoại `dm` từ nhắn riêng (việc hoãn của 4.7).
 - source_spec: `spec-4-5-nhan-dien-echo.md`
   summary: Phản hồi tự động của Meta (Instant Reply, tin vắng mặt, câu hỏi thường gặp cấu hình trong Business Suite) bị coi là chủ shop trả lời ngoài app → hội thoại sang `human` và tắt AI.
-  evidence: `echoAuthor` (server/src/modules/inbox/echo.ts) xếp mọi echo có `app_id` khác app mình vào `other_app` → `external_human` + `applyHumanReply` ngay; tin tự động của Meta có `app_id` của app Meta, payload không có cờ "tự động". Cần sự kiện thật để tìm dấu hiệu (app_id riêng, `metadata`, thời điểm ngay sau tin đầu của khách…) và quyết định sản phẩm (bỏ qua / chèn không đổi trạng thái) trước khi AI trả lời thật ở Epic 5.
+  evidence: `echoAuthor` (server/src/modules/inbox/echo.ts) xếp mọi echo có `app_id` khác app mình vào `other_app` → `external_human` + `applyHumanReply` ngay; tin tự động của Meta có `app_id` của app Meta, payload không có cờ "tự động". Cần sự kiện thật để tìm dấu hiệu (app_id riêng, `metadata`, thời điểm ngay sau tin đầu của khách…) và quyết định sản phẩm (bỏ qua / chèn không đổi trạng thái). Story 5.4 (AI đã tự trả lời) đánh giá lại: không có dấu hiệu an toàn nào nếu chưa có payload thật — đoán theo thời điểm/nội dung có thể bỏ sót chủ shop trả lời thật trong Business Suite (AI chen ngang người). Hệ quả hiện tại: trang bật Instant Reply của Meta thì hội thoại mới sang `human` (AI tắt) ngay tin đầu → nên hướng dẫn chủ shop tắt Instant Reply / tin vắng mặt khi bật AI, cho tới khi có sự kiện thật.
 - source_spec: `spec-4-8-goi-y-bang-ai.md`
   summary: Kiểm bằng trình duyệt nút "Gợi ý bằng AI" (Dừng, Hoàn tác, tooltip khoá theo nguồn) và "Viết thử bằng AI" sau khi đổi cách bắt huỷ request.
   evidence: Chỉ có test HTTP thật (fetch + AbortController) và test helper web; chưa chạy UI với phiên chủ shop + trang đã kết nối + khoá OpenAI.
@@ -124,6 +118,15 @@
 - source_spec: `spec-5-3-thu-ai.md`
   summary: Kiểm bằng trình duyệt khung "Thử AI" với nhóm/trang thật + khoá OpenAI thật (AI đang gõ, Dừng, chọn kênh thử, ghi chú "AI sẽ chuyển cho bạn · …", thử khi AI tắt, lỗi kho quá lớn) và chất lượng câu trả lời của structured output thật (ngưỡng tin cậy 0.6 [ASSUMPTION]).
   evidence: Chỉ có test API (Postgres thật, OpenAI giả trả JSON dựng sẵn) và test helper web; chưa gọi `text.format: json_schema` với OpenAI thật, chưa chạy UI với phiên chủ shop.
-- source_spec: `spec-5-3-thu-ai.md`
-  summary: Lần sinh lại sau vi phạm hậu kiểm (`decideReply`, cả `inbox.suggestReply`) nên kèm vi phạm vừa gặp vào prompt (vd "bỏ từ X", "ngắn hơn N ký tự") thay vì gửi y nguyên prompt.
-  evidence: `server/src/modules/autoreply/decide.ts` vòng `attempt < 2` gọi lại `generateText` với cùng `instructions/input` → model dễ lặp lỗi (từ cấm, quá dài), tốn lời gọi thứ hai rồi vẫn `AI_POLICY_BLOCKED` (sticky ở 5.4). Cần thêm câu nhắc trong prompt + test model giả trả sạch ở lần 2 khi thấy nhắc.
+- source_spec: `spec-5-4-ai-tu-tra-loi.md`
+  summary: Kiểm bằng trình duyệt + Meta/OpenAI thật luồng AI tự trả lời: chip "AI đang trả lời" kèm chấm đang gõ, bong bóng "AI đang trả lời…", tin tím "AI trả lời", ghi chú chuyển người, "Gửi lại" tin AI lỗi; đo p95 NFR1 (webhook → `sent_at`) bằng câu SQL trong spec.
+  evidence: Chỉ có test Postgres thật + OpenAI/Meta giả (`server/test/autoreply-run.test.ts`) và test helper web; chưa chạy worker thật với `autoreply.run` stately trễ 4 giây, chưa có số đo độ trễ thật.
+- source_spec: `spec-5-4-ai-tu-tra-loi.md`
+  summary: Kho kiến thức vượt 40k token SAU khi bật (file trích xong muộn) — lượt chạy thật không chặn, prompt vẫn nhét toàn bộ.
+  evidence: `profiles.autoreplyRunSources` (server/src/modules/profiles/autoreply.ts) không kiểm `KNOWLEDGE_MAX_TOKENS`; 5.2 chặn lúc lưu/bật và lúc thêm FAQ, nhưng job trích file kết thúc sau khi bật có thể đẩy tổng vượt ngưỡng (vượt tối đa một file). Cần quyết định: cắt kho, chuyển người (lý do nào), hay chỉ cảnh báo ở màn cấu hình.
+- source_spec: `spec-5-4-ai-tu-tra-loi.md`
+  summary: Tin AI không gửi được vì sự cố phía gửi (`SEND_FAILED`, `RECIPIENT_UNAVAILABLE`, `PAGE_DISCONNECTED`, `SEND_UNKNOWN`…) đang dùng lý do `AI_PROVIDER_ERROR` ("AI đang gặp sự cố") — chưa có lý do riêng "Không gửi được tin AI".
+  evidence: `aiSendFailureReason` (server/src/modules/inbox/state.ts); thêm lý do mới cần đổi `HandoffReason` (shared + CHECK `state_reason`/`reason_code`, migration) và câu ở `REASON_TEXT`. Bong bóng tin vẫn hiện đúng lỗi gửi theo mã.
+- source_spec: `spec-5-4-ai-tu-tra-loi.md`
+  summary: Lượt `autoreply.run` quá `expireInSeconds` (300 giây) ở lần thử cuối không chuyển người — hội thoại có thể kẹt `ai` không ai trả lời.
+  evidence: Fallback `handoff` `AI_PROVIDER_ERROR` chỉ chạy trong `catch` của `runAutoreply` (server/src/modules/autoreply/run.ts); pg-boss 12 hết hạn thì đánh `failed` + abort `job.signal` mà handler không nghe signal. Hiếm vì 2 lời gọi OpenAI ≤ 240 giây. Sửa: truyền `job.signal` vào `decideReply`, hoặc cron quét hội thoại `ai` có run `outcome is null` quá hạn → `handoff`.

@@ -89,6 +89,13 @@ describe('hintInvalidates', () => {
     expect(hintInvalidates('ai_budget', 'notification')).toBe(false)
     expect(hintInvalidates('notifications', 'openai_key')).toBe(false)
   })
+
+  it('conversation.ai_typing (Story 5.4) → chỉ hội thoại + tin, không làm cũ khách hàng', () => {
+    expect(hintInvalidates('conversations', 'conversation', 'conversation.ai_typing')).toBe(true)
+    expect(hintInvalidates('messages', 'conversation', 'conversation.ai_typing')).toBe(true)
+    expect(hintInvalidates('contacts', 'conversation', 'conversation.ai_typing')).toBe(false)
+    expect(hintInvalidates('contacts', 'conversation', 'conversation.state_changed')).toBe(true)
+  })
 })
 
 describe('createRealtimeClient — Hộp thư (Story 4.3)', () => {

@@ -2,12 +2,14 @@
 // job): ngữ cảnh = các tin gần nhất của hội thoại + bài được bình luận; giọng = hồ sơ hiệu lực của trang (bên gọi giải qua
 // `profiles.resolveEffective` rồi truyền vào — `inbox` không gọi `profiles`, AD-1). Gateway `feature=inbox_suggest`
 // (`signal` = nút Dừng), hậu kiểm `ai.checkOutput`: vi phạm → sinh lại MỘT lần; vẫn vi phạm → trả kèm cụm vi phạm để FE
-// đánh dấu. Không ghi tin, không đổi trạng thái hội thoại, không tự gửi. Không log prompt / nội dung tin / bản nháp.
+// đánh dấu (Story 5.4: lần sinh lại kèm ghi chú vi phạm vừa gặp). Không ghi tin, không đổi trạng thái hội thoại, không
+// tự gửi. Không log prompt / nội dung tin / bản nháp.
 import { sendModesFor, sendTextLimit, type AiOutputKind, type MessageDelivery, type MessageDto, type SuggestReplyResponse } from '@ottm/shared'
 import {
   buildReplyPrompt,
   checkOutput,
   generateText,
+  retryNote,
   type AiDeps,
   type CheckBrand,
   type ReplyBrand,
@@ -96,14 +98,14 @@ export async function suggestReply(deps: SuggestDeps, conversationId: string, in
   })
   const checkBrand: CheckBrand = { bannedWords: brand.bannedWords, allowedDomains: brand.allowedDomains }
   const kind = suggestKind(mode)
-  const generate = async () =>
+  const generate = async (note = '') =>
     (
       await generateText(deps, {
         feature: 'inbox_suggest',
         pageId: conv.pageId,
         ref: conv.id,
         instructions: prompt.instructions,
-        input: prompt.input,
+        input: note ? `${prompt.input}\n\n${note}` : prompt.input,
         maxOutputTokens: prompt.maxOutputTokens,
         signal: input.signal,
       })
@@ -112,7 +114,8 @@ export async function suggestReply(deps: SuggestDeps, conversationId: string, in
   let draft = await generate()
   let check = checkOutput(draft, { brand: checkBrand, kind, maxChars })
   if (!check.clean) {
-    draft = await generate()
+    // Story 5.4: lần sinh lại kèm đúng vi phạm vừa gặp.
+    draft = await generate(retryNote(check.violations))
     check = checkOutput(draft, { brand: checkBrand, kind, maxChars })
   }
   return { status: 'ok', draft, violations: check.violations }

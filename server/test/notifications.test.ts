@@ -354,6 +354,7 @@ describe('worker thật: publish → events.notifications → thông báo; job h
         'connections.subscribe_page': async () => {},
         'webhooks.health': async () => {},
         'autoreply.triage': async () => {},
+        'autoreply.run': async () => {},
         'inbox.fetch_attachment': async () => {},
         'inbox.fetch_profile': async () => {},
         'inbox.fetch_post_text': async () => {},

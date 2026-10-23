@@ -1,13 +1,18 @@
 // Module `autoreply` (AD-1, AD-16): AI trả lời tự động. Public API chỉ export từ file này.
 // Gọi: `inbox` (áp quyết định), `profiles`, `ai` (Epic 5). Chỉ entrypoint (worker; api cho "Thử AI") gọi module này.
-// Story 4.3: bước triage (luôn `AI_OFF` → `human` tới khi Story 5.4 nối chuỗi cổng đầy đủ).
-// Story 5.3: hàm quyết định dùng chung (cổng sẵn sàng AI, luật chuyển người, LLM + hậu kiểm) và lượt "Thử AI".
+// Story 4.3: bước triage. Story 5.3: hàm quyết định dùng chung (cổng sẵn sàng AI, luật chuyển người, LLM + hậu kiểm)
+// và lượt "Thử AI". Story 5.4: chuỗi cổng AD-16 ở triage, lượt chạy `autoreply.run` (bảng `autoreply_runs`), AI tự trả
+// lời tin nhắn và chuyển cho người.
 export const MODULE = 'autoreply'
 
 export { decideTriage, handleTriageEvent, type TriageDeps, type TriageOutcome } from './triage.ts'
+export { AUTOREPLY_RUN_DELAY_MS, enqueueAutoreplyRun, handleRunJob, parseRunJobData, runAutoreply, type RunDeps, type RunOutcome } from './run.ts'
+export { preGates, servingChannels, vnClock, withinActiveHours, type GateInput, type GateResult } from './gates.ts'
+export { AUTOREPLY_RUN_OUTCOMES, type AutoreplyRunOutcome } from './schema.ts'
 export {
   AUTOREPLY_CONFIDENCE_MIN,
   aiAvailabilityGate,
+  brandOrEmpty,
   decideReply,
   handoffDecision,
   parseModelOutput,

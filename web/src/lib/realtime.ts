@@ -52,9 +52,21 @@ export const ENTITY_ALSO_INVALIDATES: Readonly<Record<string, readonly string[]>
   conversation: ['message', 'contact'],
 }
 
-/** Query có khoá gốc `root` bị gợi ý của `entity` làm cũ? (chính thực thể đó hoặc thực thể kèm theo). */
-export function hintInvalidates(root: unknown, entity: string): boolean {
-  return [entity, ...(ENTITY_ALSO_INVALIDATES[entity] ?? [])].some((e) => entityMatches(root, e))
+/**
+ * Sự kiện làm cũ hẹp hơn thực thể của nó. Story 5.4: `conversation.ai_typing` (AI bắt đầu / thôi gõ, mỗi lượt hai lần)
+ * chỉ làm cũ hội thoại (`aiTyping`) + tin (tin AI vừa ghi), không kéo theo khách hàng như `conversation.state_changed`.
+ */
+export const TYPE_INVALIDATES: Readonly<Record<string, readonly string[]>> = {
+  'conversation.ai_typing': ['conversation', 'message'],
+}
+
+/**
+ * Query có khoá gốc `root` bị gợi ý của `entity` làm cũ? (chính thực thể đó hoặc thực thể kèm theo). Có `type` nằm trong
+ * `TYPE_INVALIDATES` → dùng danh sách riêng của sự kiện đó.
+ */
+export function hintInvalidates(root: unknown, entity: string, type?: string): boolean {
+  const own = type !== undefined ? TYPE_INVALIDATES[type] : undefined
+  return (own ?? [entity, ...(ENTITY_ALSO_INVALIDATES[entity] ?? [])]).some((e) => entityMatches(root, e))
 }
 
 export interface EventSourceLike {
@@ -138,7 +150,7 @@ export function createRealtimeClient(options: RealtimeClientOptions): RealtimeCl
     const parsed = RealtimeHint.safeParse(data)
     if (!parsed.success) return
     const hint = parsed.data
-    void queryClient.invalidateQueries({ predicate: (q) => hintInvalidates(q.queryKey[0], hint.entity) })
+    void queryClient.invalidateQueries({ predicate: (q) => hintInvalidates(q.queryKey[0], hint.entity, hint.type) })
     for (const listener of listeners) listener(hint)
   }
 

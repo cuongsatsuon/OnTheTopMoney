@@ -2,8 +2,9 @@
 // qua `ai/index.ts`). Thuần, xác định — dựng `{instructions, input}` cho `generateText(feature='inbox_suggest')`.
 // Dùng cho "Gợi ý bằng AI" ở Hộp thư (Story 4.8); AI trả lời tự động (Story 5.3+, `autoreply.ts`) dùng lại phần kênh,
 // giọng, dữ liệu shop và bản ghi hội thoại.
+// Story 5.4: `retryNote` — ghi chú vi phạm hậu kiểm cho lần sinh lại.
 // Ngữ cảnh là dữ liệu trung lập (người viết + chữ) do `inbox` dựng — module này không biết bảng tin nhắn.
-import type { MessageDelivery, Platform } from '@ottm/shared'
+import type { AiViolation, MessageDelivery, Platform } from '@ottm/shared'
 import { EMOJI_GUIDE, formalityGuide, type CaptionBrand } from './caption.ts'
 
 /** Số token đầu ra tối đa cho một bản nháp trả lời (đủ cho tin dài nhất 2000 ký tự, vẫn chặn chi phí). */
@@ -117,6 +118,21 @@ export function replyInput(brand: ReplyBrand, ctx: ReplyContext): string {
 }
 
 /** Dựng prompt trả lời đầy đủ cho gateway. */
+/**
+ * Ghi chú cho lần sinh lại sau khi hậu kiểm (AD-21) chặn lần đầu: nêu đúng vi phạm vừa gặp để model không lặp lại
+ * (Story 5.4 — cả Gợi ý AI và AI trả lời). Gắn vào cuối `input`; rỗng khi không có vi phạm.
+ */
+export function retryNote(violations: readonly AiViolation[]): string {
+  const lines: string[] = []
+  const banned = [...new Set(violations.filter((v) => v.kind === 'banned_word').map((v) => v.text))]
+  const urls = [...new Set(violations.filter((v) => v.kind === 'disallowed_url').map((v) => v.text))]
+  const long = violations.find((v) => v.kind === 'too_long')
+  if (banned.length) lines.push(`- Bỏ hẳn các cụm shop cấm dùng: ${banned.map((b) => `"${b}"`).join(', ')}.`)
+  if (urls.length) lines.push(`- Không đưa các đường link sau: ${urls.join(', ')}.`)
+  if (long) lines.push(`- Bản trước quá dài (${long.text} ký tự) — viết ngắn hơn hẳn giới hạn.`)
+  return lines.length ? ['Bản trả lời trước bị chặn, hãy viết lại và sửa đúng các lỗi sau:', ...lines].join('\n') : ''
+}
+
 export function buildReplyPrompt(brand: ReplyBrand, ctx: ReplyContext): { instructions: string; input: string; maxOutputTokens: number } {
   return { instructions: replyInstructions(brand, ctx), input: replyInput(brand, ctx), maxOutputTokens: REPLY_MAX_OUTPUT_TOKENS }
 }

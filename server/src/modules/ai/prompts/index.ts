@@ -13,6 +13,7 @@ export {
   buildReplyPrompt,
   replyInput,
   replyInstructions,
+  retryNote,
   type ReplyBrand,
   type ReplyContext,
   type ReplyTurn,

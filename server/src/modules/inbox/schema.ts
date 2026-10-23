@@ -9,6 +9,7 @@
 // - Tin: UNIQUE(page_id, platform_message_id) khi id khác null; hiển thị theo `platform_timestamp` rồi `id`.
 // - Tin outbound (Story 4.7, AD-10): `pending → sending → sent` hoặc `failed` + `error_code`; `delivery` cách gửi,
 //   `reply_to_platform_id` bình luận được trả lời / nhắn riêng, `queued_at` lần đưa vào hàng gửi, `sending_at` lúc job chiếm.
+// - Story 5.4: `conversations.ai_typing_at` (chấm "đang gõ" của AI), `messages.sent_at` (đo độ trễ AI trả lời).
 // Khoá ngoại tới `pages` `on delete cascade`: trang chỉ bị soft-delete (`removed_at`), xoá cứng chỉ xảy ra ở test/xoá
 // dữ liệu (Epic 9).
 import {
@@ -111,6 +112,8 @@ export const conversations = pgTable(
     /** Lý do của lần chuyển trạng thái gần nhất. */
     stateReason: text('state_reason'),
     aiEnabled: boolean('ai_enabled').notNull().default(true),
+    /** Story 5.4: lượt AI trả lời đang gọi LLM từ lúc này (chấm "đang gõ"); `null` khi không. Hết hạn sau 120 giây. */
+    aiTypingAt: ts('ai_typing_at'),
     waitingSince: ts('waiting_since'),
     /** Chỉ tăng (`GREATEST`) — cửa sổ 24 giờ của `canSend` (Story 4.7). */
     lastCustomerMessageAt: ts('last_customer_message_at'),
@@ -165,6 +168,8 @@ export const messages = pgTable(
     queuedAt: ts('queued_at'),
     /** Lúc job `inbox.send` chiếm tin (`sending`) — cron dọn tin kẹt quá 15 phút. */
     sendingAt: ts('sending_at'),
+    /** Story 5.4: lúc tin outbound thành `sent` (job gửi hoặc echo khớp) — đo NFR1 webhook → tin AI đã gửi. */
+    sentAt: ts('sent_at'),
     text: text('text'),
     /** Tin `system`: lý do chuyển trạng thái. */
     reasonCode: text('reason_code'),

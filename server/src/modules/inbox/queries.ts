@@ -9,6 +9,7 @@
 //   last_message_at)` — phòng hờ hội thoại `human` chưa có mốc chờ (dữ liệu trước 4.6) vẫn có chỗ đứng.
 // - Story 4.7: tin outbound `failed` không tính là "đã trả lời" — điều kiện "Cần xử lý" và xem trước bỏ qua nó; tin kèm
 //   `delivery`, `errorCode`; `getMessage` cho route gửi.
+// - Story 5.4: `aiTyping` (chấm "đang gõ") từ `ai_typing_at` còn hạn, chỉ khi `ai`.
 // Trang đã gỡ → hội thoại không còn hiện (danh sách lọc theo trang chưa gỡ; `getConversation` kiểm `getPage`).
 import type {
   AttachmentDto,
@@ -36,7 +37,7 @@ import type { DbExecutor } from '../../platform/db/index.ts'
 import { AppError } from '../../platform/errors/index.ts'
 import { getPage } from '../pages/index.ts'
 import { contactIdentities, contacts, conversations, messageAttachments, messages } from './schema.ts'
-import { effectiveMessage } from './state.ts'
+import { AI_TYPING_TTL_MS, effectiveMessage } from './state.ts'
 
 export interface PageQuery {
   cursor?: string | undefined
@@ -190,6 +191,7 @@ async function toConversationDtos(db: DbExecutor, rows: ConversationRow[]): Prom
     pagesOf.set(i.contactId, list)
   }
 
+  const now = Date.now()
   return rows.map((r) => {
     const preview = previewOf.get(r.id) ?? null
     const state = r.state as ConversationState
@@ -199,6 +201,7 @@ async function toConversationDtos(db: DbExecutor, rows: ConversationRow[]): Prom
       channel: r.channel as ConversationChannel,
       state,
       aiEnabled: r.aiEnabled,
+      aiTyping: state === 'ai' && r.aiTypingAt !== null && now - r.aiTypingAt.getTime() < AI_TYPING_TTL_MS,
       stateReason: (r.stateReason as StateChangeReason | null) ?? null,
       waitingSince: r.waitingSince?.toISOString() ?? null,
       lastMessageAt: r.lastMessageAt.toISOString(),

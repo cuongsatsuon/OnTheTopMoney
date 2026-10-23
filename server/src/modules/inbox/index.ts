@@ -13,6 +13,8 @@
 // bằng tay + gợi ý gộp từ nhắn riêng, tóm tắt AI bằng job `inbox.contact_summary`. Trường dẫn xuất (`pageIds`,
 // `handledBy`) ghép ở `app/read-models/contacts.ts`.
 // Story 4.10: `searchContacts` — tìm khách không dấu / theo SĐT cho ⌘K; `/api/v1/search` ghép ở `app/read-models/search.ts`.
+// Story 5.4: phía `inbox` của AI trả lời tự động — ảnh chụp lượt, `applyAutoreplyDecision` (khoá lạc quan), chấm "đang
+// gõ", tin AI gửi lỗi → `handoff`, "Gửi lại" tin AI.
 export const MODULE = 'inbox'
 
 export {
@@ -129,6 +131,8 @@ export {
   type SuggestResult,
 } from './suggest.ts'
 export {
+  AI_TYPING_TTL_MS,
+  aiSendFailureReason,
   applyHumanReply,
   applyTriageDecision,
   applyUserAction,
@@ -139,6 +143,17 @@ export {
   type TriageState,
   type UserActionResult,
 } from './state.ts'
+export {
+  applyAutoreplyDecision,
+  readAutoreplyTurn,
+  setAiTyping,
+  type AutoreplyApplyDeps,
+  type AutoreplyApplyInput,
+  type AutoreplyApplyResult,
+  type AutoreplyExpected,
+  type AutoreplyTurn,
+  type PendingInbound,
+} from './autoreply.ts'
 export {
   AttachmentRetryableError,
   allowedMime,
