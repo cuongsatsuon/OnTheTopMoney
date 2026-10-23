@@ -2,8 +2,18 @@
 // kế thừa Nhóm→Trang qua `profiles.resolveEffective(pageId, 'autoreply')` như hồ sơ thương hiệu. Schema ở đây là
 // nguồn DUY NHẤT của luật hợp lệ: BE validate bằng nó, FE dựng request và báo lỗi dưới ô từ cùng luật.
 import { z } from 'zod'
-import { ConfigOwnerType, AutoreplyChannel, AUTOREPLY_CHANNELS } from './enums.ts'
+import { AiViolation } from './ai.ts'
+import {
+  ConfigOwnerType,
+  AutoreplyChannel,
+  AUTOREPLY_CHANNELS,
+  HandoffKind,
+  HandoffReason,
+  MessageDelivery,
+  type Platform,
+} from './enums.ts'
 import { ErrorCode } from './errors.ts'
+import { SEND_TEXT_MAX } from './inbox.ts'
 import { ConfigSource } from './profiles.ts'
 
 const IsoDateTime = z.iso.datetime({ offset: false })
@@ -110,6 +120,14 @@ export function autoreplyEnableIssues(cfg: {
   return issues
 }
 
+/**
+ * Cấu hình NHÁP cho "Thử AI" (Story 5.3): cùng field + mặc định với lưu, nhưng KHÔNG bắt luật bật — thử được cả khi AI
+ * đang tắt hay kịch bản còn trống ("thử trước khi bật").
+ */
+export const AutoreplyDraftConfig = ConfigFields
+export type AutoreplyDraftConfig = z.input<typeof AutoreplyDraftConfig>
+export type ParsedAutoreplyDraft = z.output<typeof AutoreplyDraftConfig>
+
 /** Body `PUT /api/v1/autoreply-configs/:ownerType/:ownerId` — toàn bộ cấu hình (mặc định điền khi thiếu). */
 export const SaveAutoreplyConfigRequest = ConfigFields.superRefine((cfg, ctx) => {
   for (const issue of autoreplyEnableIssues(cfg)) ctx.addIssue({ code: 'custom', path: [issue.path], message: issue.message })
@@ -211,3 +229,66 @@ export const BulkSetAutoreplyResponse = z.object({
   failed: z.array(z.object({ pageId: z.uuid(), code: ErrorCode })),
 })
 export type BulkSetAutoreplyResponse = z.infer<typeof BulkSetAutoreplyResponse>
+
+/* ---------- Thử AI (Story 5.3, AD-16) ---------- */
+
+/** Cách gửi của từng kênh AI trả lời (AD-10): tin nhắn → `dm`; bình luận → trả lời công khai / nhắn riêng. */
+export const AUTOREPLY_CHANNEL_MODE: Record<AutoreplyChannel, MessageDelivery> = {
+  messenger: 'dm',
+  ig_direct: 'dm',
+  comment_public: 'public_reply',
+  comment_private: 'private_reply',
+}
+
+/** Nền tảng có kênh đó (phần tử đầu = nền tảng thử mặc định khi thử cho cả nhóm). Threads chỉ trả lời công khai. */
+export const AUTOREPLY_CHANNEL_PLATFORMS: Record<AutoreplyChannel, readonly Platform[]> = {
+  messenger: ['facebook'],
+  ig_direct: ['instagram'],
+  comment_public: ['facebook', 'instagram', 'threads'],
+  comment_private: ['facebook', 'instagram'],
+}
+
+export const AUTOREPLY_TEST_MESSAGE_MAX = 1000
+export const AUTOREPLY_TEST_HISTORY_MAX = 20
+
+/** Một lượt trước đó trong khung thử: khách gõ hoặc shop (AI) đã trả lời. */
+export const AutoreplyTestTurn = z
+  .object({ author: z.enum(['customer', 'shop']), text: z.string().trim().min(1).max(SEND_TEXT_MAX) })
+  .strict()
+export type AutoreplyTestTurn = z.infer<typeof AutoreplyTestTurn>
+
+/**
+ * Body `POST /api/v1/autoreply-configs/test` — chạy đúng đường quyết định của AI trả lời (luật → LLM → hậu kiểm) với
+ * cấu hình NHÁP của chủ (chưa lưu), giả như khách nhắn `message` qua `channel`. Không ghi tin, không gửi gì ra Meta.
+ */
+export const AutoreplyTestRequest = z
+  .object({
+    ownerType: ConfigOwnerType,
+    ownerId: z.uuid(),
+    config: AutoreplyDraftConfig,
+    channel: AutoreplyChannel,
+    message: z.string().trim().min(1, 'Nhập tin nhắn thử').max(AUTOREPLY_TEST_MESSAGE_MAX),
+    history: z.array(AutoreplyTestTurn).max(AUTOREPLY_TEST_HISTORY_MAX).default([]),
+  })
+  .strict()
+export type AutoreplyTestRequest = z.input<typeof AutoreplyTestRequest>
+export type ParsedAutoreplyTestRequest = z.output<typeof AutoreplyTestRequest>
+
+/** Tin AI sẽ gửi (câu trả lời, hoặc câu chuyển tiếp `handoffMessage` khi chuyển chủ ý). */
+export const AutoreplyOutMessage = z.object({ mode: MessageDelivery, text: z.string() })
+export type AutoreplyOutMessage = z.infer<typeof AutoreplyOutMessage>
+
+/**
+ * Kết quả thử. `reply` = AI trả lời bằng `messages`. `handoff` = AI chuyển cho bạn: `reasonCode` + `handoffKind`
+ * (`sticky` kèm câu chuyển tiếp trong `messages`; `transient` không gửi gì). `not_applicable` = AI không trả lời ở đây
+ * (vd kênh tắt) — tin vào Hộp thư cho bạn. `keyword` = từ khoá đã khớp; `violations` = cụm vi phạm khi `AI_POLICY_BLOCKED`.
+ */
+export const AutoreplyTestResponse = z.object({
+  action: z.enum(['reply', 'handoff', 'not_applicable']),
+  reasonCode: HandoffReason.nullable(),
+  handoffKind: HandoffKind.nullable(),
+  messages: z.array(AutoreplyOutMessage),
+  keyword: z.string().nullable(),
+  violations: z.array(AiViolation),
+})
+export type AutoreplyTestResponse = z.infer<typeof AutoreplyTestResponse>

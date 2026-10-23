@@ -50,12 +50,20 @@ export interface OpenAiTokenUsage {
 
 export type ResponseInputMessage = { role: 'user' | 'assistant' | 'system' | 'developer'; content: string }
 
+/** Structured output (`text.format` kiểu `json_schema`, strict): model trả đúng một JSON khớp `schema`. */
+export interface ResponseJsonSchema {
+  name: string
+  schema: Record<string, unknown>
+}
+
 export interface CreateResponseRequest {
   apiKey: string
   model: string
   instructions?: string
   input: string | readonly ResponseInputMessage[]
   maxOutputTokens: number
+  /** Có → bắt model trả JSON theo schema (chữ trả về vẫn ở `text`, caller tự parse). */
+  jsonSchema?: ResponseJsonSchema
   signal?: AbortSignal
 }
 
@@ -262,6 +270,9 @@ export function createOpenAiAdapter(options: OpenAiAdapterOptions = {}): OpenAiA
           input: request.input,
           ...(request.instructions ? { instructions: request.instructions } : {}),
           max_output_tokens: request.maxOutputTokens,
+          ...(request.jsonSchema
+            ? { text: { format: { type: 'json_schema', name: request.jsonSchema.name, schema: request.jsonSchema.schema, strict: true } } }
+            : {}),
           store: false,
         },
         responseTimeoutMs,

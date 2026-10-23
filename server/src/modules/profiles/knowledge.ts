@@ -49,7 +49,7 @@ async function ownerConfigEnabled(db: DbExecutor, owner: ProfileOwner): Promise<
   return row?.enabled ?? false
 }
 
-function tooLarge(readyTokens: number): AppError {
+export function tooLarge(readyTokens: number): AppError {
   return new AppError('KNOWLEDGE_TOO_LARGE', 422, {
     message: 'Kho kiến thức vượt giới hạn token',
     details: { readyTokens, maxTokens: KNOWLEDGE_MAX_TOKENS },

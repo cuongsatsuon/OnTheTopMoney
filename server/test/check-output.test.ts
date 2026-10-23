@@ -98,6 +98,15 @@ describe('checkOutput — độ dài theo kind', () => {
     const r = checkOutput(text, { brand, kind: 'comment' })
     expect(r.violations.map((v) => v.kind)).toEqual(['banned_word', 'disallowed_url', 'too_long'])
   })
+
+  it('maxChars theo nền tảng chặt hơn kind (Threads 500); lớn hơn kind thì vẫn theo kind', () => {
+    expect(checkOutput('a'.repeat(501), { brand: brandOf(), kind: 'comment', maxChars: 500 }).violations).toEqual([{ kind: 'too_long', text: '501/500' }])
+    expect(checkOutput('a'.repeat(500), { brand: brandOf(), kind: 'comment', maxChars: 500 }).clean).toBe(true)
+    const over = AI_OUTPUT_MAX_CHARS.comment + 1
+    expect(checkOutput('a'.repeat(over), { brand: brandOf(), kind: 'comment', maxChars: 5000 }).violations).toEqual([
+      { kind: 'too_long', text: `${over}/${AI_OUTPUT_MAX_CHARS.comment}` },
+    ])
+  })
 })
 
 describe('buildCaptionPrompt (mẫu prompt caption)', () => {

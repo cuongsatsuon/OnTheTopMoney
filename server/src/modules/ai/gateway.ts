@@ -15,6 +15,7 @@ import type {
   OpenAiErrorKind,
   OpenAiFailure,
   ResponseInputMessage,
+  ResponseJsonSchema,
 } from '../../adapters/openai/index.ts'
 import { AppError } from '../../platform/errors/index.ts'
 import { getOpenAiPrefs, type OpenAiPrefs } from '../settings/index.ts'
@@ -58,6 +59,8 @@ export interface GenerateTextRequest extends CallContext {
   instructions?: string
   input: string | readonly ResponseInputMessage[]
   maxOutputTokens: number
+  /** Structured output (AD-16: quyết định của AI trả lời tự động). `text` là JSON, caller parse + kiểm. */
+  jsonSchema?: ResponseJsonSchema
 }
 
 export interface GenerateTextResult {
@@ -242,6 +245,7 @@ export async function generateText(deps: GatewayDeps, req: GenerateTextRequest):
         input: req.input,
         maxOutputTokens: req.maxOutputTokens,
         ...(req.instructions ? { instructions: req.instructions } : {}),
+        ...(req.jsonSchema ? { jsonSchema: req.jsonSchema } : {}),
         ...(req.signal ? { signal: req.signal } : {}),
       }),
     usageOf: (r) => ({ ...r.usage, images: 0 }),

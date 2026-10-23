@@ -1,6 +1,7 @@
 // Helper thuần của cấu hình AI trả lời (Story 5.1): map DTO ↔ form, luật bật dùng chung với server, lỗi dưới ô,
-// chữ xác nhận/kết quả Bật/Tắt hàng loạt, nhãn cây và chép `autoReply` dẫn xuất vào kho mẫu.
-import { DEFAULT_HANDOFF_MESSAGE, SaveAutoreplyConfigRequest, type AutoreplyConfigDto } from '@ottm/shared'
+// chữ xác nhận/kết quả Bật/Tắt hàng loạt, nhãn cây và chép `autoReply` dẫn xuất vào kho mẫu. Story 5.3: body + kết
+// quả "Thử AI".
+import { AutoreplyTestRequest, DEFAULT_HANDOFF_MESSAGE, SaveAutoreplyConfigRequest, type AutoreplyConfigDto, type AutoreplyTestResponse } from '@ottm/shared'
 import { describe, expect, it } from 'vitest'
 import type { Group, Page } from '../data/mock'
 import { ApiError } from './api'
@@ -14,6 +15,10 @@ import {
   bulkResultMessage,
   mirrorAutoreplyOverview,
   scriptTemplateErrorMessage,
+  testChannelOptions,
+  testErrorMessage,
+  testResultBubbles,
+  toAutoreplyTestRequest,
   toSaveAutoreplyRequest,
   treePageLabel,
 } from './autoreply'
@@ -153,5 +158,71 @@ describe('cây và kho mẫu', () => {
     expect(pages[0]!.autoReply).toBe(true)
     expect(pages[1]!.autoReply).toBe(false)
     expect(groups[0]!.autoReply).toBe(true)
+  })
+})
+
+describe('Thử AI (Story 5.3)', () => {
+  const base: Pick<AutoreplyTestResponse, 'reasonCode' | 'handoffKind' | 'keyword' | 'violations'> = { reasonCode: null, handoffKind: null, keyword: null, violations: [] }
+
+  it('kênh chọn được theo nền tảng (kể cả kênh tắt); mặc định = kênh bật đầu tiên', () => {
+    const form = { ...blankAutoReply(), channels: { messenger: false, ig_direct: false, comment_public: true, comment_private: false } }
+    expect(testChannelOptions(form, ['facebook'])).toEqual({ options: ['messenger', 'comment_public', 'comment_private'], preferred: 'comment_public' })
+    expect(testChannelOptions(form, ['threads'])).toEqual({ options: ['comment_public'], preferred: 'comment_public' })
+    expect(testChannelOptions({ ...form, channels: { ...form.channels, comment_public: false } }, ['threads']).preferred).toBe('comment_public')
+    expect(testChannelOptions(form, [])).toEqual({ options: [], preferred: null })
+  })
+
+  it('body: cấu hình nháp (kể cả đang tắt, kịch bản trống) hợp lệ với schema server; lịch sử bỏ ghi chú, AI → shop, tối đa 20', () => {
+    const form = { ...blankAutoReply(), enabled: false, prompt: '', handoffMessage: '  ' }
+    const previous = [
+      { from: 'customer' as const, text: 'Chào shop' },
+      { from: 'ai' as const, text: 'Dạ chào bạn' },
+      { from: 'system' as const, text: 'AI sẽ chuyển cho bạn · …' },
+      ...Array.from({ length: 25 }, (_, i) => ({ from: 'customer' as const, text: `tin ${i}` })),
+    ]
+    const body = toAutoreplyTestRequest({ ownerType: 'group', ownerId: UUID }, form, 'messenger', '  Bảo hành bao lâu? ', previous)
+    expect(body.message).toBe('Bảo hành bao lâu?')
+    expect(body.config.handoffMessage).toBe(DEFAULT_HANDOFF_MESSAGE)
+    expect(body.history).toHaveLength(20)
+    expect(body.history!.at(-1)).toEqual({ author: 'customer', text: 'tin 24' })
+    const short = toAutoreplyTestRequest({ ownerType: 'group', ownerId: UUID }, form, 'messenger', 'x', previous.slice(0, 3))
+    expect(short.history).toEqual([
+      { author: 'customer', text: 'Chào shop' },
+      { author: 'shop', text: 'Dạ chào bạn' },
+    ])
+    expect(AutoreplyTestRequest.safeParse(body).success).toBe(true)
+  })
+
+  it('kết quả → bong bóng: trả lời; từ khoá; vi phạm; tạm đóng; không áp dụng', () => {
+    expect(testResultBubbles({ ...base, action: 'reply', messages: [{ mode: 'dm', text: 'Dạ 12 tháng ạ' }] })).toEqual([{ from: 'ai', text: 'Dạ 12 tháng ạ' }])
+    expect(
+      testResultBubbles({ ...base, action: 'handoff', reasonCode: 'KEYWORD', handoffKind: 'sticky', keyword: 'đổi trả', messages: [{ mode: 'dm', text: DEFAULT_HANDOFF_MESSAGE }] }),
+    ).toEqual([
+      { from: 'ai', text: DEFAULT_HANDOFF_MESSAGE },
+      { from: 'system', text: 'AI sẽ chuyển cho bạn · khách nhắc tới “đổi trả”' },
+    ])
+    expect(
+      testResultBubbles({
+        ...base,
+        action: 'handoff',
+        reasonCode: 'AI_POLICY_BLOCKED',
+        handoffKind: 'sticky',
+        messages: [],
+        violations: [
+          { kind: 'banned_word', text: 'rẻ nhất' },
+          { kind: 'too_long', text: '600/500' },
+        ],
+      }),
+    ).toEqual([{ from: 'system', text: 'AI sẽ chuyển cho bạn · câu trả lời của AI phạm Điều cần tránh (“rẻ nhất”, quá dài 600/500 ký tự)' }])
+    expect(testResultBubbles({ ...base, action: 'handoff', reasonCode: 'AI_BUDGET_EXCEEDED', handoffKind: 'transient', messages: [] })).toEqual([
+      { from: 'system', text: 'AI sẽ chuyển cho bạn · đã hết hạn mức AI tháng này' },
+    ])
+    expect(testResultBubbles({ ...base, action: 'not_applicable', reasonCode: 'CHANNEL_OFF', messages: [] })).toEqual([
+      { from: 'system', text: 'AI không trả lời kênh này — tin vào Hộp thư cho bạn trả lời.' },
+    ])
+  })
+
+  it('lỗi thử: kho quá lớn có câu riêng', () => {
+    expect(testErrorMessage(new ApiError('KNOWLEDGE_TOO_LARGE', 422, 'x'))).toMatch(/rút gọn kho/)
   })
 })

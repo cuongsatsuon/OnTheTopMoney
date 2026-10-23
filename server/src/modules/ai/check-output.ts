@@ -1,7 +1,7 @@
 // Hậu kiểm đầu ra AI (AD-21): hàm DUY NHẤT kiểm chữ AI sinh trước khi gửi / tự đăng / trả cho FE.
 // Thuần, xác định (không gọi mạng, không DB): từ cấm của hồ sơ (không phân biệt hoa thường, chuẩn hoá dấu),
-// URL ngoài `allowedDomains`, độ dài tối đa theo `kind`. Mọi luồng AI (autoreply, content, campaigns, composer)
-// gọi đúng hàm này — không nhân bản luật ở chỗ khác (Boundaries "Never").
+// URL ngoài `allowedDomains`, độ dài tối đa theo `kind` (và `maxChars` của nền tảng nếu có). Mọi luồng AI (autoreply,
+// content, campaigns, composer) gọi đúng hàm này — không nhân bản luật ở chỗ khác (Boundaries "Never").
 import { AI_OUTPUT_MAX_CHARS, type AiOutputKind, type AiViolation } from '@ottm/shared'
 
 /** Phần hồ sơ mà hậu kiểm cần (hồ sơ hiệu lực hoặc hồ sơ nháp). */
@@ -153,7 +153,7 @@ function urlViolations(text: string, allowed: readonly string[]): AiViolation[] 
  * Hậu kiểm AD-21. Thứ tự vi phạm: từ cấm → URL lạ → quá dài. Trả `{clean, violations}`; caller (composer) trả
  * nguyên văn kèm `violations` cho FE đánh dấu, autoreply/campaigns dùng `clean` để quyết định handoff / chờ duyệt.
  */
-export function checkOutput(text: string, opts: { brand: CheckBrand; kind: AiOutputKind }): CheckOutputResult {
+export function checkOutput(text: string, opts: { brand: CheckBrand; kind: AiOutputKind; maxChars?: number }): CheckOutputResult {
   const { brand, kind } = opts
   const { folded, offsets } = fold(text)
   const violations: AiViolation[] = [
@@ -161,7 +161,8 @@ export function checkOutput(text: string, opts: { brand: CheckBrand; kind: AiOut
     ...urlViolations(text, brand.allowedDomains),
   ]
   const length = [...text].length
-  const max = AI_OUTPUT_MAX_CHARS[kind]
+  // Giới hạn theo nền tảng/cách gửi (`sendTextLimit`: Threads 500, tin nhắn Instagram 1000) khi caller biết — chặt hơn `kind`.
+  const max = opts.maxChars !== undefined ? Math.min(AI_OUTPUT_MAX_CHARS[kind], opts.maxChars) : AI_OUTPUT_MAX_CHARS[kind]
   if (length > max) violations.push({ kind: 'too_long', text: `${length}/${max}` })
   return { clean: violations.length === 0, violations }
 }

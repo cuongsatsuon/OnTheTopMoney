@@ -38,6 +38,23 @@ export async function readyKnowledgeTokens(db: DbExecutor, owner: ProfileOwner):
   return row?.total ?? 0
 }
 
+/** Một mục kho đã sẵn sàng đưa vào prompt (AD-16: nhét toàn văn). Không log. */
+export interface ReadyKnowledgeEntry {
+  kind: 'faq' | 'file'
+  title: string
+  text: string
+}
+
+/** Các mục `ready` (FAQ + file đã trích) của chủ theo thứ tự hiển thị — đúng phần prompt AI trả lời nhét vào. */
+export async function listReadyKnowledge(db: DbExecutor, owner: ProfileOwner): Promise<ReadyKnowledgeEntry[]> {
+  const rows = await db
+    .select({ kind: knowledgeItems.kind, title: knowledgeItems.title, text: knowledgeItems.text })
+    .from(knowledgeItems)
+    .where(and(knowledgeOwnerWhere(owner), eq(knowledgeItems.status, 'ready')))
+    .orderBy(knowledgeItems.createdAt, knowledgeItems.id)
+  return rows.filter((r) => r.text?.trim()).map((r) => ({ kind: r.kind as 'faq' | 'file', title: r.title, text: r.text! }))
+}
+
 /** Xoá kho của chủ (đi cùng `remove` của cấu hình AI). File còn trên kho do job/lần xoá sau dọn (best-effort). */
 export async function removeKnowledgeOf(tx: DbExecutor, owner: ProfileOwner): Promise<void> {
   await tx.delete(knowledgeItems).where(knowledgeOwnerWhere(owner))

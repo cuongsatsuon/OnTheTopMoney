@@ -61,6 +61,8 @@ export { handleAiEvent } from './events.ts'
 // Hậu kiểm đầu ra AI (AD-21) — hàm DUY NHẤT; mẫu prompt dùng chung (AD-7).
 export { checkOutput, type CheckBrand, type CheckOutputResult } from './check-output.ts'
 export {
+  AUTOREPLY_MAX_OUTPUT_TOKENS,
+  AUTOREPLY_MODEL_REASONS,
   CAPTION_MAX_OUTPUT_TOKENS,
   CONTACT_SUMMARY_MAX_OUTPUT_TOKENS,
   REPLY_MAX_OUTPUT_TOKENS,
@@ -73,6 +75,13 @@ export {
   captionInstructions,
   replyInput,
   replyInstructions,
+  autoreplyInput,
+  autoreplyInstructions,
+  autoreplyOutputSchema,
+  buildAutoreplyPrompt,
+  type AutoreplyKnowledgeEntry,
+  type AutoreplyModelReason,
+  type AutoreplyPromptContext,
   type CaptionBrand,
   type ContactSummaryTurn,
   type ReplyBrand,

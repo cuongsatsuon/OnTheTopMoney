@@ -95,9 +95,6 @@
   summary: Phản hồi tự động của Meta (Instant Reply, tin vắng mặt, câu hỏi thường gặp cấu hình trong Business Suite) bị coi là chủ shop trả lời ngoài app → hội thoại sang `human` và tắt AI.
   evidence: `echoAuthor` (server/src/modules/inbox/echo.ts) xếp mọi echo có `app_id` khác app mình vào `other_app` → `external_human` + `applyHumanReply` ngay; tin tự động của Meta có `app_id` của app Meta, payload không có cờ "tự động". Cần sự kiện thật để tìm dấu hiệu (app_id riêng, `metadata`, thời điểm ngay sau tin đầu của khách…) và quyết định sản phẩm (bỏ qua / chèn không đổi trạng thái) trước khi AI trả lời thật ở Epic 5.
 - source_spec: `spec-4-8-goi-y-bang-ai.md`
-  summary: Hậu kiểm độ dài bản nháp AI theo giới hạn nền tảng (Threads 500, tin nhắn Instagram 1000) thay vì chỉ theo `kind` (`reply` 2000 / `comment` 1000).
-  evidence: `ai.checkOutput` nhận `{brand, kind}`; gợi ý chỉ nêu giới hạn nền tảng trong prompt, còn ô soạn đếm ký tự và chặn nút Gửi khi quá `sendTextLimit`. Epic 5 (AI tự gửi) cần vi phạm `too_long` đúng nền tảng để sinh lại / handoff — thêm `maxChars` (hoặc kind theo nền tảng) cho `checkOutput`.
-- source_spec: `spec-4-8-goi-y-bang-ai.md`
   summary: Kiểm bằng trình duyệt nút "Gợi ý bằng AI" (Dừng, Hoàn tác, tooltip khoá theo nguồn) và "Viết thử bằng AI" sau khi đổi cách bắt huỷ request.
   evidence: Chỉ có test HTTP thật (fetch + AbortController) và test helper web; chưa chạy UI với phiên chủ shop + trang đã kết nối + khoá OpenAI.
 - source_spec: `spec-4-9-khach-hang.md`
@@ -124,3 +121,9 @@
 - source_spec: `spec-5-2-kho-kien-thuc.md`
   summary: Thử trích văn bản với file thật của chủ shop (PDF tiếng Việt xuất từ Word/Google Docs/Canva — font CID + ToUnicode, DOCX có bảng nhiều cấp) và đo thời gian/bộ nhớ với PDF 10 MB.
   evidence: Test dựng PDF Helvetica tối giản + docx tự sinh; pdf.js (`unpdf` 1.8.1) xử lý font CID nhưng chưa thử bằng file thật, giới hạn 60 giây / 256 MB heap là [ASSUMPTION].
+- source_spec: `spec-5-3-thu-ai.md`
+  summary: Kiểm bằng trình duyệt khung "Thử AI" với nhóm/trang thật + khoá OpenAI thật (AI đang gõ, Dừng, chọn kênh thử, ghi chú "AI sẽ chuyển cho bạn · …", thử khi AI tắt, lỗi kho quá lớn) và chất lượng câu trả lời của structured output thật (ngưỡng tin cậy 0.6 [ASSUMPTION]).
+  evidence: Chỉ có test API (Postgres thật, OpenAI giả trả JSON dựng sẵn) và test helper web; chưa gọi `text.format: json_schema` với OpenAI thật, chưa chạy UI với phiên chủ shop.
+- source_spec: `spec-5-3-thu-ai.md`
+  summary: Lần sinh lại sau vi phạm hậu kiểm (`decideReply`, cả `inbox.suggestReply`) nên kèm vi phạm vừa gặp vào prompt (vd "bỏ từ X", "ngắn hơn N ký tự") thay vì gửi y nguyên prompt.
+  evidence: `server/src/modules/autoreply/decide.ts` vòng `attempt < 2` gọi lại `generateText` với cùng `instructions/input` → model dễ lặp lỗi (từ cấm, quá dài), tốn lời gọi thứ hai rồi vẫn `AI_POLICY_BLOCKED` (sticky ở 5.4). Cần thêm câu nhắc trong prompt + test model giả trả sạch ở lần 2 khi thấy nhắc.

@@ -2,8 +2,11 @@
 // Chi tiết trang/nhóm), cây nhóm/trang và Bật/Tắt AI hàng loạt ở Trang & Nhóm vào API thật. Phần thuần (map DTO ↔
 // form, lỗi dưới ô, chữ xác nhận/kết quả hàng loạt) tách khỏi hook để test được (autoreply.test.ts).
 // Như hồ sơ thương hiệu: chủ thật (id uuid) mới gọi server; id kho mẫu (g-home, p6…) vẫn chạy dữ liệu mẫu.
+// Story 5.3: "Thử AI" thật (`useAutoreplyTest`, huỷ bằng `signal`) — kết quả → bong bóng chat (`testResultBubbles`).
 import {
+  AUTOREPLY_CHANNEL_PLATFORMS,
   AUTOREPLY_CHANNELS,
+  AutoreplyTestResponse,
   AutoreplyConfigDto,
   AutoreplyConfigResponse,
   AutoreplyOverviewResponse,
@@ -20,7 +23,11 @@ import {
   type AutoreplyPageStatus,
   type AutoreplySchedule,
   type AutoreplyScriptTemplateRequest,
+  type AutoreplyTestRequest,
+  type AutoreplyTestTurn,
   type ConfigOwnerType,
+  type HandoffReason,
+  type Platform,
   type SaveAutoreplyConfigRequest,
 } from '@ottm/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -144,6 +151,85 @@ export function autoReplyFieldErrorsOf(err: unknown): AutoReplyFieldErrors {
     if (field && !out[field]) out[field] = typeof message === 'string' ? message : 'Kiểm tra lại ô này.'
   }
   return out
+}
+
+/* ---------- Thử AI (Story 5.3) ---------- */
+
+/**
+ * Kênh chọn được trong khung thử: kênh có trên nền tảng của trang/nhóm (kể cả kênh đang tắt — thử sẽ cho thấy AI không
+ * trả lời ở đó). Mặc định = kênh đầu tiên đang bật, không có thì kênh đầu tiên.
+ */
+export function testChannelOptions(form: AutoReplyConfig, platforms: readonly Platform[]): { options: AutoreplyChannel[]; preferred: AutoreplyChannel | null } {
+  const options = AUTOREPLY_CHANNELS.filter((c) => AUTOREPLY_CHANNEL_PLATFORMS[c].some((p) => platforms.includes(p)))
+  return { options, preferred: options.find((c) => form.channels[c]) ?? options[0] ?? null }
+}
+
+/** Số lượt trước gửi kèm (khớp `AUTOREPLY_TEST_HISTORY_MAX` của server). */
+const TEST_HISTORY_MAX = 20
+
+/** Body thử: cấu hình NHÁP (chưa lưu, không bắt luật bật) + tin thử + các lượt trước (bỏ ghi chú hệ thống). */
+export function toAutoreplyTestRequest(
+  owner: AutoreplyOwner,
+  form: AutoReplyConfig,
+  channel: AutoreplyChannel,
+  message: string,
+  previous: readonly { from: 'customer' | 'ai' | 'system'; text: string }[],
+): AutoreplyTestRequest {
+  const history: AutoreplyTestTurn[] = previous
+    .filter((m) => m.from !== 'system' && m.text.trim())
+    .map((m) => ({ author: m.from === 'customer' ? ('customer' as const) : ('shop' as const), text: m.text.trim() }))
+    .slice(-TEST_HISTORY_MAX)
+  const config = toSaveAutoreplyRequest(form)
+  // Câu chuyển tiếp trống (đang sửa dở) → dùng mặc định để thử vẫn chạy; lưu thì vẫn bị bắt dưới ô.
+  return { ...owner, config: { ...config, handoffMessage: config.handoffMessage || DEFAULT_HANDOFF_MESSAGE }, channel, message: message.trim(), history }
+}
+
+/** Lý do chuyển trong khung thử — nối sau "AI sẽ chuyển cho bạn · ". */
+export const TEST_REASON_TEXT: Record<HandoffReason, string> = {
+  AI_OFF: 'AI đang tắt',
+  CHANNEL_OFF: 'AI không trả lời kênh này',
+  CONFIG_MISSING: 'còn thiếu cấu hình AI',
+  OUTSIDE_HOURS: 'ngoài giờ AI trả lời',
+  OPENAI_KEY_UNAVAILABLE: 'khoá OpenAI chưa dùng được',
+  AI_BUDGET_EXCEEDED: 'đã hết hạn mức AI tháng này',
+  AI_PROVIDER_ERROR: 'AI đang gặp sự cố, thử lại sau',
+  KEYWORD: 'khách nhắc tới từ khoá chuyển người',
+  CUSTOMER_ASKED_HUMAN: 'khách muốn gặp người thật',
+  AI_UNCERTAIN: 'AI chưa chắc câu trả lời',
+  AI_POLICY_BLOCKED: 'câu trả lời của AI phạm Điều cần tránh',
+  NON_TEXT_MESSAGE: 'khách gửi nội dung AI chưa đọc được',
+  OUTSIDE_24H: 'đã quá 24 giờ kể từ tin cuối của khách',
+}
+
+export interface TestBubble {
+  from: 'ai' | 'system'
+  text: string
+}
+
+/**
+ * Kết quả thử → bong bóng: tin AI sẽ gửi (câu trả lời / câu chuyển tiếp), rồi ghi chú "AI sẽ chuyển cho bạn · lý do"
+ * khi chuyển, hoặc ghi chú "tin vào Hộp thư cho bạn" khi AI không áp dụng ở đây.
+ */
+export function testResultBubbles(res: AutoreplyTestResponse): TestBubble[] {
+  const out: TestBubble[] = res.messages.map((m) => ({ from: 'ai', text: m.text }))
+  if (res.action === 'reply' || !res.reasonCode) return out
+  if (res.action === 'not_applicable') {
+    out.push({ from: 'system', text: `${TEST_REASON_TEXT[res.reasonCode]} — tin vào Hộp thư cho bạn trả lời.` })
+    return out
+  }
+  let reason = res.keyword ? `khách nhắc tới “${res.keyword}”` : TEST_REASON_TEXT[res.reasonCode]
+  if (res.reasonCode === 'AI_POLICY_BLOCKED' && res.violations.length) {
+    const parts = res.violations.map((v) => (v.kind === 'too_long' ? `quá dài ${v.text} ký tự` : `“${v.text}”`))
+    reason += ` (${parts.join(', ')})`
+  }
+  out.push({ from: 'system', text: `AI sẽ chuyển cho bạn · ${reason}` })
+  return out
+}
+
+/** Lỗi khi thử (không phải quyết định của AI): kho quá lớn có câu riêng; còn lại theo bản đồ mã lỗi chung. */
+export function testErrorMessage(err: unknown): string {
+  if (isApiError(err) && err.code === 'KNOWLEDGE_TOO_LARGE') return 'Kho kiến thức vượt giới hạn — rút gọn kho trước khi thử AI.'
+  return errorMessageOf(err)
 }
 
 /** Mẫu kịch bản theo ngành (nhãn hiển thị). */
@@ -314,5 +400,13 @@ export function useBulkSetAutoreply() {
     mutationFn: (body: { pageIds: string[]; enabled: boolean }) =>
       apiFetch('/autoreply-configs/bulk-enabled', { method: 'POST', body, schema: BulkSetAutoreplyResponse }),
     onSuccess: () => invalidateAutoreply(qc),
+  })
+}
+
+/** "Thử AI": chạy đúng đường quyết định của AI trả lời với cấu hình nháp. `signal` = nút Dừng / rời khung. */
+export function useAutoreplyTest() {
+  return useMutation({
+    mutationFn: ({ body, signal }: { body: AutoreplyTestRequest; signal?: AbortSignal }) =>
+      apiFetch('/autoreply-configs/test', { method: 'POST', body, schema: AutoreplyTestResponse, ...(signal ? { signal } : {}) }),
   })
 }

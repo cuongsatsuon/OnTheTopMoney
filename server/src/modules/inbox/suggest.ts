@@ -84,13 +84,15 @@ export async function suggestReply(deps: SuggestDeps, conversationId: string, in
   // Hồ sơ trước khi đọc tin / gọi AI: trang chưa có hồ sơ → CONFIG_MISSING, không tốn lời gọi nào.
   const brand = await input.brandOf(conv.pageId)
   const recent = await listMessages(deps.db, conv.id, { limit: SUGGEST_SCAN_MESSAGES })
+  // Độ dài theo nền tảng/cách gửi (Threads 500, tin nhắn Instagram 1000) — prompt và hậu kiểm cùng một ngưỡng.
+  const maxChars = sendTextLimit(page.platform, mode)
   const prompt = buildReplyPrompt(brand, {
     platform: page.platform,
     mode,
     pageName: page.name,
     postText: conv.post?.text ? cut(conv.post.text) : null,
     turns: replyTurns(recent.items, conv.contact.id),
-    maxChars: sendTextLimit(page.platform, mode),
+    maxChars,
   })
   const checkBrand: CheckBrand = { bannedWords: brand.bannedWords, allowedDomains: brand.allowedDomains }
   const kind = suggestKind(mode)
@@ -108,10 +110,10 @@ export async function suggestReply(deps: SuggestDeps, conversationId: string, in
     ).text.trim()
 
   let draft = await generate()
-  let check = checkOutput(draft, { brand: checkBrand, kind })
+  let check = checkOutput(draft, { brand: checkBrand, kind, maxChars })
   if (!check.clean) {
     draft = await generate()
-    check = checkOutput(draft, { brand: checkBrand, kind })
+    check = checkOutput(draft, { brand: checkBrand, kind, maxChars })
   }
   return { status: 'ok', draft, violations: check.violations }
 }

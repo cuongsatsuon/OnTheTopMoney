@@ -1,4 +1,4 @@
-import type { AutoreplyChannel, KnowledgeListResponse } from '@ottm/shared'
+import { AUTOREPLY_TEST_MESSAGE_MAX, type AutoreplyChannel, type KnowledgeListResponse } from '@ottm/shared'
 import { Bot, BookOpen, FileText, Loader2, MessageCircleQuestion, Plus, RotateCcw, Send, Sparkles, Trash, TriangleAlert, Upload, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
@@ -46,7 +46,13 @@ import {
   useEffectiveAutoreply,
   useSaveAutoreplyConfig,
   useSetAutoreplyUseOwn,
+  testChannelOptions,
+  testErrorMessage,
+  testResultBubbles,
+  toAutoreplyTestRequest,
+  useAutoreplyTest,
   type AutoReplyConfig,
+  type AutoreplyOwner,
   type AutoReplyFieldErrors,
   type KnowledgeItem,
 } from '../lib/autoreply'
@@ -208,7 +214,7 @@ const effectiveForPage = (s: StoreState, pageId: string, groupId: string | null)
 const STOP_WORDS = new Set(['hàng', 'không', 'bao', 'lâu', 'nào', 'của', 'cho', 'được', 'phí', 'bảng', 'chính', 'sách', 'thế', 'gì', 'có'])
 const ASK_HUMAN_RE = /(gặp người|gặp nhân viên|nhân viên|người thật|tư vấn viên|gọi điện|gọi cho)/
 
-/** Luật chuyển người chạy xác định (từ khoá, khách yêu cầu gặp người) — trả lý do, hoặc `null` khi không khớp. */
+/** Luật chuyển người của KHO MẪU (từ khoá, khách yêu cầu gặp người) — chủ thật chạy luật ở server (Story 5.3). */
 function matchHandoffRule(text: string, cfg: AutoReplyConfig): string | null {
   const t = text.toLowerCase()
   const kw = cfg.keywords.find((k) => k.trim() && t.includes(k.trim().toLowerCase()))
@@ -896,7 +902,7 @@ Khi khách muốn mua, xin số điện thoại và địa chỉ nhận hàng.`
           </fieldset>
         </div>
 
-        <TestChat config={shown} domain={domain} name={name} keyReady={openAiKeySet} real={real} />
+        <TestChat config={shown} domain={domain} name={name} keyReady={openAiKeySet} real={real} owner={owner} platforms={platforms} />
       </div>
 
       {/* Footer cố định */}
@@ -1217,38 +1223,76 @@ function AddKnowledgeModal({ open, onClose, onSubmit }: { open: boolean; onClose
 type TestMsg = { id: number; from: 'customer' | 'ai' | 'system'; text: string }
 
 /**
- * Khung thử. Kho mẫu: mô phỏng trọn câu trả lời. Nhóm/trang thật: chỉ kiểm luật chuyển người (từ khoá, khách yêu cầu
- * gặp người) với cấu hình đang chỉnh — câu trả lời thật của AI cần pipeline của Story 5.3.
+ * Khung thử. Kho mẫu: mô phỏng trọn câu trả lời. Nhóm/trang thật (Story 5.3): server chạy đúng đường quyết định của AI
+ * trả lời (luật chuyển người → AI → hậu kiểm) với cấu hình đang chỉnh (chưa lưu) — thử được cả khi AI đang tắt, không
+ * gửi gì cho khách, tính vào hạn mức AI. "Dừng" huỷ request thật.
  */
-function TestChat({ config, domain, name, keyReady, real }: { config: AutoReplyConfig; domain: Domain; name: string; keyReady: boolean; real: boolean }) {
+function TestChat({
+  config,
+  domain,
+  name,
+  keyReady,
+  real,
+  owner,
+  platforms,
+}: {
+  config: AutoReplyConfig
+  domain: Domain
+  name: string
+  keyReady: boolean
+  real: boolean
+  owner: AutoreplyOwner
+  platforms: Platform[]
+}) {
   const [msgs, setMsgs] = useState<TestMsg[]>([])
   const [input, setInput] = useState('')
   const [typing, setTyping] = useState(false)
   const timer = useRef<number | null>(null)
+  const abortRef = useRef<AbortController | null>(null)
   const endRef = useRef<HTMLDivElement>(null)
+  const testM = useAutoreplyTest()
+  const { options: channelOptions, preferred } = testChannelOptions(config, platforms)
+  const [channelPick, setChannelPick] = useState<AutoreplyChannel | null>(null)
+  const channel = channelPick && channelOptions.includes(channelPick) ? channelPick : preferred
 
-  useEffect(() => () => {
-    if (timer.current) window.clearTimeout(timer.current)
-  }, [])
+  useEffect(
+    () => () => {
+      if (timer.current) window.clearTimeout(timer.current)
+      abortRef.current?.abort()
+    },
+    [],
+  )
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: 'nearest' })
   }, [msgs.length, typing])
 
   const push = (from: TestMsg['from'], text: string) => setMsgs((m) => [...m, { id: Date.now() + Math.random(), from, text }])
 
+  const sendReal = async (text: string, previous: TestMsg[]) => {
+    if (!channel) return push('system', 'Trang này chưa có kênh nào để thử.')
+    const ctrl = new AbortController()
+    abortRef.current = ctrl
+    setTyping(true)
+    try {
+      const res = await testM.mutateAsync({ body: toAutoreplyTestRequest(owner, config, channel, text, previous), signal: ctrl.signal })
+      for (const b of testResultBubbles(res)) push(b.from, b.text)
+    } catch (err) {
+      if (!ctrl.signal.aborted) push('system', testErrorMessage(err))
+    } finally {
+      if (abortRef.current === ctrl) abortRef.current = null
+      setTyping(false)
+    }
+  }
+
   const send = (raw?: string) => {
     const text = (raw ?? input).trim()
     if (!text || typing) return
     setInput('')
+    const previous = msgs
     push('customer', text)
     if (!keyReady) return push('system', 'Chưa có khoá OpenAI — thêm khoá ở Cài đặt để thử AI.')
+    if (real) return void sendReal(text, previous)
     if (!config.enabled) return push('system', 'AI đang tắt cho mục này. Khách sẽ không nhận trả lời tự động.')
-    if (real) {
-      const rule = matchHandoffRule(text, config)
-      if (!rule) return push('system', 'Không khớp quy tắc chuyển người. Thử câu trả lời thật của AI sẽ có ở bản cập nhật tới.')
-      push('ai', config.handoffMessage)
-      return push('system', `AI sẽ chuyển cho bạn · ${rule}`)
-    }
     const { reply, handoff } = simulateReply(text, config, domain)
     setTyping(true)
     timer.current = window.setTimeout(() => {
@@ -1258,18 +1302,32 @@ function TestChat({ config, domain, name, keyReady, real }: { config: AutoReplyC
     }, 1100)
   }
 
+  const stop = () => {
+    abortRef.current?.abort()
+    push('system', 'Đã dừng lần thử này.')
+  }
+
+  const reset = () => {
+    abortRef.current?.abort()
+    setMsgs([])
+  }
+
   return (
     <Card className="flex flex-col @3xl:sticky @3xl:top-6">
       <CardHeader
         title={
           <span className="flex items-center gap-2">
-            Thử AI <AiBadge label="Mô phỏng" />
+            Thử AI {real ? null : <AiBadge label="Mô phỏng" />}
           </span>
         }
-        subtitle={`Gõ như khách nhắn ${name}. Dùng cấu hình đang chỉnh, chưa cần lưu.`}
+        subtitle={
+          real
+            ? `Gõ như khách nhắn ${name}. AI trả lời theo cấu hình đang chỉnh (chưa cần lưu), không gửi gì cho khách; mỗi lần thử tính vào hạn mức AI.`
+            : `Gõ như khách nhắn ${name}. Dùng cấu hình đang chỉnh, chưa cần lưu.`
+        }
         action={
           msgs.length > 0 ? (
-            <button onClick={() => setMsgs([])} className="rounded-md p-1 text-muted-foreground hover:bg-slate-100" aria-label="Làm mới cuộc thử" title="Làm mới">
+            <button onClick={reset} className="rounded-md p-1 text-muted-foreground hover:bg-slate-100" aria-label="Làm mới cuộc thử" title="Làm mới">
               <RotateCcw size={15} />
             </button>
           ) : undefined
@@ -1280,15 +1338,16 @@ function TestChat({ config, domain, name, keyReady, real }: { config: AutoReplyC
           <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
             <Sparkles size={20} className="text-ai" />
             <p className="text-[13px] text-muted-foreground">
-              {real ? 'Gõ thử để xem khi nào AI sẽ chuyển cho bạn.' : 'Chọn một câu hỏi mẫu hoặc tự gõ để xem AI trả lời.'}
+              {real ? 'Gõ thử một câu khách hay hỏi để xem AI trả lời hay chuyển cho bạn.' : 'Chọn một câu hỏi mẫu hoặc tự gõ để xem AI trả lời.'}
             </p>
+            {real && !config.enabled && <p className="text-xs text-muted-foreground">AI đang tắt — đây chỉ là thử, khách chưa nhận trả lời tự động.</p>}
           </div>
         )}
         {msgs.map((m) => (
           <TestBubble key={m.id} msg={m} />
         ))}
         {typing && (
-          <div className="flex">
+          <div className="flex items-center gap-2">
             <span className="inline-flex items-center gap-2 rounded-lg rounded-bl-sm border border-violet-200 bg-ai-soft px-3 py-2 text-xs font-medium text-ai">
               AI đang gõ
               <span className="flex gap-1">
@@ -1297,15 +1356,36 @@ function TestChat({ config, domain, name, keyReady, real }: { config: AutoReplyC
                 ))}
               </span>
             </span>
+            {real && (
+              <button onClick={stop} className="text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline">
+                Dừng
+              </button>
+            )}
           </div>
         )}
         <div ref={endRef} />
       </div>
       <div className="border-t border-border p-3">
+        {real && channelOptions.length > 1 && (
+          <label className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
+            Thử như
+            <Select
+              aria-label="Kênh thử"
+              className="h-8 flex-1 text-xs"
+              value={channel ?? ''}
+              onChange={(e) => setChannelPick(e.target.value as AutoreplyChannel)}
+              disabled={typing}
+              options={channelOptions.map((c) => {
+                const meta = CHANNELS.find((x) => x.key === c)!
+                return { value: c, label: config.channels[c] ? meta.label : `${meta.label} (đang tắt)` }
+              })}
+            />
+          </label>
+        )}
         <div className="mb-2 flex flex-wrap gap-1.5">
-          {(real ? REAL_SAMPLE_QUESTIONS : SAMPLE_QUESTIONS[domain]).map((s) => (
-            <button key={s} onClick={() => send(s)} disabled={typing} className="rounded-full border border-border px-2.5 py-0.5 text-xs text-muted-foreground hover:bg-slate-50 hover:text-foreground disabled:opacity-50">
-              {s}
+          {(real ? REAL_SAMPLE_QUESTIONS : SAMPLE_QUESTIONS[domain]).map((q) => (
+            <button key={q} onClick={() => send(q)} disabled={typing} className="rounded-full border border-border px-2.5 py-0.5 text-xs text-muted-foreground hover:bg-slate-50 hover:text-foreground disabled:opacity-50">
+              {q}
             </button>
           ))}
         </div>
@@ -1316,7 +1396,7 @@ function TestChat({ config, domain, name, keyReady, real }: { config: AutoReplyC
             send()
           }}
         >
-          <Input value={input} onChange={(e) => setInput(e.target.value)} placeholder="Nhập tin nhắn thử…" aria-label="Tin nhắn thử" />
+          <Input value={input} onChange={(e) => setInput(e.target.value)} placeholder="Nhập tin nhắn thử…" aria-label="Tin nhắn thử" maxLength={AUTOREPLY_TEST_MESSAGE_MAX} />
           <Button type="submit" variant="primary" icon={<Send size={15} />} disabled={!input.trim() || typing} aria-label="Gửi tin thử">
             Gửi
           </Button>

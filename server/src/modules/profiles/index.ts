@@ -39,7 +39,10 @@ export {
   getEffectiveAutoreply,
   saveAutoreplyConfig,
   setAutoreplyUseOwn,
+  autoreplyTestSources,
+  type AutoreplyTestSources,
 } from './autoreply.ts'
+export { listReadyKnowledge, type ReadyKnowledgeEntry } from './knowledge-row.ts'
 export { scriptForIndustry, scriptFromBrand } from './autoreply-template.ts'
 
 // Kho kiến thức (Story 5.2, AD-14, AD-16): FAQ + file (trích văn bản bằng job `profiles.knowledge.extract`).

@@ -13,15 +13,17 @@ import type {
   EffectiveAutoreplyConfigResponse,
   EffectiveConfig,
   ParsedAutoreplyConfig,
+  Platform,
 } from '@ottm/shared'
-import { autoreplyEnableIssues } from '@ottm/shared'
+import { KNOWLEDGE_MAX_TOKENS, autoreplyEnableIssues } from '@ottm/shared'
 import type { Db, DbExecutor } from '../../platform/db/index.ts'
 import { AppError } from '../../platform/errors/index.ts'
 import { getGroup, getPage, listGroups, listPages } from '../pages/index.ts'
 import { autoreplyValues, getAutoreplyRow, upsertAutoreplyRow } from './autoreply-row.ts'
 import { scriptForIndustry, scriptFromBrand } from './autoreply-template.ts'
 import { getPageConfigState, onGroupProfileSaved, resolveEffective, setUseOwn } from './inheritance.ts'
-import { assertKnowledgeFits } from './knowledge.ts'
+import { assertKnowledgeFits, tooLarge } from './knowledge.ts'
+import { listReadyKnowledge, readyKnowledgeTokens, type ReadyKnowledgeEntry } from './knowledge-row.ts'
 import type { ProfileOwner } from './row.ts'
 import { assertOwnerExists, getProfile } from './service.ts'
 
@@ -167,4 +169,45 @@ export async function bulkSetAutoreplyEnabled(db: Db, pageIds: readonly string[]
     }
   }
   return result
+}
+
+/* ---------- Thử AI (Story 5.3) ---------- */
+
+/** Dữ liệu prompt của "Thử AI" cho một chủ — giải giống form (hồ sơ hiệu lực, kho đang hiển thị). */
+export interface AutoreplyTestSources {
+  /** Tên nhóm/trang — prompt dùng khi hồ sơ chưa đặt tên thương hiệu. */
+  name: string
+  /** Trang được thử (`ai_usage.page_id`); `null` khi thử cho cả nhóm. */
+  pageId: string | null
+  /** Nền tảng của trang; nhóm → nền tảng các trang trong nhóm (có thể rỗng). */
+  platforms: Platform[]
+  /** Hồ sơ hiệu lực: nhóm → hồ sơ nhóm; trang → `resolveEffective(page,'brand')`. `null` = chưa có (vẫn thử được). */
+  brand: BrandProfileDto | null
+  /** Văn bản kho `ready` mà prompt nhét vào. */
+  knowledge: ReadyKnowledgeEntry[]
+}
+
+/**
+ * Nguồn prompt cho "Thử AI" (Story 5.3). Owner lạ → 404. Kho: nhóm → kho nhóm; trang dùng riêng (đã lưu) hoặc không
+ * nhóm → kho trang; trang đang theo nhóm → kho nhóm (đúng kho form đang hiển thị — Story 5.2). Tổng token `ready` vượt
+ * giới hạn → `KNOWLEDGE_TOO_LARGE` (prompt quá lớn, không gọi AI) kể cả khi cấu hình đang tắt.
+ */
+export async function autoreplyTestSources(db: DbExecutor, owner: ProfileOwner): Promise<AutoreplyTestSources> {
+  await assertOwnerExists(db, owner)
+  let sources: Omit<AutoreplyTestSources, 'knowledge'>
+  let kbOwner: ProfileOwner
+  if (owner.ownerType === 'group') {
+    const group = (await getGroup(db, owner.ownerId))!
+    const members = (await listPages(db)).filter((p) => p.groupId === group.id)
+    sources = { name: group.name, pageId: null, platforms: [...new Set(members.map((p) => p.platform))], brand: await getProfile(db, owner) }
+    kbOwner = owner
+  } else {
+    const page = (await getPage(db, owner.ownerId))!
+    const brand = await effectiveOrNull<BrandProfileDto>(db, page.id, 'brand')
+    sources = { name: page.name, pageId: page.id, platforms: [page.platform], brand: brand?.config ?? null }
+    kbOwner = (await usesOwn(db, page)) ? owner : { ownerType: 'group', ownerId: page.groupId! }
+  }
+  const tokens = await readyKnowledgeTokens(db, kbOwner)
+  if (tokens > KNOWLEDGE_MAX_TOKENS) throw tooLarge(tokens)
+  return { ...sources, knowledge: await listReadyKnowledge(db, kbOwner) }
 }

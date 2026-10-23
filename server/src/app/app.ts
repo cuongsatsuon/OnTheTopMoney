@@ -15,6 +15,7 @@ import { createMediaStores, type MediaStores } from '../adapters/media/index.ts'
 import { authPlugin, type LoginLimiter } from './auth/index.ts'
 import { registerAiBudget } from './ai-budget.ts'
 import { registerAutoreplyConfigs } from './autoreply-configs.ts'
+import { registerAutoreplyTest } from './autoreply-test.ts'
 import { registerBrandProfiles } from './brand-profiles.ts'
 import { registerBrandSample } from './brand-sample.ts'
 import { registerConnections } from './connections.ts'
@@ -153,8 +154,8 @@ export function buildApp({ sql, db, logger, http = {}, loginLimiter, health, eve
   registerContacts(app, { db, events, jobs, ...(clock ? { now: clock } : {}) })
   // Tìm nhanh ⌘K (Story 4.10): trang, nhóm, khách không dấu — ghép `pages.search` + `inbox.searchContacts`.
   registerSearch(app, { db })
-  // Viết thử bằng AI (Story 3.4) + Gợi ý bằng AI ở Hộp thư (Story 4.8): cần `events` (reserve/settle hạn mức của AI
-  // gateway, AD-7).
+  // Viết thử bằng AI (Story 3.4) + Gợi ý bằng AI ở Hộp thư (Story 4.8) + Thử AI trả lời (Story 5.3): cần `events`
+  // (reserve/settle hạn mức của AI gateway, AD-7).
   if (events) {
     const aiDeps = {
       db,
@@ -165,6 +166,7 @@ export function buildApp({ sql, db, logger, http = {}, loginLimiter, health, eve
     }
     registerBrandSample(app, aiDeps)
     registerInboxSuggest(app, aiDeps)
+    registerAutoreplyTest(app, aiDeps)
   }
   if (events && connections) {
     const deps: ConnectionsDeps = { ...connections, db, events, log: logger.child({ component: 'connections' }) }
