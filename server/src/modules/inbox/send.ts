@@ -11,6 +11,8 @@
 // - Cron `inbox.send_sweep`: tin kẹt `sending` quá 15 phút → `failed` `SEND_UNKNOWN` (có thể đã tới khách, không tự gửi lại).
 // - Story 5.4: tin `app_ai` đi cùng job; gửi lỗi (job, cron) → hội thoại còn `ai` sang `handoff`; "Gửi lại" nhận cả tin AI
 //   (= chủ shop gửi); `sent_at` lúc tin thành `sent`.
+// - Story 5.5: tin AI trả lời / nhắn riêng bình luận mà bình luận đích đã bị xoá / ẩn lúc job chiếm tin → huỷ tin (xoá
+//   dòng như Tiếp quản, phát `conversation.updated`), không gọi Meta, không đổi trạng thái hội thoại.
 // Không log nội dung tin hay token.
 import { sendModesFor, sendTextLimit, type MessageDelivery, type Platform, type SendErrorCode } from '@ottm/shared'
 import { and, desc, eq, isNull, lt, ne, or, sql } from 'drizzle-orm'
@@ -249,7 +251,7 @@ export type DeliverOutcome =
   | 'failed'
   /** `RATE_LIMITED`: tin về `pending`, job mới chạy sau `blocked_until`. */
   | 'deferred'
-  /** Không còn dòng tin (đã huỷ trước khi gửi). */
+  /** Không còn dòng tin (đã huỷ trước khi gửi), hoặc tin AI có bình luận đích đã gỡ (Story 5.5) — vừa huỷ. */
   | 'cancelled'
   /** Tin không còn `pending` (job chạy trùng / đã xử lý). */
   | 'skipped'
@@ -401,6 +403,33 @@ async function linkRecipient(tx: DbExecutor, deps: DeliverDeps, msg: MessageRow,
   }
 }
 
+/**
+ * Tin AI trả lời bình luận (Story 5.5): bình luận đích — gốc khi trả lời công khai, bình luận được nhắn riêng — đã bị
+ * khách xoá / trang ẩn sau lúc áp quyết định? Chủ shop gửi thì vẫn gửi (người tự quyết).
+ */
+async function aiCommentTargetRemoved(db: DbExecutor, msg: MessageRow, delivery: MessageDelivery, threadKey: string): Promise<boolean> {
+  if (msg.origin !== 'app_ai' || delivery === 'dm') return false
+  const target = delivery === 'public_reply' ? threadKey : msg.replyToPlatformId
+  if (!target) return false
+  const [row] = await db
+    .select({ removal: messages.removal })
+    .from(messages)
+    .where(and(eq(messages.pageId, msg.pageId), eq(messages.platformMessageId, target)))
+  return !!row?.removal
+}
+
+/** Huỷ tin AI đang `sending` (bình luận đích đã gỡ): xoá dòng, web làm cũ hội thoại + tin. */
+async function cancelAiMessage(deps: DeliverDeps, msg: MessageRow): Promise<DeliverOutcome> {
+  await deps.db.transaction(async (tx) => {
+    const [row] = await tx
+      .delete(messages)
+      .where(and(eq(messages.id, msg.id), eq(messages.status, 'sending')))
+      .returning({ id: messages.id })
+    if (row) await deps.events.publishEvent(tx, 'conversation.updated', { id: msg.conversationId, pageId: msg.pageId })
+  })
+  return 'cancelled'
+}
+
 /** Handler job `inbox.send` cho một tin. `finalAttempt`: lần thử cuối của job → lỗi tạm thành `failed` thay vì ném. */
 export async function deliverMessage(deps: DeliverDeps, messageId: string, opts: { finalAttempt: boolean }): Promise<DeliverOutcome> {
   const now = deps.now?.() ?? new Date()
@@ -422,6 +451,7 @@ export async function deliverMessage(deps: DeliverDeps, messageId: string, opts:
     const page = conv ? await getPage(deps.db, conv.pageId) : null
     if (!conv || !page) return markFailed(deps, msg, 'PAGE_REMOVED')
     if (page.connectionStatus === 'disconnected') return markFailed(deps, msg, 'PAGE_DISCONNECTED')
+    if (await aiCommentTargetRemoved(deps.db, msg, delivery, conv.threadKey)) return cancelAiMessage(deps, msg)
     const client = page.platform === 'threads' ? deps.threads : deps.graph
     if (!client) {
       deps.log?.warn({ messageId, pageId: page.id }, 'inbox: chưa cấu hình app Threads — không gửi được')

@@ -5,6 +5,9 @@
 //   confidence}` qua gateway → ngưỡng tin cậy → `checkOutput` (vi phạm → sinh lại MỘT lần → vẫn vi phạm thì
 //   `AI_POLICY_BLOCKED`; Story 5.4: lần sinh lại kèm ghi chú vi phạm vừa gặp). Lỗi gateway thành quyết định chuyển
 //   người (bảng ánh xạ AD-9); huỷ (`AbortError`) ném tiếp.
+// Story 5.5: bình luận FB/IG được cả trả lời công khai lẫn nhắn riêng → MỘT quyết định có thể gồm hai tin (`reply`
+// công khai ngắn + `privateReply` nhắn riêng chi tiết); mỗi tin qua hậu kiểm theo cách gửi của nó, một tin vi phạm thì
+// sinh lại cả quyết định.
 // Không ghi DB ngoài `ai_usage` của gateway, không gửi gì. Không log prompt / nội dung tin / câu trả lời.
 import {
   AI_OUTPUT_MAX_CHARS,
@@ -25,6 +28,7 @@ import {
   checkOutput,
   generateText,
   getBudgetSummary,
+  isDualReply,
   getOpenAiKeyStatus,
   retryNote,
   type AiDeps,
@@ -62,7 +66,7 @@ export interface DecideInput {
   brand: DecideBrand
   knowledge: readonly AutoreplyKnowledgeEntry[]
   platform: Platform
-  /** Cách gửi được phép; phần tử đầu là mặc định. */
+  /** Cách gửi được phép; phần tử đầu là mặc định. Có cả `public_reply` và `private_reply` → quyết định hai tin. */
   modes: readonly MessageDelivery[]
   pageName: string
   postText: string | null
@@ -161,7 +165,9 @@ export function reasonForAiError(err: unknown): HandoffReason | null {
 const ModelOutput = z.object({
   action: z.enum(['reply', 'handoff']),
   reply: z.string(),
-  mode: z.string(),
+  // Một cách gửi: `mode`; hai tin (Story 5.5): `privateReply`, không có `mode`.
+  mode: z.string().optional(),
+  privateReply: z.string().optional(),
   reasonCode: z.enum(AUTOREPLY_MODEL_REASONS).nullable(),
   confidence: z.number(),
 })
@@ -202,6 +208,7 @@ export async function decideReply(deps: DecideDeps, input: DecideInput): Promise
   const rule = matchHandoffRule(input.latestText, config)
   if (rule) return handoff(rule.reasonCode, { keyword: rule.keyword })
 
+  const dual = isDualReply(input.modes)
   const prompt = buildAutoreplyPrompt(input.brand, {
     platform: input.platform,
     mode: defaultMode,
@@ -209,8 +216,9 @@ export async function decideReply(deps: DecideDeps, input: DecideInput): Promise
     pageName: input.pageName,
     postText: input.postText,
     turns: input.turns,
-    // Model được chọn `mode` trong `modes` → hứa ngưỡng chặt nhất trong các cách gửi đó.
-    maxChars: Math.min(...input.modes.map((m) => replyLimit(input.platform, m))),
+    // Một cách gửi do model chọn trong `modes` → hứa ngưỡng chặt nhất. Hai tin: mỗi field một ngưỡng riêng.
+    maxChars: dual ? replyLimit(input.platform, 'public_reply') : Math.min(...input.modes.map((m) => replyLimit(input.platform, m))),
+    ...(dual ? { privateMaxChars: replyLimit(input.platform, 'private_reply') } : {}),
     script: config.script,
     knowledge: input.knowledge,
     handoff: { onCustomerAsk: config.handoffOnCustomerAsk, onUncertain: config.handoffOnUncertain },
@@ -241,19 +249,29 @@ export async function decideReply(deps: DecideDeps, input: DecideInput): Promise
     }
     const out = parseModelOutput(text)
     if (!out) return handoff('AI_PROVIDER_ERROR')
-    const mode = input.modes.find((m) => m === out.mode) ?? defaultMode
-    const reply = out.reply.trim()
+    const mode = dual ? defaultMode : (input.modes.find((m) => m === out.mode) ?? defaultMode)
+    // Tin sẽ gửi theo thứ tự: một tin theo `mode`; hai tin → công khai rồi nhắn riêng. Bỏ tin rỗng.
+    const drafts: AutoreplyOutMessage[] = (
+      dual
+        ? [
+            { mode: 'public_reply' as const, text: out.reply.trim() },
+            { mode: 'private_reply' as const, text: (out.privateReply ?? '').trim() },
+          ]
+        : [{ mode, text: out.reply.trim() }]
+    ).filter((m) => m.text !== '')
     if (out.action === 'handoff') {
       if (out.reasonCode === 'CUSTOMER_ASKED_HUMAN' && config.handoffOnCustomerAsk) return handoff('CUSTOMER_ASKED_HUMAN', { mode })
       if (out.reasonCode !== 'CUSTOMER_ASKED_HUMAN' && config.handoffOnUncertain) return handoff('AI_UNCERTAIN', { mode })
       // Lý do model chọn đang bị tắt: dùng câu trả lời nếu có (dưới đây); không có gì để gửi thì vẫn chuyển.
     }
-    if (!reply) return handoff('AI_UNCERTAIN', { mode })
+    if (drafts.length === 0) return handoff('AI_UNCERTAIN', { mode })
     const confidence = Number.isFinite(out.confidence) ? Math.min(1, Math.max(0, out.confidence)) : 0
     if (config.handoffOnUncertain && confidence < AUTOREPLY_CONFIDENCE_MIN) return handoff('AI_UNCERTAIN', { mode })
-    const check = checkOutput(reply, { brand: checkBrand, kind: outputKind(mode), maxChars: replyLimit(input.platform, mode) })
-    if (check.clean) return { action: 'reply', messages: [{ mode, text: reply }], confidence, llmCalls }
-    violations = check.violations
+    // Hậu kiểm từng tin theo loại / giới hạn của cách gửi của nó.
+    violations = drafts.flatMap(
+      (m) => checkOutput(m.text, { brand: checkBrand, kind: outputKind(m.mode), maxChars: replyLimit(input.platform, m.mode) }).violations,
+    )
+    if (violations.length === 0) return { action: 'reply', messages: drafts, confidence, llmCalls }
   }
   return handoff('AI_POLICY_BLOCKED', { violations })
 }

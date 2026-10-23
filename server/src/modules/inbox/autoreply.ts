@@ -6,23 +6,56 @@
 //   `inbox.send` (cùng transaction, AD-2; `canSend` từ chối → tin `failed` + mã), rồi chuyển trạng thái nếu có (tin
 //   `system` đứng sau tin AI), tắt "đang gõ".
 // - `setAiTyping`: chấm "đang gõ" (`ai_typing_at` + sự kiện `conversation.ai_typing`).
+// Story 5.5 (bình luận): tin cần trả lời chỉ là tin của chính khách hội thoại (người khác trong luồng chỉ vào prompt);
+// `autoreplySendCheck` = `canSend` + luật riêng của AI: bình luận đích đã xoá/ẩn → "đã gỡ" (AI không gửi gì). Lúc áp,
+// mọi tin cần trả lời đã xoá/ẩn hoặc đích đã gỡ → `superseded` (`removed`), không ghi gì.
 // Tin AI không tới được khách (job gửi, cron kẹt `sending`, `canSend` lúc áp) khi hội thoại còn `ai` → `handoff`
 // (`state.ts` `onAiMessageFailed`) để khách không chờ trong im lặng.
 // Không log nội dung tin.
 import type { ConversationState, HandoffReason, MessageDelivery, Platform, SendErrorCode, StateChangeReason } from '@ottm/shared'
-import { and, desc, eq, gt, inArray, isNotNull, sql } from 'drizzle-orm'
+import { and, desc, eq, gt, inArray, isNotNull, isNull, or, sql } from 'drizzle-orm'
 import { bossDbFor, type DbExecutor } from '../../platform/db/index.ts'
 import type { JobSender } from '../../platform/jobs/index.ts'
 import type { ReplyTurn } from '../ai/index.ts'
 import { getPage } from '../pages/index.ts'
 import { getConversation, listMessages } from './queries.ts'
 import { messageAttachments, conversations, messages } from './schema.ts'
-import { canSend } from './send.ts'
+import { canSend, type CanSendOptions, type SendCheck } from './send.ts'
 import { aiSendFailureReason, effectiveMessage, lockConversation, transition, waitingFrom, type ConversationRow, type StateDeps } from './state.ts'
 import { replyTurns } from './suggest.ts'
 
 /** Số dòng tin đọc để dựng bản ghi hội thoại / tìm tin khách chưa trả lời. */
 const TURN_SCAN_MESSAGES = 60
+
+/**
+ * Tin do chính khách của hội thoại viết: định danh của hội thoại, hoặc tin trước Story 4.4 chưa ghi người viết. Người khác
+ * trả lời trong luồng bình luận (Story 5.5) không phải tin AI cần trả lời.
+ */
+const byContact = (identityId: string) => or(eq(messages.senderIdentityId, identityId), isNull(messages.senderIdentityId))
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * Tin `messageId` là bình luận của người khác (không phải khách của hội thoại) — Story 5.5 (review): AI không trả lời
+ * họ, triage chuyển hội thoại cho chủ shop (`OTHER_COMMENTER`) để tin không bị bỏ im lặng. Id lạ / không có → `false`.
+ */
+export async function isOtherCommenter(db: DbExecutor, messageId: string): Promise<boolean> {
+  if (!UUID.test(messageId)) return false
+  const [row] = await db
+    .select({ id: messages.id })
+    .from(messages)
+    .innerJoin(conversations, eq(conversations.id, messages.conversationId))
+    .where(
+      and(
+        eq(messages.id, messageId),
+        eq(conversations.channel, 'comment'),
+        eq(messages.origin, 'customer'),
+        isNotNull(messages.senderIdentityId),
+        sql`${messages.senderIdentityId} <> ${conversations.contactIdentityId}`,
+      ),
+    )
+  return !!row
+}
 
 /** Một tin khách chưa được trả lời trong lượt này. */
 export interface PendingInbound {
@@ -49,14 +82,16 @@ export interface AutoreplyTurn {
   turns: ReplyTurn[]
   /** Hội thoại `comment`: caption bài (Story 5.5). */
   postText: string | null
+  /** Hội thoại `comment` mà job `inbox.fetch_post_text` chưa chạy xong — lượt có thể chờ caption một chút (Story 5.5). */
+  postTextPending: boolean
 }
 
-/** Id tin khách mới nhất theo thứ tự ghi (uuidv7). */
-async function latestInboundId(db: DbExecutor, conversationId: string): Promise<string | null> {
+/** Id tin mới nhất của khách hội thoại theo thứ tự ghi (uuidv7). */
+async function latestInboundId(db: DbExecutor, conversationId: string, identityId: string): Promise<string | null> {
   const [row] = await db
     .select({ id: messages.id })
     .from(messages)
-    .where(and(eq(messages.conversationId, conversationId), eq(messages.origin, 'customer')))
+    .where(and(eq(messages.conversationId, conversationId), eq(messages.origin, 'customer'), byContact(identityId)))
     .orderBy(desc(messages.id))
     .limit(1)
   return row?.id ?? null
@@ -68,16 +103,29 @@ export async function readAutoreplyTurn(db: DbExecutor, conversationId: string):
   const page = conv ? await getPage(db, conv.pageId) : null
   if (!conv || !page) return null
   const [row] = await db
-    .select({ stateVersion: conversations.stateVersion })
+    .select({
+      stateVersion: conversations.stateVersion,
+      contactIdentityId: conversations.contactIdentityId,
+      platformPostId: conversations.platformPostId,
+      postTextFetchedAt: conversations.postTextFetchedAt,
+    })
     .from(conversations)
     .where(eq(conversations.id, conversationId))
-  const lastInboundId = await latestInboundId(db, conversationId)
+  const lastInboundId = await latestInboundId(db, conversationId, row!.contactIdentityId)
 
   // Tin hiệu lực mới nhất trước: gom tin khách tới tin outbound đầu tiên gặp (đã trả lời). Tin khách đã xoá/ẩn bỏ qua.
   // Theo thứ tự GHI (id uuidv7, dưới khoá luồng), không theo `platform_timestamp`: tin khách gửi trước lúc AI áp nhưng
   // webhook tới sau (mốc Meta < mốc tin AI) vẫn là tin chưa ai trả lời — xếp theo mốc thì nó bị coi đã trả lời, mất tin.
+  // Tin người khác trong luồng không chặn việc quét (không phải "đã trả lời") và không vào danh sách cần trả lời.
   const recent = await db
-    .select({ id: messages.id, direction: messages.direction, text: messages.text, removal: messages.removal, createdAt: messages.createdAt })
+    .select({
+      id: messages.id,
+      direction: messages.direction,
+      text: messages.text,
+      removal: messages.removal,
+      senderIdentityId: messages.senderIdentityId,
+      createdAt: messages.createdAt,
+    })
     .from(messages)
     .where(and(eq(messages.conversationId, conversationId), effectiveMessage))
     .orderBy(desc(messages.id))
@@ -85,7 +133,8 @@ export async function readAutoreplyTurn(db: DbExecutor, conversationId: string):
   const trailing: typeof recent = []
   for (const m of recent) {
     if (m.direction === 'outbound') break
-    if (m.removal === null) trailing.push(m)
+    const own = m.senderIdentityId === null || m.senderIdentityId === row!.contactIdentityId
+    if (m.removal === null && own) trailing.push(m)
   }
   trailing.reverse()
   const counts = new Map<string, number>()
@@ -111,7 +160,43 @@ export async function readAutoreplyTurn(db: DbExecutor, conversationId: string):
     pending: trailing.map((m) => ({ id: m.id, text: m.text, attachmentCount: counts.get(m.id) ?? 0, createdAt: m.createdAt })),
     turns: replyTurns(history.items, conv.contact.id),
     postText: conv.post?.text ?? null,
+    postTextPending: conv.channel === 'comment' && row!.platformPostId !== null && row!.postTextFetchedAt === null,
   }
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Cửa sổ gửi của AI (Story 5.5)
+// ---------------------------------------------------------------------------------------------------------
+
+/** Bình luận AI định trả lời đã bị xoá / ẩn — AI không gửi gì (khác `canSend` của chủ shop: người vẫn trả lời được). */
+export const COMMENT_REMOVED = 'COMMENT_REMOVED'
+
+export type AutoreplySendCheck = SendCheck | { ok: false; code: typeof COMMENT_REMOVED }
+
+/** Bình luận `(page, platform_message_id)` đã xoá / ẩn? Không có dòng → không. */
+async function commentRemoved(db: DbExecutor, pageId: string, platformMessageId: string): Promise<boolean> {
+  const [row] = await db
+    .select({ removal: messages.removal })
+    .from(messages)
+    .where(and(eq(messages.pageId, pageId), eq(messages.platformMessageId, platformMessageId)))
+  return !!row?.removal
+}
+
+/**
+ * Cửa sổ gửi cho tin AI: `canSend` (chỗ duy nhất tính cửa sổ) + luật riêng của AI cho bình luận — trả lời công khai mà
+ * bình luận gốc đã xoá/ẩn, hoặc nhắn riêng mà bình luận đích đã ẩn → `COMMENT_REMOVED`. Chạy được trong transaction.
+ */
+export async function autoreplySendCheck(db: DbExecutor, conversationId: string, mode: MessageDelivery, options: CanSendOptions = {}): Promise<AutoreplySendCheck> {
+  if (mode === 'public_reply') {
+    const [conv] = await db.select({ pageId: conversations.pageId, threadKey: conversations.threadKey }).from(conversations).where(eq(conversations.id, conversationId))
+    if (conv && (await commentRemoved(db, conv.pageId, conv.threadKey))) return { ok: false, code: COMMENT_REMOVED }
+  }
+  const check = await canSend(db, conversationId, mode, options)
+  if (check.ok && mode === 'private_reply' && check.replyTo) {
+    const [conv] = await db.select({ pageId: conversations.pageId }).from(conversations).where(eq(conversations.id, conversationId))
+    if (conv && (await commentRemoved(db, conv.pageId, check.replyTo))) return { ok: false, code: COMMENT_REMOVED }
+  }
+  return check
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -126,6 +211,8 @@ export interface AutoreplyApplyDeps extends StateDeps {
 export interface AutoreplyExpected {
   stateVersion: number
   lastInboundId: string
+  /** Tin khách lượt này trả lời (Story 5.5): hội thoại bình luận mà tất cả đã xoá/ẩn lúc áp → `removed`. */
+  pendingIds?: readonly string[]
 }
 
 export interface AutoreplyApplyInput {
@@ -137,7 +224,8 @@ export interface AutoreplyApplyInput {
 
 export type AutoreplyApplyResult =
   | { applied: true; messageIds: string[]; state: 'ai' | 'handoff' | 'human'; reasonCode: StateChangeReason | null }
-  | { applied: false; reason: 'missing' | 'superseded' }
+  /** `removed` (Story 5.5): bình luận AI định trả lời đã bị xoá / ẩn trước khi áp. */
+  | { applied: false; reason: 'missing' | 'superseded' | 'removed' }
 
 export async function applyAutoreplyDecision(
   deps: AutoreplyApplyDeps,
@@ -151,7 +239,7 @@ export async function applyAutoreplyDecision(
     if (!conv) return { applied: false, reason: 'missing' }
     // Tiếp quản / người gửi tin / bật-tắt giữa lượt (tăng `state_version`), hoặc khách nhắn thêm → lượt sau lo.
     if (conv.state !== 'ai' || conv.stateVersion !== expected.stateVersion) return { applied: false, reason: 'superseded' }
-    if ((await latestInboundId(tx, conv.id)) !== expected.lastInboundId) return { applied: false, reason: 'superseded' }
+    if ((await latestInboundId(tx, conv.id, conv.contactIdentityId)) !== expected.lastInboundId) return { applied: false, reason: 'superseded' }
     // Đã có tin outbound hiệu lực ghi sau tin khách đó (lượt khác chạy chồng khi job quá hạn, người trả lời không đổi
     // `state_version`) → tin khách đã được trả lời, không gửi lần hai.
     const [answered] = await tx
@@ -160,12 +248,25 @@ export async function applyAutoreplyDecision(
       .where(and(eq(messages.conversationId, conv.id), eq(messages.direction, 'outbound'), effectiveMessage, gt(messages.id, expected.lastInboundId)))
       .limit(1)
     if (answered) return { applied: false, reason: 'superseded' }
+    // Bình luận: khách xoá / trang ẩn bình luận trong lúc AI nghĩ → không gửi gì (cả câu công khai lẫn nhắn riêng).
+    if (conv.channel === 'comment' && expected.pendingIds?.length) {
+      const [visible] = await tx
+        .select({ id: messages.id })
+        .from(messages)
+        .where(and(inArray(messages.id, [...expected.pendingIds]), isNull(messages.removal)))
+        .limit(1)
+      if (!visible) return { applied: false, reason: 'removed' }
+    }
+    // Kiểm hết trước khi ghi: một tin gặp bình luận đã gỡ thì bỏ cả quyết định (câu công khai thường nhắc tới tin riêng).
+    const checks: AutoreplySendCheck[] = []
+    for (const m of input.messages) checks.push(await autoreplySendCheck(tx, conv.id, m.mode, { now }))
+    if (checks.some((c) => !c.ok && c.code === COMMENT_REMOVED)) return { applied: false, reason: 'removed' }
 
     const at = conv.lastMessageAt > now ? conv.lastMessageAt : now
     const messageIds: string[] = []
     let refused: SendErrorCode | null = null
-    for (const m of input.messages) {
-      const check = await canSend(tx, conv.id, m.mode, { now })
+    for (const [i, m] of input.messages.entries()) {
+      const check = checks[i] as SendCheck
       const [row] = await tx
         .insert(messages)
         .values({

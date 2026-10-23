@@ -15,6 +15,8 @@
 // Story 4.10: `searchContacts` — tìm khách không dấu / theo SĐT cho ⌘K; `/api/v1/search` ghép ở `app/read-models/search.ts`.
 // Story 5.4: phía `inbox` của AI trả lời tự động — ảnh chụp lượt, `applyAutoreplyDecision` (khoá lạc quan), chấm "đang
 // gõ", tin AI gửi lỗi → `handoff`, "Gửi lại" tin AI.
+// Story 5.5: AI trả lời bình luận — tin cần trả lời chỉ của khách hội thoại, cửa sổ gửi của AI (`autoreplySendCheck`:
+// bình luận đã xoá/ẩn thì AI không gửi), huỷ tin AI khi bình luận bị gỡ trước lúc gửi.
 export const MODULE = 'inbox'
 
 export {
@@ -144,9 +146,13 @@ export {
   type UserActionResult,
 } from './state.ts'
 export {
+  COMMENT_REMOVED,
   applyAutoreplyDecision,
+  autoreplySendCheck,
+  isOtherCommenter,
   readAutoreplyTurn,
   setAiTyping,
+  type AutoreplySendCheck,
   type AutoreplyApplyDeps,
   type AutoreplyApplyInput,
   type AutoreplyApplyResult,

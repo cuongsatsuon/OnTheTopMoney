@@ -18,6 +18,7 @@ import { describe, expect, it } from 'vitest'
 import {
   ATTACHMENT_ERROR_TEXT,
   REASON_TEXT,
+  reasonText,
   REMOVAL_TEXT,
   attachmentUrl,
   bubbleKind,
@@ -102,6 +103,15 @@ describe('handoffNote (UX-DR5)', () => {
       'Khách muốn nói chuyện với người thật · khách chờ 12 phút',
     )
     expect(handoffNote({ state: 'handoff', stateReason: 'AI_BUDGET_EXCEEDED', waitingSince: null }, now)).toBe('Đã hết hạn mức AI tháng này — chuyển cho bạn')
+  })
+  it('bình luận (Story 5.5): câu lý do riêng cho OUTSIDE_24H / CHANNEL_OFF; DM giữ câu chung', () => {
+    expect(handoffNote({ state: 'handoff', stateReason: 'OUTSIDE_24H', waitingSince: null, channel: 'comment' }, now)).toBe(
+      'AI không nhắn riêng được cho người bình luận (đã nhắn hoặc quá 7 ngày) — bạn trả lời khách nhé',
+    )
+    expect(handoffNote({ state: 'handoff', stateReason: 'OUTSIDE_24H', waitingSince: null, channel: 'dm' }, now)).toBe('Đã quá 24 giờ kể từ tin cuối của khách')
+    expect(reasonText('CHANNEL_OFF', 'comment')).toBe('AI không trả lời bình luận ở trang này — bạn trả lời khách nhé')
+    expect(reasonText('CHANNEL_OFF', 'dm')).toBe(REASON_TEXT.CHANNEL_OFF)
+    expect(reasonText('KEYWORD', 'comment')).toBe(REASON_TEXT.KEYWORD)
   })
   it('không phải handoff hoặc chưa có lý do → không ghi chú', () => {
     expect(handoffNote({ state: 'human', stateReason: 'AI_OFF', waitingSince: '2026-10-23T03:18:00.000Z' }, now)).toBeNull()

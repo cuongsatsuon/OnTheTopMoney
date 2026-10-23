@@ -3,6 +3,8 @@
 // dụng) → khoá OpenAI → hạn mức → [bỏ cổng giờ, `canSend`, `ai_enabled`, `AI_OFF` — thử được cả khi AI đang tắt] →
 // luật → LLM → hậu kiểm. Gateway `feature=autoreply_test`. Không ghi tin, không đổi trạng thái hội thoại, không gửi Meta.
 // Nguồn prompt (hồ sơ hiệu lực, kho kiến thức đang hiển thị) do `profiles.autoreplyTestSources` giải.
+// Story 5.5: kênh bình luận thử đúng cách gửi của lượt thật — nháp bật cả hai kênh bình luận (FB/IG) thì quyết định có
+// thể gồm câu công khai + tin nhắn riêng; Threads chỉ công khai.
 import {
   AUTOREPLY_CHANNEL_MODE,
   AUTOREPLY_CHANNEL_PLATFORMS,
@@ -10,6 +12,7 @@ import {
   type AutoreplyChannel,
   type AutoreplyTestResponse,
   type HandoffReason,
+  type MessageDelivery,
   type ParsedAutoreplyTestRequest,
   type Platform,
 } from '@ottm/shared'
@@ -17,6 +20,15 @@ import type { ReplyTurn } from '../ai/index.ts'
 import { autoreplyTestSources, type AutoreplyTestSources } from '../profiles/index.ts'
 import { AppError } from '../../platform/errors/index.ts'
 import { aiAvailabilityGate, brandOrEmpty, decideReply, handoffDecision, type AutoreplyDecision, type DecideDeps } from './decide.ts'
+import { servingChannels } from './gates.ts'
+
+/** Cách gửi như lượt thật: DM một cách; bình luận = các kênh bình luận đang bật trong nháp có trên nền tảng (công khai trước). */
+function testModes(channel: AutoreplyChannel, platform: Platform, enabled: readonly AutoreplyChannel[]): MessageDelivery[] {
+  if (channel === 'messenger' || channel === 'ig_direct') return [AUTOREPLY_CHANNEL_MODE[channel]]
+  return servingChannels(platform, 'comment')
+    .filter((c) => enabled.includes(c))
+    .map((c) => AUTOREPLY_CHANNEL_MODE[c])
+}
 
 /** Cắt mỗi lượt đưa vào prompt (chi phí, AD-7). */
 const TURN_TEXT_MAX = 1000
@@ -69,7 +81,6 @@ export async function runAutoreplyTest(
   const owner = { ownerType: req.ownerType, ownerId: req.ownerId }
   const sources = await autoreplyTestSources(deps.db, owner)
   const platform = platformFor(sources, req.channel)
-  const mode = AUTOREPLY_CHANNEL_MODE[req.channel]
   const cfg = req.config
 
   let decision: AutoreplyDecision
@@ -92,7 +103,7 @@ export async function runAutoreplyTest(
         brand: brandOrEmpty(sources.brand),
         knowledge: sources.knowledge,
         platform,
-        modes: [mode],
+        modes: testModes(req.channel, platform, cfg.channels),
         pageName: sources.name,
         postText: null,
         turns,

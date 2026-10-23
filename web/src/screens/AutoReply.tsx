@@ -1220,7 +1220,7 @@ function AddKnowledgeModal({ open, onClose, onSubmit }: { open: boolean; onClose
 
 /* ---------- Khung "Thử AI" ---------- */
 
-type TestMsg = { id: number; from: 'customer' | 'ai' | 'system'; text: string }
+type TestMsg = { id: number; from: 'customer' | 'ai' | 'system'; text: string; label?: string }
 
 /**
  * Khung thử. Kho mẫu: mô phỏng trọn câu trả lời. Nhóm/trang thật (Story 5.3): server chạy đúng đường quyết định của AI
@@ -1266,7 +1266,8 @@ function TestChat({
     endRef.current?.scrollIntoView({ block: 'nearest' })
   }, [msgs.length, typing])
 
-  const push = (from: TestMsg['from'], text: string) => setMsgs((m) => [...m, { id: Date.now() + Math.random(), from, text }])
+  const push = (from: TestMsg['from'], text: string, label?: string) =>
+    setMsgs((m) => [...m, { id: Date.now() + Math.random(), from, text, ...(label ? { label } : {}) }])
 
   const sendReal = async (text: string, previous: TestMsg[]) => {
     if (!channel) return push('system', 'Trang này chưa có kênh nào để thử.')
@@ -1275,7 +1276,7 @@ function TestChat({
     setTyping(true)
     try {
       const res = await testM.mutateAsync({ body: toAutoreplyTestRequest(owner, config, channel, text, previous), signal: ctrl.signal })
-      for (const b of testResultBubbles(res)) push(b.from, b.text)
+      for (const b of testResultBubbles(res)) push(b.from, b.text, b.label)
     } catch (err) {
       if (!ctrl.signal.aborted) push('system', testErrorMessage(err))
     } finally {
@@ -1424,7 +1425,7 @@ function TestBubble({ msg }: { msg: TestMsg }) {
       <div className="max-w-[85%]">
         <div className="rounded-lg rounded-bl-sm border border-violet-200 bg-ai-soft px-3 py-2 text-sm">{msg.text}</div>
         <div className="mt-0.5 flex items-center gap-1 text-[11px] font-medium text-ai">
-          <Sparkles size={10} /> AI trả lời
+          <Sparkles size={10} /> {msg.label ?? 'AI trả lời'}
         </div>
       </div>
     </div>

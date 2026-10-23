@@ -43,6 +43,7 @@ const HANDOFF_REASON_TEXT: Partial<Record<StateChangeReason, string>> = {
   NON_TEXT_MESSAGE: 'Khách gửi nội dung AI chưa đọc được.',
   OUTSIDE_HOURS: 'Tin tới ngoài giờ AI trả lời.',
   OUTSIDE_24H: 'Đã quá 24 giờ kể từ tin cuối của khách.',
+  OTHER_COMMENTER: 'Có người khác bình luận trong luồng AI đang trả lời.',
   AI_BUDGET_EXCEEDED: 'Đã dùng hết hạn mức AI tháng này.',
   OPENAI_KEY_UNAVAILABLE: 'Khoá OpenAI chưa dùng được.',
   AI_PROVIDER_ERROR: 'AI đang gặp sự cố.',

@@ -3,17 +3,23 @@
 // 1. Ảnh chụp `inbox.readAutoreplyTurn`: chỉ chạy khi `state=ai` và còn tin khách chưa trả lời; ngược lại `skipped`
 //    (không ghi run — job trùng / đã có người trả lời / bật lại AI khi khách không chờ).
 // 2. Ghi `autoreply_runs` (id, mốc, không nội dung).
-// 3. Cổng 1–5 (`gates.ts`) → `canSend(dm)` (`OUTSIDE_24H`) → tin có chữ (`NON_TEXT_MESSAGE`) → `decideReply` (luật → LLM
+// 3. Cổng 1–5 (`gates.ts`) → `canSend` theo cách gửi (`OUTSIDE_24H`) → tin có chữ (`NON_TEXT_MESSAGE`) → `decideReply` (luật → LLM
 //    → hậu kiểm). Chấm "đang gõ" bật ngay trước bước quyết định.
 // 4. `inbox.applyAutoreplyDecision` với `{stateVersion, lastInboundId}` — lệch (Tiếp quản, khách nhắn thêm) →
 //    `superseded`, không gửi gì; lượt sau (job đã chờ sẵn) trả lời gộp.
 // Lỗi bất ngờ: ném để retry; lần thử cuối áp `handoff` `AI_PROVIDER_ERROR` để khách không kẹt ở `ai` trong im lặng.
+// Story 5.5 (bình luận):
+// - caption bài chưa lấy xong (job `inbox.fetch_post_text`) và bình luận còn mới → hoãn lượt (`deferred`, không ghi run);
+// - cách gửi = kênh bật ∩ `autoreplySendCheck` (`canSend` + bình luận đã xoá/ẩn): nhắn riêng đã dùng / quá 7 ngày thì
+//   bỏ, chỉ trả lời công khai; không còn cách nào mà có bình luận đã gỡ → không gửi gì (`superseded`), còn lại
+//   `OUTSIDE_24H`; còn cả hai → quyết định hai tin.
 // Không log prompt / nội dung tin / câu trả lời.
-import { HANDOFF_REASON_KIND, type ConfigSource, type HandoffReason } from '@ottm/shared'
+import { HANDOFF_REASON_KIND, type ConfigSource, type HandoffReason, type MessageDelivery } from '@ottm/shared'
 import { eq } from 'drizzle-orm'
 import {
+  COMMENT_REMOVED,
   applyAutoreplyDecision,
-  canSend,
+  autoreplySendCheck,
   readAutoreplyTurn,
   setAiTyping,
   type AutoreplyApplyInput,
@@ -27,12 +33,20 @@ import { autoreplyRuns, type AutoreplyRunOutcome } from './schema.ts'
 
 /** Trễ gộp tin [ASSUMPTION AD-16]: job đầu chạy sau chừng này, tin tới trong lúc chờ đi chung một lượt. */
 export const AUTOREPLY_RUN_DELAY_MS = 4_000
+/** Chờ caption bài tối đa chừng này tính từ bình luận cần trả lời đầu tiên [ASSUMPTION, Story 5.5]; quá thì chạy không caption. */
+export const POST_TEXT_WAIT_MS = 10_000
+/** Hoãn lượt bình luận chờ caption chừng này mỗi lần. */
+export const POST_TEXT_RETRY_MS = 2_000
 
 export interface RunDeps extends DecideDeps {
   jobs: JobSender
 }
 
-export type RunOutcome = AutoreplyRunOutcome | 'skipped'
+/** `skipped`/`deferred` không ghi run; `deferred` = đã hẹn lượt sau (chờ caption bài, Story 5.5). */
+export type RunOutcome = AutoreplyRunOutcome | 'skipped' | 'deferred'
+
+/** Bình luận AI định trả lời đã bị xoá/ẩn (Story 5.5) — không gửi gì, không đổi trạng thái. */
+const REMOVED = 'removed' as const
 
 /** Đưa hội thoại vào hàng AI trả lời (stately: đã có job chờ thì bỏ — job đó sẽ đọc cả tin mới). */
 export async function enqueueAutoreplyRun(deps: Pick<RunDeps, 'jobs' | 'now'>, conversationId: string, delayMs = AUTOREPLY_RUN_DELAY_MS): Promise<void> {
@@ -63,16 +77,27 @@ async function decide(
   turn: AutoreplyTurn,
   record: RunRecord,
   onTyping: () => Promise<void>,
-): Promise<AutoreplyDecision> {
+): Promise<AutoreplyDecision | typeof REMOVED> {
   const gate = await preGates(deps, { pageId: turn.pageId, platform: turn.platform, channel: turn.channel, aiEnabled: turn.aiEnabled })
   record.source = gate.source
   if (!gate.open) return handoffDecision(gate.reason)
 
   const now = deps.now?.() ?? new Date()
-  const mode = gate.modes[0]!
-  const send = await canSend(deps.db, turn.conversationId, mode, { now })
-  // AD-9: `canSend` từ chối khi AI định trả lời → `OUTSIDE_24H` (sticky). Không gửi được gì nên không có câu chuyển tiếp.
-  if (!send.ok) return handoffDecision('OUTSIDE_24H')
+  // Cách gửi còn dùng được (DM: `dm`; bình luận: công khai và/hoặc nhắn riêng — Story 5.5).
+  const modes: MessageDelivery[] = []
+  let removed = false
+  for (const m of gate.modes) {
+    const check = await autoreplySendCheck(deps.db, turn.conversationId, m, { now })
+    if (check.ok) modes.push(m)
+    else if (check.code === COMMENT_REMOVED) removed = true
+  }
+  if (modes.length === 0) {
+    // Bình luận đã bị khách xoá / trang ẩn → không còn gì để trả lời, không chuyển người.
+    if (removed) return REMOVED
+    // AD-9: `canSend` từ chối khi AI định trả lời → `OUTSIDE_24H` (sticky). Không gửi được gì nên không có câu chuyển tiếp.
+    return handoffDecision('OUTSIDE_24H')
+  }
+  const mode = modes[0]!
 
   const sources = await autoreplyRunSources(deps.db, turn.pageId)
   record.source = sources.source
@@ -92,7 +117,7 @@ async function decide(
     brand: brandOrEmpty(sources.brand),
     knowledge: sources.knowledge,
     platform: turn.platform,
-    modes: gate.modes,
+    modes,
     pageName: sources.pageName,
     postText: turn.postText,
     turns: turn.turns,
@@ -104,8 +129,13 @@ async function decide(
 export async function runAutoreply(deps: RunDeps, conversationId: string, opts: { finalAttempt: boolean } = { finalAttempt: true }): Promise<RunOutcome> {
   const turn = await readAutoreplyTurn(deps.db, conversationId)
   if (!turn || turn.state !== 'ai' || !turn.lastInboundId || turn.pending.length === 0) return 'skipped'
-  const expected = { stateVersion: turn.stateVersion, lastInboundId: turn.lastInboundId }
   const startedAt = deps.now?.() ?? new Date()
+  // Bình luận vừa tới mà caption bài chưa lấy xong: chờ thêm (prompt cần caption để trả lời "giá bao nhiêu?").
+  if (turn.postTextPending && startedAt.getTime() - turn.pending[0]!.createdAt.getTime() < POST_TEXT_WAIT_MS) {
+    await enqueueAutoreplyRun(deps, conversationId, POST_TEXT_RETRY_MS)
+    return 'deferred'
+  }
+  const expected = { stateVersion: turn.stateVersion, lastInboundId: turn.lastInboundId, pendingIds: turn.pending.map((m) => m.id) }
   const [run] = await deps.db
     .insert(autoreplyRuns)
     .values({
@@ -125,6 +155,10 @@ export async function runAutoreply(deps: RunDeps, conversationId: string, opts: 
       typing = true
       await setAiTyping(deps, conversationId, true)
     })
+    if (decision === REMOVED) {
+      record.outcome = 'superseded'
+      return record.outcome
+    }
     record.llmCalls = decision.llmCalls
     if (decision.action === 'reply') record.confidence = decision.confidence
     const applied = await applyAutoreplyDecision(deps, conversationId, expected, toApply(decision))

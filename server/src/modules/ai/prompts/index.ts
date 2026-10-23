@@ -26,12 +26,14 @@ export {
   type ContactSummaryTurn,
 } from './contact-summary.ts'
 export {
+  AUTOREPLY_DUAL_MAX_OUTPUT_TOKENS,
   AUTOREPLY_MAX_OUTPUT_TOKENS,
   AUTOREPLY_MODEL_REASONS,
   autoreplyInput,
   autoreplyInstructions,
   autoreplyOutputSchema,
   buildAutoreplyPrompt,
+  isDualReply,
   type AutoreplyKnowledgeEntry,
   type AutoreplyModelReason,
   type AutoreplyPromptContext,

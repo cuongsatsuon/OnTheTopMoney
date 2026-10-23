@@ -72,7 +72,7 @@
   evidence: `ingestComment` tra hội thoại của tin cha ngoài khoá luồng; tin cha chưa ingest thì dùng `parentId`. FB/IG không bị (cha luôn là bình luận gốc). Làm khi xác nhận payload Threads thật (có `root` id của luồng hay không).
 - source_spec: `spec-4-7-gui-tin-24-gio.md`
   summary: Nhắn riêng tạo sẵn hội thoại `dm` với `origin_conversation_id` = hội thoại bình luận (AD-10/AD-11 bản đầy đủ).
-  evidence: 4.7 chỉ gắn định danh `(page, recipient_id)` vào cùng khách; khách trả lời qua Messenger thì vào hội thoại `dm` mới của cùng khách nhưng không có liên kết ngược. (Phần "gợi ý gộp khi `recipient_id` đã thuộc khách khác" đã làm ở Story 4.9 — `contact_merge_suggestions`.)
+  evidence: 4.7 chỉ gắn định danh `(page, recipient_id)` vào cùng khách; khách trả lời qua Messenger thì vào hội thoại `dm` mới của cùng khách nhưng không có liên kết ngược. (Phần "gợi ý gộp khi `recipient_id` đã thuộc khách khác" đã làm ở Story 4.9 — `contact_merge_suggestions`.) Story 5.5 (AI nhắn riêng người bình luận) làm việc này đáng làm hơn: khách trả lời tin nhắn riêng của AI qua Messenger thì vào hội thoại `dm` mới, lượt AI ở đó không thấy bình luận, caption hay câu AI vừa nhắn riêng (prompt chỉ đọc hội thoại hiện tại) — câu "ok lấy 2 cái" có thể thành `AI_UNCERTAIN`. AC 5.5 không đòi nên chưa làm.
 - source_spec: `spec-4-7-gui-tin-24-gio.md`
   summary: Xác nhận bằng Meta thật: Send API `/me/messages` cho IG (token Fanpage nguồn), `metadata` cho IG, Threads publish container trả lời ngay sau khi tạo (tài liệu khuyên chờ), giới hạn ký tự IG 1000.
   evidence: Đường gửi mới chỉ chạy với Meta giả/fake client. Threads publish lỗi tạm thì retry tạo container mới (container cũ mồ côi, vô hại).
@@ -130,3 +130,9 @@
 - source_spec: `spec-5-4-ai-tu-tra-loi.md`
   summary: Lượt `autoreply.run` quá `expireInSeconds` (300 giây) ở lần thử cuối không chuyển người — hội thoại có thể kẹt `ai` không ai trả lời.
   evidence: Fallback `handoff` `AI_PROVIDER_ERROR` chỉ chạy trong `catch` của `runAutoreply` (server/src/modules/autoreply/run.ts); pg-boss 12 hết hạn thì đánh `failed` + abort `job.signal` mà handler không nghe signal. Hiếm vì 2 lời gọi OpenAI ≤ 240 giây. Sửa: truyền `job.signal` vào `decideReply`, hoặc cron quét hội thoại `ai` có run `outcome is null` quá hạn → `handoff`.
+- source_spec: `spec-5-5-ai-tra-loi-binh-luan.md`
+  summary: Kiểm bằng trình duyệt + Meta/OpenAI thật luồng AI trả lời bình luận: hai tin (công khai + nhắn riêng) với structured output `privateReply` thật, nhắn riêng IG qua token Fanpage nguồn, trả lời Threads, nhãn "AI trả lời công khai" / "AI nhắn riêng" ở khung Thử AI, câu lý do bình luận ở Hộp thư.
+  evidence: Chỉ có test Postgres thật + OpenAI/Meta giả (`server/test/autoreply-comment.test.ts`) và test helper web; chưa chạy worker thật, chưa đo thời gian chờ caption thật (`POST_TEXT_WAIT_MS` 10 giây [ASSUMPTION]).
+- source_spec: `spec-5-5-ai-tra-loi-binh-luan.md`
+  summary: Bình luận bị ẩn (chủ shop ẩn, hoặc Facebook tự ẩn theo bộ lọc từ khoá / số điện thoại) thì AI không trả lời và hội thoại giữ `ai` — không vào "Cần xử lý".
+  evidence: Story 5.5 coi bình luận đã xoá/ẩn là "đã gỡ": tin cần trả lời bỏ qua tin `removal` khác null (`inbox/autoreply.ts` `readAutoreplyTurn`), `autoreplySendCheck` chặn trả lời công khai dưới gốc đã ẩn. Hợp với ẩn tay / spam, nhưng shop bật "ẩn bình luận có số điện thoại" thì khách để lại SĐT không ai thấy trong "Cần xử lý". Cần quyết định sản phẩm (vd ẩn → `handoff` lý do riêng, hoặc chỉ nhắn riêng) và cần sự kiện thật để biết ẩn tự động có về webhook `feed` `hide` không.

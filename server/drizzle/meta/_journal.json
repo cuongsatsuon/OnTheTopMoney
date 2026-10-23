@@ -176,6 +176,13 @@
       "when": 1792782063915,
       "tag": "0024_sour_pride",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1792785317717,
+      "tag": "0025_amused_cobalt_man",
+      "breakpoints": true
     }
   ]
 }

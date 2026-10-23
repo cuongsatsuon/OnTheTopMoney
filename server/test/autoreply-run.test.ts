@@ -234,7 +234,7 @@ describe('triage: cổng AD-16', () => {
     expect(job!.delay_ms).toBeGreaterThanOrEqual(AUTOREPLY_RUN_DELAY_MS - 1000)
   })
 
-  it('không áp dụng → human: CONFIG_MISSING / AI_OFF / CHANNEL_OFF (IG tắt, bình luận); không job', async () => {
+  it('không áp dụng → human: CONFIG_MISSING / AI_OFF / CHANNEL_OFF (IG tắt, bình luận tắt); không job', async () => {
     const p0 = await page('facebook', null)
     const c0 = await dm(p0, 'U0')
     expect(await triage(c0, p0)).toBe('applied')
@@ -248,7 +248,8 @@ describe('triage: cổng AD-16', () => {
     expect(await conv(c1)).toMatchObject({ state: 'human', state_reason: 'AI_OFF' })
 
     const g = await group()
-    await config(g, { channels: ['messenger', 'comment_public'] })
+    // Chỉ Messenger: DM Instagram và bình luận (Story 5.5 mở kênh bình luận khi bật) đều không áp dụng.
+    await config(g, { channels: ['messenger'] })
     const ig = await page('instagram', g)
     const c2 = await dm(ig, 'U2')
     await triage(c2, ig)

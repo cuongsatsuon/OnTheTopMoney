@@ -27,6 +27,7 @@ import {
   type AutoreplyTestTurn,
   type ConfigOwnerType,
   type HandoffReason,
+  type MessageDelivery,
   type Platform,
   type SaveAutoreplyConfigRequest,
 } from '@ottm/shared'
@@ -199,11 +200,20 @@ export const TEST_REASON_TEXT: Record<HandoffReason, string> = {
   AI_POLICY_BLOCKED: 'câu trả lời của AI phạm Điều cần tránh',
   NON_TEXT_MESSAGE: 'khách gửi nội dung AI chưa đọc được',
   OUTSIDE_24H: 'đã quá 24 giờ kể từ tin cuối của khách',
+  OTHER_COMMENTER: 'có người khác bình luận trong luồng',
 }
 
 export interface TestBubble {
   from: 'ai' | 'system'
   text: string
+  /** Nhãn dưới bong bóng AI theo cách gửi (Story 5.5: bình luận công khai / nhắn riêng); `undefined` = "AI trả lời". */
+  label?: string
+}
+
+/** Nhãn bong bóng AI theo cách gửi — chỉ bình luận cần phân biệt (một quyết định có thể có cả hai tin). */
+const TEST_MODE_LABEL: Partial<Record<MessageDelivery, string>> = {
+  public_reply: 'AI trả lời công khai',
+  private_reply: 'AI nhắn riêng',
 }
 
 /**
@@ -211,7 +221,10 @@ export interface TestBubble {
  * khi chuyển, hoặc ghi chú "tin vào Hộp thư cho bạn" khi AI không áp dụng ở đây.
  */
 export function testResultBubbles(res: AutoreplyTestResponse): TestBubble[] {
-  const out: TestBubble[] = res.messages.map((m) => ({ from: 'ai', text: m.text }))
+  const out: TestBubble[] = res.messages.map((m) => {
+    const label = TEST_MODE_LABEL[m.mode]
+    return label ? { from: 'ai', text: m.text, label } : { from: 'ai', text: m.text }
+  })
   if (res.action === 'reply' || !res.reasonCode) return out
   if (res.action === 'not_applicable') {
     out.push({ from: 'system', text: `${TEST_REASON_TEXT[res.reasonCode]} — tin vào Hộp thư cho bạn trả lời.` })

@@ -222,6 +222,22 @@ describe('Thử AI (Story 5.3)', () => {
     ])
   })
 
+  it('bình luận (Story 5.5): hai tin công khai + nhắn riêng có nhãn theo cách gửi', () => {
+    expect(
+      testResultBubbles({
+        ...base,
+        action: 'reply',
+        messages: [
+          { mode: 'public_reply', text: 'Shop đã nhắn riêng cho bạn ạ' },
+          { mode: 'private_reply', text: 'Dạ nồi chiên 5L giá 1.290.000đ ạ' },
+        ],
+      }),
+    ).toEqual([
+      { from: 'ai', text: 'Shop đã nhắn riêng cho bạn ạ', label: 'AI trả lời công khai' },
+      { from: 'ai', text: 'Dạ nồi chiên 5L giá 1.290.000đ ạ', label: 'AI nhắn riêng' },
+    ])
+  })
+
   it('lỗi thử: kho quá lớn có câu riêng', () => {
     expect(testErrorMessage(new ApiError('KNOWLEDGE_TOO_LARGE', 422, 'x'))).toMatch(/rút gọn kho/)
   })

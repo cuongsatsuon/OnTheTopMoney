@@ -61,6 +61,8 @@ export const HANDOFF_REASONS = [
   'AI_POLICY_BLOCKED',
   'NON_TEXT_MESSAGE',
   'OUTSIDE_24H',
+  // Story 5.5 (review): người khác bình luận trong luồng AI đang trả lời — AI không trả lời họ, chuyển chủ shop.
+  'OTHER_COMMENTER',
 ] as const
 export const HandoffReason = z.enum(HANDOFF_REASONS)
 export type HandoffReason = z.infer<typeof HandoffReason>
@@ -84,6 +86,7 @@ export const HANDOFF_REASON_KIND: Record<HandoffReason, HandoffKind | 'not_appli
   AI_POLICY_BLOCKED: 'sticky',
   NON_TEXT_MESSAGE: 'sticky',
   OUTSIDE_24H: 'sticky',
+  OTHER_COMMENTER: 'sticky',
 }
 
 export const STATE_CHANGE_REASONS = [

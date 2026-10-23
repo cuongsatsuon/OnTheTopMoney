@@ -5,7 +5,8 @@
 //   3. kênh áp dụng                          → `CHANNEL_OFF` (không áp dụng)
 //   4. giờ hoạt động                         → `OUTSIDE_HOURS` (tạm đóng)
 //   5. khoá OpenAI → hạn mức (`aiAvailabilityGate`) → `OPENAI_KEY_UNAVAILABLE` / `AI_BUDGET_EXCEEDED` (tạm đóng)
-// Lượt chạy chèn thêm `canSend` (`OUTSIDE_24H`) và "tin có chữ" (`NON_TEXT_MESSAGE`) — xem `run.ts`.
+// Lượt chạy chèn thêm `canSend` (`OUTSIDE_24H`) và "tin có chữ" (`NON_TEXT_MESSAGE`) — xem `run.ts`. Story 5.5 mở kênh
+// bình luận (`comment_public` / `comment_private`; Threads chỉ công khai).
 // Giờ hoạt động tính theo giờ Việt Nam (UTC+7 cố định, không đổi giờ mùa hè). Thuần trừ `preGates`.
 import type {
   AutoreplyChannel,
@@ -65,10 +66,11 @@ export function withinActiveHours(cfg: { schedule: AutoreplySchedule; hours: rea
 
 /**
  * Kênh `AutoreplyChannel` có thể phục vụ hội thoại này. DM: Facebook → `messenger`, Instagram → `ig_direct`.
- * Bình luận: chưa phục vụ ở Story 5.4 (5.5 thêm `comment_public` / `comment_private`) → luôn `CHANNEL_OFF`.
+ * Bình luận (Story 5.5): FB/IG → `comment_public` rồi `comment_private` (thứ tự = thứ tự gửi: công khai trước);
+ * Threads chỉ `comment_public` (Meta chưa có nhắn riêng — AD-10), `comment_private` trong cấu hình bị bỏ qua.
  */
 export function servingChannels(platform: Platform, channel: ConversationChannel): AutoreplyChannel[] {
-  if (channel !== 'dm') return []
+  if (channel === 'comment') return platform === 'threads' ? ['comment_public'] : ['comment_public', 'comment_private']
   if (platform === 'facebook') return ['messenger']
   if (platform === 'instagram') return ['ig_direct']
   return []

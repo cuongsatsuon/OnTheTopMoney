@@ -371,10 +371,13 @@ export const aiSwitchAction = (next: boolean): ConversationAction => (next ? 'en
  * Ghi chú vàng của hội thoại `handoff` (UX-DR5): lý do theo `REASON_TEXT` + thời gian khách chờ tính từ
  * `waitingSince`. Không phải `handoff` hoặc chưa có lý do → `null`.
  */
-export function handoffNote(conv: Pick<ConversationDto, 'state' | 'stateReason' | 'waitingSince'>, now: Date): string | null {
+export function handoffNote(
+  conv: Pick<ConversationDto, 'state' | 'stateReason' | 'waitingSince'> & { channel?: ConversationChannel },
+  now: Date,
+): string | null {
   if (conv.state !== 'handoff' || !conv.stateReason) return null
   const waiting = conv.waitingSince ? ` · khách chờ ${durationLabel(conv.waitingSince, now)}` : ''
-  return `${REASON_TEXT[conv.stateReason]}${waiting}`
+  return `${reasonText(conv.stateReason, conv.channel)}${waiting}`
 }
 
 /** Nhãn tab Hộp thư. */
@@ -465,12 +468,27 @@ export const REASON_TEXT: Record<StateChangeReason, string> = {
   AI_POLICY_BLOCKED: 'AI không được phép trả lời nội dung này',
   NON_TEXT_MESSAGE: 'Khách gửi nội dung AI chưa đọc được',
   OUTSIDE_24H: 'Đã quá 24 giờ kể từ tin cuối của khách',
+  OTHER_COMMENTER: 'Người khác bình luận trong luồng — AI chỉ trả lời khách của hội thoại, bạn trả lời họ nhé',
   HUMAN_REPLIED: 'Bạn đã trả lời — AI tạm dừng ở hội thoại này',
   TAKEOVER: 'Bạn đã tiếp quản — AI tạm dừng ở hội thoại này',
   AI_REENABLED: 'Đã bật lại AI cho hội thoại này',
   MARKED_DONE: 'Đã đánh dấu xong',
   // Story 5.4: tin đầu của hội thoại mới cũng qua đây (triage → ai), không chỉ lúc AI chạy lại (5.6).
   GATE_OPEN: 'AI đang trả lời hội thoại này',
+}
+
+/**
+ * Câu riêng cho hội thoại bình luận (Story 5.5): AI không nhắn riêng được (đã nhắn / quá 7 ngày) dùng lý do
+ * `OUTSIDE_24H` của AD-9 — "quá 24 giờ" không đúng với bình luận.
+ */
+const COMMENT_REASON_TEXT: Partial<Record<StateChangeReason, string>> = {
+  CHANNEL_OFF: 'AI không trả lời bình luận ở trang này — bạn trả lời khách nhé',
+  OUTSIDE_24H: 'AI không nhắn riêng được cho người bình luận (đã nhắn hoặc quá 7 ngày) — bạn trả lời khách nhé',
+}
+
+/** Câu lý do theo kênh của hội thoại; không rõ kênh → câu chung. */
+export function reasonText(reason: StateChangeReason, channel?: ConversationChannel): string {
+  return (channel === 'comment' ? COMMENT_REASON_TEXT[reason] : undefined) ?? REASON_TEXT[reason]
 }
 
 export const ATTACHMENT_ERROR_TEXT: Record<AttachmentError, string> = {

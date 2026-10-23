@@ -40,7 +40,6 @@ import {
   ATTACHMENT_ERROR_TEXT,
   CHANNEL_LABEL,
   INBOX_TAB_LABEL,
-  REASON_TEXT,
   REMOVAL_TEXT,
   SEND_ERROR_TEXT,
   SEND_MODE_LABEL,
@@ -65,6 +64,7 @@ import {
   outboundStatusLabel,
   postLine,
   previewText,
+  reasonText,
   remainingViolations,
   resendTitle,
   sendErrorHint,
@@ -577,7 +577,7 @@ function Bubble({
       <div className="flex justify-center py-1">
         <span className="inline-flex max-w-[80%] items-center gap-1.5 rounded-full border border-amber-200 bg-warning-soft px-3 py-1 text-xs text-amber-900">
           <Hand size={12} className="shrink-0" />
-          {msg.reasonCode ? REASON_TEXT[msg.reasonCode] : 'Hội thoại đổi trạng thái'} · {time}
+          {msg.reasonCode ? reasonText(msg.reasonCode, channel) : 'Hội thoại đổi trạng thái'} · {time}
         </span>
       </div>
     )
