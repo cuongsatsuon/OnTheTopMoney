@@ -126,6 +126,16 @@ export const POST_TARGET_STATUSES = [
 export const PostTargetStatus = z.enum(POST_TARGET_STATUSES)
 export type PostTargetStatus = z.infer<typeof PostTargetStatus>
 
+// AD-13: bài thủ công (Soạn bài, 1 post : n target) hoặc slot chiến dịch (1 post : 1 target, Epic 7).
+export const POST_SOURCES = ['manual', 'campaign'] as const
+export const PostSource = z.enum(POST_SOURCES)
+export type PostSource = z.infer<typeof PostSource>
+
+// AD-14: ảnh bài do chủ shop tải lên (Story 6.1) hoặc AI sinh (Story 6.3).
+export const MEDIA_ASSET_SOURCES = ['upload', 'ai'] as const
+export const MediaAssetSource = z.enum(MEDIA_ASSET_SOURCES)
+export type MediaAssetSource = z.infer<typeof MediaAssetSource>
+
 // Khởi điểm; story Lịch/Chiến dịch có thể bổ sung.
 export const CANCEL_REASONS = [
   'USER_DELETED',

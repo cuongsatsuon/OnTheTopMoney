@@ -26,11 +26,13 @@ import { registerHealthz, type HealthOptions } from './healthz.ts'
 import { registerInbox } from './inbox.ts'
 import { registerInboxSuggest } from './inbox-suggest.ts'
 import { registerKnowledgeItems } from './knowledge-items.ts'
+import { registerMediaAssets } from './media-assets.ts'
 import { registerNotifications } from './notifications.ts'
 import { registerOAuth } from './oauth.ts'
 import { registerOnboarding } from './onboarding.ts'
 import { registerOpenAiSettings } from './openai-settings.ts'
 import { registerPages } from './pages.ts'
+import { registerPosts } from './posts.ts'
 import { registerSearch } from './search.ts'
 import { registerStream } from './stream.ts'
 import { registerWebhooks, type WebhooksDeps } from './webhooks.ts'
@@ -77,8 +79,8 @@ export interface AppDeps {
    */
   connections?: Omit<ConnectionsDeps, 'db' | 'events' | 'log'>
   /**
-   * Kho ảnh/file Cloudinary (AD-14) cho logo hồ sơ thương hiệu (Story 3.1), đính kèm của khách (Story 4.3) và file
-   * kho kiến thức (Story 5.2). Không truyền → kho "chưa cấu hình": lưu logo / tải file trả `MEDIA_NOT_CONFIGURED`,
+   * Kho ảnh/file Cloudinary (AD-14) cho logo hồ sơ thương hiệu (Story 3.1), đính kèm của khách (Story 4.3), file
+   * kho kiến thức (Story 5.2) và ảnh bài (Story 6.1). Không truyền → kho "chưa cấu hình": lưu logo / tải file trả `MEDIA_NOT_CONFIGURED`,
    * phần chữ của hồ sơ vẫn lưu được.
    */
   media?: MediaStores
@@ -149,6 +151,9 @@ export function buildApp({ sql, db, logger, http = {}, loginLimiter, health, eve
   registerAutoreplyConfigs(app, { db })
   // Kho kiến thức (Story 5.2): FAQ + file lưu kho riêng tư; tải file cần `jobs` (enqueue `profiles.knowledge.extract`).
   registerKnowledgeItems(app, { db, media: mediaStores, jobs })
+  // Soạn bài (Story 6.1): ảnh bài lên kho công khai + nháp nhiều trang (một cửa tạo `content.createPost`).
+  registerMediaAssets(app, { db, media: mediaStores })
+  registerPosts(app, { db })
   // Hộp thư (Story 4.3): hội thoại, tin, đính kèm (đọc từ kho riêng tư); Story 4.7: gửi tin (cần `events` + `jobs`).
   registerInbox(app, { db, media: mediaStores, events, jobs })
   // Khách hàng (Story 4.9): danh sách, hồ sơ, lịch sử, gộp (cần `events`), tóm tắt AI (cần `events` + `jobs`).

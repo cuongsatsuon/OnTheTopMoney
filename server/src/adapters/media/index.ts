@@ -63,10 +63,15 @@ export interface PutImageRequest {
   /** Cloudinary đổi sang JPEG khi upload (Instagram chỉ nhận JPEG). */
   asJpeg?: boolean
   /**
-   * Loại metadata/ICC profile của ảnh gốc được lưu (incoming transformation `fl_strip_profile`) — tường minh, không
-   * dựa vào mặc định. Cloudinary còn tự loại metadata trên ảnh phái sinh; cờ này đảm bảo cả bản gốc đã lưu cũng sạch.
+   * Loại metadata/ICC profile của ảnh gốc được lưu (incoming transformation `a_exif` + `fl_force_strip.strip_profile`,
+   * xoay theo EXIF trước khi bỏ) — tường minh, không dựa vào mặc định. Cloudinary còn tự loại metadata trên ảnh phái sinh; cờ này đảm bảo cả bản gốc đã lưu cũng sạch.
    */
   stripMetadata?: boolean
+  /**
+   * Đổi không gian màu sang sRGB khi lưu (incoming transformation `cs_srgb`) — ảnh bài đăng (Story 6.1): ảnh điện
+   * thoại hay ở Display P3, bỏ ICC profile mà không đổi màu thì màu lệch trên Instagram.
+   */
+  toSrgb?: boolean
 }
 
 export interface StoredImage {
@@ -164,6 +169,23 @@ export function classifyStatus(status: number): MediaErrorKind {
   if (status === 404) return 'NOT_FOUND'
   if (status === 400 || status === 413 || status === 422) return 'INVALID_REQUEST'
   return 'TRANSIENT'
+}
+
+/**
+ * Incoming transformation của ảnh công khai (một thành phần, nối bằng dấu phẩy):
+ * - `a_exif`: xoay ảnh theo EXIF `Orientation` TRƯỚC khi bỏ metadata — ảnh dọc chụp điện thoại không bị nằm ngang
+ *   khi Meta tải bản gốc đã mất EXIF;
+ * - `cs_srgb`: đổi màu sang sRGB;
+ * - `fl_force_strip.strip_profile`: `strip_profile` chỉ bỏ ICC profile; EXIF/IPTC/XMP (cả toạ độ GPS) chỉ bị xoá ở
+ *   incoming transformation khi có `force_strip`.
+ */
+export function incomingTransformation(request: Pick<PutImageRequest, 'toSrgb' | 'stripMetadata'>): string | undefined {
+  const parts = [
+    request.stripMetadata ? 'a_exif' : null,
+    request.toSrgb ? 'cs_srgb' : null,
+    request.stripMetadata ? 'fl_force_strip.strip_profile' : null,
+  ].filter((p) => p !== null)
+  return parts.length ? parts.join(',') : undefined
 }
 
 const NOT_CONFIGURED: MediaFailure = { ok: false, kind: 'MEDIA_NOT_CONFIGURED' }
@@ -267,7 +289,7 @@ export function createMediaStores(config: MediaConfig, options: MediaStoresOptio
       const publicId = newPublicId('public')
       const result = await upload(
         'image',
-        { public_id: publicId, format: request.asJpeg ? 'jpg' : undefined, transformation: request.stripMetadata ? 'fl_strip_profile' : undefined },
+        { public_id: publicId, format: request.asJpeg ? 'jpg' : undefined, transformation: incomingTransformation(request) },
         request.data,
         request.mime,
       )

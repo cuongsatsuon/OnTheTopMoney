@@ -85,8 +85,8 @@ development_status:
   epic-5-retrospective: optional
 
   epic-6: in-progress
-  6-1-soạn-bài-nháp-cho-nhiều-trang: in-progress
-  6-2-viết-caption-bằng-ai-theo-hồ-sơ-từng-trang: backlog
+  6-1-soạn-bài-nháp-cho-nhiều-trang: review
+  6-2-viết-caption-bằng-ai-theo-hồ-sơ-từng-trang: in-progress
   6-3-sinh-ảnh-ai: backlog
   6-4-lên-lịch-và-đăng-bài-theo-từng-trang: backlog
   6-5-lịch-nội-dung-với-kéo-thả: backlog

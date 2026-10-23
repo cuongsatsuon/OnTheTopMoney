@@ -5,7 +5,7 @@ import { pino } from 'pino'
 import { Writable } from 'node:stream'
 import { describe, expect, it } from 'vitest'
 import { createFakeCloudinary, FAKE_JPEG, FAKE_PNG, FAKE_WEBP, FAKE_DELIVERY_BASE_URL } from '../src/adapters/media/fake.ts'
-import { classifyStatus, createMediaStores, MEDIA_MAX_BYTES, signParams, type MediaConfig } from '../src/adapters/media/index.ts'
+import { classifyStatus, createMediaStores, incomingTransformation, MEDIA_MAX_BYTES, signParams, type MediaConfig } from '../src/adapters/media/index.ts'
 import { ConfigError, parseEnv, parseMediaEnv } from '../src/platform/config/index.ts'
 import { createLogger } from '../src/platform/log/index.ts'
 import { runMediaCheck } from '../scripts/lib/media-check.ts'
@@ -95,6 +95,12 @@ describe('adapters/media — MediaStore (công khai)', () => {
     expect(result).toEqual({ ok: false, kind: 'INVALID_REQUEST', status: 200 })
     expect(fake.requests.map((r) => r.url.split('/').pop())).toEqual(['upload', 'destroy'])
     expect(fake.assets.size).toBe(0)
+  })
+
+  it('incoming transformation: xoay theo EXIF trước khi bỏ EXIF/IPTC/XMP + ICC (logo, ảnh bài); không cờ → không gửi', () => {
+    expect(incomingTransformation({ stripMetadata: true })).toBe('a_exif,fl_force_strip.strip_profile')
+    expect(incomingTransformation({ stripMetadata: true, toSrgb: true })).toBe('a_exif,cs_srgb,fl_force_strip.strip_profile')
+    expect(incomingTransformation({})).toBeUndefined()
   })
 
   it('mỗi lần upload một public_id mới', async () => {

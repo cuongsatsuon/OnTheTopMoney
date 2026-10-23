@@ -37,6 +37,8 @@ export const ERROR_CODES = [
   'SEND_FAILED',
   'SEND_UNKNOWN',
   // Đăng bài (AD-13)
+  /** Bài của một trang không có chữ lẫn ảnh (Story 6.1). */
+  'POST_EMPTY',
   'MEDIA_REQUIRED',
   'CAPTION_TOO_LONG',
   'TOO_MANY_HASHTAGS',

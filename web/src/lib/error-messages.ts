@@ -34,6 +34,7 @@ export const ERROR_MESSAGES: Record<ErrorCode, string> = {
   SEND_FAILED: 'Gửi chưa được. Thử gửi lại.',
   SEND_UNKNOWN: 'Chưa rõ tin đã gửi hay chưa. Kiểm tra hội thoại trước khi gửi lại.',
   // Đăng bài
+  POST_EMPTY: 'Bài chưa có nội dung. Thêm chữ hoặc ảnh.',
   MEDIA_REQUIRED: 'Thêm ít nhất một ảnh hoặc video cho nền tảng này.',
   CAPTION_TOO_LONG: 'Nội dung quá dài cho nền tảng này. Rút gọn bớt.',
   TOO_MANY_HASHTAGS: 'Quá nhiều hashtag. Bớt hashtag rồi thử lại.',

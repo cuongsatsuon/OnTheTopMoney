@@ -60,8 +60,9 @@ export async function runMediaCheck(deps: MediaCheckDeps): Promise<boolean> {
   }
 
   try {
-    // 1. Ảnh công khai (PNG → JPEG như ảnh cho Instagram) → URL công khai tải được.
-    const pub = await stores.publicStore.put({ data: SAMPLE_PNG, mime: 'image/png', asJpeg: true })
+    // 1. Ảnh công khai, cùng tuỳ chọn với ảnh bài (Story 6.1: JPEG sRGB, bỏ metadata — Cloudinary thật phải nhận
+    //    transformation `a_exif,cs_srgb,fl_force_strip.strip_profile`) → URL công khai tải được.
+    const pub = await stores.publicStore.put({ data: SAMPLE_PNG, mime: 'image/png', asJpeg: true, stripMetadata: true, toSrgb: true })
     if (!pub.ok) {
       fail('upload ảnh công khai', pub)
       return false

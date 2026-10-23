@@ -151,3 +151,13 @@
 - source_spec: `spec-5-7-man-chao-4-buoc.md`
   summary: `GET /api/v1/onboarding` giải hồ sơ / cấu hình AI hiệu lực tuần tự từng trang (N+1): shop nhiều trang mà chưa trang nào có hồ sơ / AI bật → hàng trăm truy vấn mỗi lần gọi, Màn chào gọi lại ở mọi `message.*`.
   evidence: `server/src/app/read-models/onboarding.ts` `someAsync` gọi `profiles.resolveEffectiveOrNull` (~3–4 truy vấn/trang × 2 loại) tới trang đầu tiên thoả. Chỉ Màn chào dùng nên chấp nhận lúc này; nếu chậm, thêm hàm giải theo lô trong `profiles` (vẫn một chỗ giải kế thừa — AD-8) hoặc dùng chung với `autoreplyOverview` (cùng mẫu N+1).
+- source_spec: `spec-6-1-soan-bai-nhap.md`
+  summary: Kiểm bằng trình duyệt + Cloudinary thật màn Soạn bài:
+    - chọn nhóm/trang theo Phạm vi, tab từng trang, bộ đếm và dòng lỗi luật nền tảng;
+    - tải ảnh, gắn ảnh theo tab / cho mọi trang;
+    - "Lưu nháp" rồi mở lại `/soan-bai?bai=<id>`;
+    - chạy `npm run media:check` để xác nhận Cloudinary nhận `a_exif,cs_srgb,fl_force_strip.strip_profile` và ảnh ra JPEG sRGB; tải một ảnh điện thoại dọc có EXIF `Orientation` ≠ 1 + GPS, kiểm bản gốc đứng đúng chiều và không còn EXIF.
+  evidence: Chỉ có test API (Postgres thật, Cloudinary giả không đọc `transformation`) và test helper web (`web/src/lib/composer.test.ts`). Chưa chạy UI với phiên chủ shop, và chưa gửi incoming transformation `cs_srgb` [ASSUMPTION] lên Cloudinary thật.
+- source_spec: `spec-6-1-soan-bai-nhap.md`
+  summary: Story 6.2 kiểm caption AI cho Threads phải đếm bằng `captionLength(caption, 'threads')` (emoji theo byte UTF-8 như Meta), không chỉ `checkOutput({maxChars})` (đếm code point) — không thì caption AI nhiều emoji qua kiểm nhưng bị Threads từ chối khi đăng.
+  evidence: Review gọn 6.1 sửa `captionLength`/`publishIssues` theo tài liệu Meta "Threads Posts" (Limitations: "Emojis are counted as the number of UTF-8 bytes"); `ai/check-output.ts` vẫn đếm `[...text].length`.
