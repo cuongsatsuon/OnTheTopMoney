@@ -8,6 +8,7 @@
 // Story 4.7: `canSend` (cửa sổ gửi), gửi / gửi lại từ Hộp thư, job `inbox.send`, cron dọn tin kẹt `sending`.
 // Story 4.5: tin của chính trang (echo) — khớp tin app đã gửi / `app_unmatched` / `external_human`, job
 // `inbox.echo_match`; "đã nhận / đã xem" của tin outbound.
+// Story 4.8: Gợi ý bằng AI — bản nháp trả lời theo hồ sơ hiệu lực (bên gọi truyền vào) + tin gần nhất, qua `ai`.
 export const MODULE = 'inbox'
 
 export {
@@ -75,6 +76,17 @@ export {
   type SendInput,
   type SendResult,
 } from './send.ts'
+export {
+  SUGGEST_CONTEXT_MESSAGES,
+  SUGGEST_TEXT_MAX,
+  replyTurns,
+  suggestKind,
+  suggestReply,
+  type SuggestBrand,
+  type SuggestDeps,
+  type SuggestInput,
+  type SuggestResult,
+} from './suggest.ts'
 export {
   applyHumanReply,
   applyTriageDecision,

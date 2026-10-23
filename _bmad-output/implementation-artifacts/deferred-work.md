@@ -97,3 +97,9 @@
 - source_spec: `spec-4-5-nhan-dien-echo.md`
   summary: Phản hồi tự động của Meta (Instant Reply, tin vắng mặt, câu hỏi thường gặp cấu hình trong Business Suite) bị coi là chủ shop trả lời ngoài app → hội thoại sang `human` và tắt AI.
   evidence: `echoAuthor` (server/src/modules/inbox/echo.ts) xếp mọi echo có `app_id` khác app mình vào `other_app` → `external_human` + `applyHumanReply` ngay; tin tự động của Meta có `app_id` của app Meta, payload không có cờ "tự động". Cần sự kiện thật để tìm dấu hiệu (app_id riêng, `metadata`, thời điểm ngay sau tin đầu của khách…) và quyết định sản phẩm (bỏ qua / chèn không đổi trạng thái) trước khi AI trả lời thật ở Epic 5.
+- source_spec: `spec-4-8-goi-y-bang-ai.md`
+  summary: Hậu kiểm độ dài bản nháp AI theo giới hạn nền tảng (Threads 500, tin nhắn Instagram 1000) thay vì chỉ theo `kind` (`reply` 2000 / `comment` 1000).
+  evidence: `ai.checkOutput` nhận `{brand, kind}`; gợi ý chỉ nêu giới hạn nền tảng trong prompt, còn ô soạn đếm ký tự và chặn nút Gửi khi quá `sendTextLimit`. Epic 5 (AI tự gửi) cần vi phạm `too_long` đúng nền tảng để sinh lại / handoff — thêm `maxChars` (hoặc kind theo nền tảng) cho `checkOutput`.
+- source_spec: `spec-4-8-goi-y-bang-ai.md`
+  summary: Kiểm bằng trình duyệt nút "Gợi ý bằng AI" (Dừng, Hoàn tác, tooltip khoá theo nguồn) và "Viết thử bằng AI" sau khi đổi cách bắt huỷ request.
+  evidence: Chỉ có test HTTP thật (fetch + AbortController) và test helper web; chưa chạy UI với phiên chủ shop + trang đã kết nối + khoá OpenAI.

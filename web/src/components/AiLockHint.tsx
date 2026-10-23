@@ -3,6 +3,7 @@
 // Nút bị `disabled` không nhận focus/click, nên khi khoá: vỏ bọc nhận focus (role="group", tên = câu gợi ý),
 // một lớp phủ trong suốt nhận click/chạm để bật/tắt gợi ý. Esc ẩn gợi ý (chỉ chặn Esc khi gợi ý đang hiện,
 // để Esc vẫn đóng Modal/Drawer bao ngoài). Đang tải trạng thái → nút mờ, không hiện gợi ý (tránh nháy).
+// Story 4.8: nơi gọi có thể truyền câu + liên kết riêng (hết hạn mức, trang chưa có hồ sơ) thay cho câu theo khoá OpenAI.
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { useApp } from '../lib/app-context'
@@ -17,6 +18,8 @@ export function AiLockHint({
   className,
   align = 'center',
   placement = 'top',
+  hint: hintOverride,
+  link,
 }: {
   /** true → bọc nút và hiện gợi ý; false → trả nguyên `children`. */
   locked: boolean
@@ -25,9 +28,13 @@ export function AiLockHint({
   className?: string
   align?: 'start' | 'center' | 'end'
   placement?: 'top' | 'bottom'
+  /** Câu gợi ý riêng; bỏ trống → câu theo trạng thái khoá OpenAI. */
+  hint?: string | null
+  /** Liên kết kèm câu gợi ý; bỏ trống → "Mở Cài đặt". */
+  link?: { to: string; label: string } | null
 }) {
   const { aiLock } = useApp()
-  const hint = aiLock.hint
+  const hint = hintOverride !== undefined ? hintOverride : aiLock.hint
   const id = useId()
   const wrapper = useRef<HTMLSpanElement>(null)
   // Hover/focus hiện bằng CSS (`group-hover`, `group-focus-within`); chạm/click ghim gợi ý (`pinned`).
@@ -106,8 +113,8 @@ export function AiLockHint({
       >
         <span className="flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-xs font-normal whitespace-nowrap text-white shadow-lg">
           {hint}
-          <Link to={SETTINGS_PATH} className="rounded-sm font-semibold text-violet-200 underline underline-offset-2 hover:text-white focus-visible:ring-2 focus-visible:ring-white focus-visible:outline-none">
-            {AI_LOCK_LINK}
+          <Link to={link?.to ?? SETTINGS_PATH} className="rounded-sm font-semibold text-violet-200 underline underline-offset-2 hover:text-white focus-visible:ring-2 focus-visible:ring-white focus-visible:outline-none">
+            {link?.label ?? AI_LOCK_LINK}
           </Link>
         </span>
       </span>

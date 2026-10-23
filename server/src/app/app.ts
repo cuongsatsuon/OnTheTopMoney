@@ -21,6 +21,7 @@ import { registerCors } from './cors.ts'
 import { registerGroups } from './groups.ts'
 import { registerHealthz, type HealthOptions } from './healthz.ts'
 import { registerInbox } from './inbox.ts'
+import { registerInboxSuggest } from './inbox-suggest.ts'
 import { registerNotifications } from './notifications.ts'
 import { registerOAuth } from './oauth.ts'
 import { registerOpenAiSettings } from './openai-settings.ts'
@@ -138,15 +139,18 @@ export function buildApp({ sql, db, logger, http = {}, loginLimiter, health, eve
   registerBrandProfiles(app, { db, media: mediaStores })
   // Hộp thư (Story 4.3): hội thoại, tin, đính kèm (đọc từ kho riêng tư); Story 4.7: gửi tin (cần `events` + `jobs`).
   registerInbox(app, { db, media: mediaStores, events, jobs })
-  // Viết thử bằng AI (Story 3.4): cần `events` (reserve/settle hạn mức của AI gateway, AD-7).
+  // Viết thử bằng AI (Story 3.4) + Gợi ý bằng AI ở Hộp thư (Story 4.8): cần `events` (reserve/settle hạn mức của AI
+  // gateway, AD-7).
   if (events) {
-    registerBrandSample(app, {
+    const aiDeps = {
       db,
       events,
       cipher: ai?.cipher ?? null,
       ...(ai?.openai ? { openai: ai.openai } : {}),
       log: logger.child({ component: 'ai' }),
-    })
+    }
+    registerBrandSample(app, aiDeps)
+    registerInboxSuggest(app, aiDeps)
   }
   if (events && connections) {
     const deps: ConnectionsDeps = { ...connections, db, events, log: logger.child({ component: 'connections' }) }

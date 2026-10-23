@@ -7,14 +7,9 @@
 import { BrandSampleRequest, type BrandSampleResponse, type ParsedBrandSample } from '@ottm/shared'
 import type { FastifyInstance } from 'fastify'
 import { buildCaptionPrompt, checkOutput, generateText, type AiDeps, type CheckBrand } from '../modules/ai/index.ts'
-import { AppError } from '../platform/errors/index.ts'
+import { runAbortable } from './ai-request.ts'
 
 export type BrandSampleDeps = Pick<AiDeps, 'db' | 'events' | 'cipher' | 'openai' | 'log'>
-
-/** Lỗi huỷ (client đóng kết nối / nút Dừng) — không phải lỗi server, không trả JSON. */
-export function isAbort(err: unknown): boolean {
-  return err instanceof Error && err.name === 'AbortError'
-}
 
 /**
  * Lõi "Viết thử": sinh caption theo hồ sơ nháp (AD-7, `feature=brand_sample`), hậu kiểm AD-21, vi phạm → sinh lại
@@ -44,30 +39,7 @@ export async function runBrandSample(deps: BrandSampleDeps, brand: ParsedBrandSa
 export function registerBrandSample(app: FastifyInstance, deps: BrandSampleDeps): void {
   app.post('/api/v1/brand-profiles/sample', async (req, reply): Promise<BrandSampleResponse | undefined> => {
     const brand = BrandSampleRequest.parse(req.body ?? {})
-
-    // Nút "Dừng" = client huỷ request → đóng kết nối. Theo dõi `req.raw` 'close' để truyền abort sang OpenAI (AD-7).
-    // `clientClosed` phân biệt "client thật sự đóng" với một AbortError đến từ gateway khi client còn kết nối.
-    const controller = new AbortController()
-    let clientClosed = false
-    const onClose = () => {
-      clientClosed = true
-      controller.abort()
-    }
-    req.raw.on('close', onClose)
-
-    try {
-      return await runBrandSample(deps, brand, controller.signal)
-    } catch (err) {
-      // Client đã đi (Dừng / đóng tab): không còn ai nhận JSON → nhường Fastify, không coi là lỗi 500.
-      if (clientClosed) {
-        reply.hijack()
-        return undefined
-      }
-      // AbortError nhưng client CÒN kết nối (abort từ gateway/provider, không do nút Dừng) → trả lỗi, đừng treo client.
-      if (isAbort(err)) throw new AppError('AI_PROVIDER_ERROR', 502, { message: 'AI bị gián đoạn, thử lại.' })
-      throw err // lỗi gateway khác: giữ nguyên mã (AI_BUDGET_EXCEEDED / OPENAI_KEY_* / …) cho error handler.
-    } finally {
-      req.raw.off('close', onClose)
-    }
+    // Nút "Dừng" = client huỷ request → đóng kết nối → AbortSignal sang OpenAI (AD-7); dùng chung với Gợi ý bằng AI.
+    return runAbortable(reply, (signal) => runBrandSample(deps, brand, signal))
   })
 }

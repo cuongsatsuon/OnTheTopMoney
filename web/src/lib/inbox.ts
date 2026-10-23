@@ -6,16 +6,20 @@
 // xong (`useConversationAction`), thao tác hiện theo trạng thái và ghi chú "AI chuyển cho bạn" (UX-DR5).
 // Story 4.7: gửi / gửi lại tin (`useSendMessage`, `useResendMessage`), cách gửi theo kênh, nhãn trạng thái gửi, câu lỗi
 // theo mã gửi tin (bong bóng "Gửi tin lỗi"). Server từ chối gửi (409 mã gửi tin) → tin đã lưu `failed`: chỉ làm cũ tin.
+// Story 4.8: Gợi ý bằng AI (`useSuggestReply`, huỷ bằng `signal`), khoá nút theo nguồn (khoá OpenAI, hạn mức, hồ sơ, mã
+// lỗi server — `suggestLock`), cụm vi phạm còn trong chữ (`remainingViolations`).
 import {
   ListConversationsResponse,
   ConversationCountResponse,
   ConversationDto,
   ListMessagesResponse,
   MessageDto,
+  SuggestReplyResponse,
   formatScope,
   isSendErrorCode,
   sendModesFor,
   sendTextLimit,
+  type AiViolation,
   type AttachmentError,
   type ConversationAction,
   type ConversationChannel,
@@ -34,6 +38,8 @@ import {
 } from '@ottm/shared'
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiFetch, apiUrl, isApiError } from './api'
+import { errorMessageOf } from './error-messages'
+import { AI_LOCK_HINTS, type AiLock } from './openai'
 
 export const CONVERSATIONS_KEY = ['conversations'] as const
 export const conversationsListKey = (scope: string | null, tab: InboxTab) => ['conversations', 'list', scope, tab] as const
@@ -171,7 +177,81 @@ export function useResendMessage() {
   })
 }
 
+/**
+ * "Gợi ý bằng AI" (Story 4.8): `POST /conversations/:id/suggest {mode}` → bản nháp (KHÔNG gửi). `signal` để nút "Dừng"
+ * huỷ request thật (server truyền AbortSignal sang OpenAI). Không cache: mỗi lần bấm là một bản nháp mới.
+ */
+export function useSuggestReply() {
+  return useMutation({
+    mutationFn: ({ conversationId, mode, signal }: { conversationId: string; mode: MessageDelivery; signal?: AbortSignal }) =>
+      apiFetch(`/conversations/${conversationId}/suggest`, { method: 'POST', body: { mode }, schema: SuggestReplyResponse, ...(signal ? { signal } : {}) }),
+  })
+}
+
 /* ---------- Helper thuần ---------- */
+
+/** Mã lỗi server làm khoá nút "Gợi ý bằng AI" (UX-DR2, AD-8): thiếu/khoá hỏng, hết hạn mức, trang chưa có hồ sơ. */
+export const SUGGEST_LOCK_CODES = ['OPENAI_KEY_MISSING', 'OPENAI_KEY_INVALID', 'AI_BUDGET_EXCEEDED', 'CONFIG_MISSING'] as const
+export type SuggestLockCode = (typeof SUGGEST_LOCK_CODES)[number]
+
+/** Mã khoá trong lỗi API (`null` = lỗi khác: toast, nút vẫn bấm lại được). */
+export function suggestLockCodeOf(err: unknown): SuggestLockCode | null {
+  return isApiError(err) && (SUGGEST_LOCK_CODES as readonly string[]).includes(err.code) ? (err.code as SuggestLockCode) : null
+}
+
+/** Câu toast khi gợi ý lỗi: trang chưa có hồ sơ → nói rõ (câu chung của `CONFIG_MISSING` quá mơ hồ ở đây). */
+export function suggestErrorMessage(err: unknown): string {
+  return suggestLockCodeOf(err) === 'CONFIG_MISSING' ? 'Trang chưa có hồ sơ thương hiệu. Tạo hồ sơ để AI viết đúng giọng shop.' : errorMessageOf(err)
+}
+
+export const SUGGEST_HINTS = {
+  budget: 'Đã dùng hết hạn mức AI tháng này',
+  config: 'Trang chưa có hồ sơ thương hiệu',
+} as const
+
+export interface SuggestLock {
+  locked: boolean
+  /** Câu tooltip; `null` = không hiện (đang tải trạng thái khoá). */
+  hint: string | null
+  /** Liên kết kèm tooltip; `null` = mặc định (Cài đặt). */
+  link: { to: string; label: string } | null
+}
+
+/**
+ * Khoá nút "Gợi ý bằng AI" theo thứ tự: khoá OpenAI (trạng thái server, AiLock) → hạn mức `blocked` → trang chưa có
+ * hồ sơ hiệu lực → mã lỗi lần gọi trước. Ô soạn và nút Gửi không bị ảnh hưởng.
+ */
+export function suggestLock(input: { key: AiLock; budgetBlocked: boolean; configMissing: boolean; serverCode: SuggestLockCode | null; pageId: string }): SuggestLock {
+  const configLink = { to: `/trang-nhom/trang/${input.pageId}`, label: 'Tạo hồ sơ' }
+  if (input.key.locked) return { locked: true, hint: input.key.hint, link: null }
+  if (input.budgetBlocked) return { locked: true, hint: SUGGEST_HINTS.budget, link: null }
+  if (input.configMissing) return { locked: true, hint: SUGGEST_HINTS.config, link: configLink }
+  switch (input.serverCode) {
+    case 'OPENAI_KEY_MISSING':
+      return { locked: true, hint: AI_LOCK_HINTS.missing, link: null }
+    case 'OPENAI_KEY_INVALID':
+      return { locked: true, hint: AI_LOCK_HINTS.invalid, link: null }
+    case 'AI_BUDGET_EXCEEDED':
+      return { locked: true, hint: SUGGEST_HINTS.budget, link: null }
+    case 'CONFIG_MISSING':
+      return { locked: true, hint: SUGGEST_HINTS.config, link: configLink }
+    case null:
+      return { locked: false, hint: null, link: null }
+  }
+}
+
+/**
+ * Cụm vi phạm của bản nháp còn nằm trong chữ đang soạn (chủ shop sửa dần): từ cấm / URL lạ còn xuất hiện (không phân
+ * biệt hoa thường), `too_long` ("N/Max") còn khi chữ vẫn dài hơn Max.
+ */
+export function remainingViolations(text: string, violations: readonly AiViolation[]): AiViolation[] {
+  const lower = text.toLowerCase()
+  return violations.filter((v) => {
+    if (v.kind !== 'too_long') return v.text !== '' && lower.includes(v.text.toLowerCase())
+    const max = Number(v.text.split('/')[1])
+    return Number.isFinite(max) && [...text.trim()].length > max
+  })
+}
 
 /** Nhãn nút chọn cách gửi ở ô soạn. */
 export const SEND_MODE_LABEL: Record<MessageDelivery, string> = {

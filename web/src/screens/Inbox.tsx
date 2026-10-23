@@ -6,10 +6,13 @@
 // Đánh dấu xong; ghi chú "AI chuyển cho bạn" nêu lý do + thời gian khách chờ (UX-DR5).
 // Story 4.7: ô soạn gửi tin thật (`⌘↵`; bình luận FB/IG chọn "Trả lời công khai" / "Nhắn riêng", Threads chỉ trả lời
 // công khai), bong bóng hiện "Đang gửi…" / lỗi (icon đỏ + lý do theo mã + gợi ý) + "Gửi lại" — tin lỗi không mất.
-// Thao tác của story sau (Gợi ý bằng AI — 4.8; sửa panel khách — 4.9) hiện nhưng khoá, có gợi ý "Sắp có": không giả
+// Story 4.8: "Gợi ý bằng AI" trong ô soạn — "AI đang viết…" + Dừng (huỷ request thật), bản nháp điền vào ô soạn (không
+// gửi, có "Hoàn tác"), cụm vi phạm hậu kiểm được đánh dấu; nút khoá theo khoá OpenAI / hạn mức / hồ sơ / mã lỗi, ô soạn
+// vẫn gõ tay và gửi được. Thao tác của story sau (sửa panel khách — 4.9) hiện nhưng khoá, có gợi ý "Sắp có": không giả
 // lập thao tác trên khách thật.
 import {
   INBOX_TABS,
+  type AiViolation,
   type AttachmentDto,
   type ConversationAction,
   type ConversationChannel,
@@ -19,12 +22,14 @@ import {
   type MessageDto,
   type Platform,
 } from '@ottm/shared'
-import { CheckCheck, CircleAlert, FileText, Hand, Lock, MessageSquareText, Newspaper, Paperclip, RotateCw, Search, SendHorizontal, Sparkles, TriangleAlert, UserRound } from 'lucide-react'
+import { CheckCheck, CircleAlert, FileText, Hand, Lock, MessageSquareText, Newspaper, Paperclip, RotateCw, Search, SendHorizontal, Sparkles, Square, TriangleAlert, Undo2, UserRound } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
+import { AiLockHint } from '../components/AiLockHint'
 import { Skeleton } from '../components/Skeleton'
 import { Avatar, Button, Chip, Drawer, EmptyState, PageAvatar, PlatformIcon, Switch, Tabs, cn } from '../components/ui'
 import { pages as pageStore, type Page } from '../data/mock'
+import { useAiBudget } from '../lib/ai-budget'
 import { useApp } from '../lib/app-context'
 import { errorMessageOf } from '../lib/error-messages'
 import {
@@ -56,8 +61,12 @@ import {
   outboundStatusLabel,
   postLine,
   previewText,
+  remainingViolations,
   sendErrorHint,
   senderLabel,
+  suggestErrorMessage,
+  suggestLock,
+  suggestLockCodeOf,
   useConversation,
   useConversationAction,
   useConversations,
@@ -65,7 +74,10 @@ import {
   useNeedsHumanCount,
   useResendMessage,
   useSendMessage,
+  useSuggestReply,
+  type SuggestLockCode,
 } from '../lib/inbox'
+import { markViolations, useEffectiveBrandProfile } from '../lib/profiles'
 import { WEBHOOK_PRODUCT_LABEL, WEBHOOK_SETTINGS_PATH, stalledProducts, useWebhookHealth } from '../lib/webhooks'
 
 const STAGE_LABEL: Record<ConversationDto['contact']['stage'], string> = {
@@ -686,11 +698,13 @@ function Attachment({ att }: { att: AttachmentDto }) {
 
 /**
  * Ô soạn tin (Story 4.7): DM gửi tin thường; bình luận FB/IG chọn "Trả lời công khai" / "Nhắn riêng"; Threads chỉ trả
- * lời công khai. `⌘↵`/`Ctrl+↵` gửi. Server từ chối (quá 24 giờ, đã nhắn riêng…) → tin hiện thành bong bóng lỗi, ô soạn
+ * lời công khai. `⌘↵`/`Ctrl+↵` gửi. Server từ chối gửi (quá 24 giờ, đã nhắn riêng…) → tin hiện thành bong bóng lỗi, ô soạn
  * xoá chữ như gửi thường; lỗi khác (mạng, phiên…) → toast, giữ chữ để gửi lại.
+ * Story 4.8: "Gợi ý bằng AI" theo cách trả lời đang chọn — bản nháp thay chữ trong ô (giữ chữ cũ để "Hoàn tác"), không
+ * gửi; cụm vi phạm còn trong chữ được đánh dấu bên dưới.
  */
 function Composer({ conv, platform }: { conv: ConversationDto; platform: Platform | undefined }) {
-  const { notify } = useApp()
+  const { notify, aiLock, openAiKeyStatus } = useApp()
   const modes = composerModes(platform, conv.channel)
   const [picked, setPicked] = useState<MessageDelivery>(modes[0]!)
   const mode = modes.includes(picked) ? picked : modes[0]!
@@ -701,15 +715,74 @@ function Composer({ conv, platform }: { conv: ConversationDto; platform: Platfor
   const tooLong = trimmed.length > limit
   const canSubmit = trimmed !== '' && !tooLong && !send.isPending
 
+  // Gợi ý bằng AI (Story 4.8).
+  const suggestM = useSuggestReply()
+  const controller = useRef<AbortController | null>(null)
+  const [writing, setWriting] = useState(false)
+  // Bản nháp AI đang nằm trong ô soạn: chữ trước đó (để Hoàn tác) + cụm vi phạm server trả về.
+  const [draft, setDraft] = useState<{ before: string; violations: AiViolation[] } | null>(null)
+  const budgetState = useAiBudget().data?.state
+  const configMissing = useEffectiveBrandProfile(conv.pageId).data?.effective === null
+  // Mã khoá của lần gọi trước chỉ còn hiệu lực khi khoá OpenAI / hạn mức / hồ sơ chưa đổi (realtime làm cũ query) —
+  // đổi rồi thì để trạng thái mới quyết định.
+  const lockStamp = `${openAiKeyStatus}|${budgetState ?? ''}|${configMissing}`
+  const [serverLock, setServerLock] = useState<{ code: SuggestLockCode; stamp: string } | null>(null)
+  const serverCode = serverLock?.stamp === lockStamp ? serverLock.code : null
+  useEffect(() => () => controller.current?.abort(), [])
+  const lock = suggestLock({ key: aiLock, budgetBlocked: budgetState === 'blocked', configMissing, serverCode, pageId: conv.pageId })
+  const violations = draft ? remainingViolations(text, draft.violations) : []
+  const marks = violations.filter((v) => v.kind !== 'too_long')
+
+  const suggest = () => {
+    if (writing || lock.locked) return
+    const ctrl = new AbortController()
+    controller.current = ctrl
+    setWriting(true)
+    suggestM.mutate(
+      { conversationId: conv.id, mode, signal: ctrl.signal },
+      {
+        onSuccess: (res) => {
+          setDraft({ before: draft ? draft.before : text, violations: res.violations })
+          setText(res.draft)
+        },
+        onError: (err) => {
+          if (ctrl.signal.aborted) return // nút Dừng: giữ nguyên ô soạn
+          // Thiếu/khoá hỏng, hết hạn mức, chưa có hồ sơ → khoá nút (tooltip); lỗi khác → chỉ toast, bấm lại được.
+          const code = suggestLockCodeOf(err)
+          setServerLock(code ? { code, stamp: lockStamp } : null)
+          notify(suggestErrorMessage(err))
+        },
+        onSettled: () => {
+          if (controller.current === ctrl) controller.current = null
+          setWriting(false)
+        },
+      },
+    )
+  }
+  const stop = () => {
+    controller.current?.abort()
+    setWriting(false)
+  }
+  const undo = () => {
+    if (!draft) return
+    setText(draft.before)
+    setDraft(null)
+  }
+
   const submit = () => {
     if (!canSubmit) return
     send.mutate(
       { conversationId: conv.id, text: trimmed, mode },
       {
-        onSuccess: () => setText(''),
+        onSuccess: () => {
+          setText('')
+          setDraft(null)
+        },
         onError: (err) => {
-          if (isSendRefusal(err)) setText('')
-          else notify(errorMessageOf(err))
+          if (isSendRefusal(err)) {
+            setText('')
+            setDraft(null)
+          } else notify(errorMessageOf(err))
         },
       },
     )
@@ -733,7 +806,15 @@ function Composer({ conv, platform }: { conv: ConversationDto; platform: Platfor
           ))}
         </div>
       )}
-      <div className="rounded-md border border-border bg-background focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/15">
+      <div className={cn('rounded-md border bg-background focus-within:ring-2', draft ? 'border-ai/40 focus-within:border-ai focus-within:ring-ai/15' : 'border-border focus-within:border-primary focus-within:ring-primary/15')}>
+        {draft && (
+          <div className="flex items-center gap-2 border-b border-ai/20 bg-ai-soft/50 px-3 py-1 text-[11px] font-medium text-ai">
+            <Sparkles size={11} /> Bản nháp AI — sửa lại trước khi gửi
+            <button type="button" onClick={undo} className="ml-auto inline-flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-ai/10">
+              <Undo2 size={11} /> Hoàn tác
+            </button>
+          </div>
+        )}
         <textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
@@ -749,9 +830,21 @@ function Composer({ conv, platform }: { conv: ConversationDto; platform: Platfor
           className="block w-full resize-none bg-transparent px-3 py-2 text-sm focus:outline-none"
         />
         <div className="flex items-center gap-2 border-t border-border px-2 py-1.5">
-          <Button size="sm" variant="ghost" icon={<Sparkles size={14} />} disabled title="Sắp có" className="text-ai">
-            Gợi ý bằng AI
-          </Button>
+          {writing ? (
+            <span className="inline-flex items-center gap-2 px-1 text-[13px] font-medium text-ai" role="status">
+              <span className="size-2 animate-pulse rounded-full bg-ai" />
+              AI đang viết…
+              <button type="button" onClick={stop} className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs hover:bg-ai/10">
+                <Square size={11} /> Dừng
+              </button>
+            </span>
+          ) : (
+            <AiLockHint locked={lock.locked} hint={lock.hint} link={lock.link} align="start">
+              <Button size="sm" variant="ai" disabled={lock.locked} onClick={suggest}>
+                Gợi ý bằng AI
+              </Button>
+            </AiLockHint>
+          )}
           <span className={cn('ml-auto text-[11px]', tooLong ? 'font-medium text-danger' : 'text-muted-foreground')}>
             {trimmed.length > limit * 0.8 ? `${trimmed.length}/${limit}` : <><Kbd>⌘</Kbd> <Kbd>↵</Kbd> gửi</>}
           </span>
@@ -760,6 +853,28 @@ function Composer({ conv, platform }: { conv: ConversationDto; platform: Platfor
           </Button>
         </div>
       </div>
+      {violations.some((v) => v.kind === 'too_long') && (
+        <p className="mt-2 rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-800" role="alert">
+          Bản nháp quá dài — rút gọn bớt trước khi gửi.
+        </p>
+      )}
+      {marks.length > 0 && (
+        <div className="mt-2 rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-800" role="alert">
+          <p className="font-medium">AI vẫn dùng cụm cần tránh — sửa lại trước khi gửi:</p>
+          {/* Từ cấm (đỏ) và URL ngoài danh sách cho phép (cam); markViolations dùng chung với Viết thử (Story 3.4). */}
+          <p className="mt-1 leading-relaxed break-words whitespace-pre-wrap text-amber-900">
+            {markViolations(text, marks).map((seg, i) =>
+              seg.kind === null ? (
+                <span key={i}>{seg.text}</span>
+              ) : (
+                <mark key={i} className={cn('rounded px-0.5', seg.kind === 'banned_word' ? 'bg-red-200 text-red-900' : 'bg-orange-200 text-orange-900')}>
+                  {seg.text}
+                </mark>
+              ),
+            )}
+          </p>
+        </div>
+      )}
     </div>
   )
 }

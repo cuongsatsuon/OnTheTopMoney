@@ -12,14 +12,15 @@ export type CaptionBrand = Pick<
   'name' | 'slogan' | 'industry' | 'tones' | 'formality' | 'pronoun' | 'emoji' | 'products' | 'audience' | 'hashtags' | 'bannedWords' | 'allowedDomains'
 >
 
-const EMOJI_GUIDE: Record<CaptionBrand['emoji'], string> = {
+/** Hướng dẫn emoji theo hồ sơ — dùng chung với mẫu trả lời tin (Story 4.8). */
+export const EMOJI_GUIDE: Record<CaptionBrand['emoji'], string> = {
   none: 'Không dùng emoji.',
   some: 'Dùng emoji vừa phải, chỉ vài cái cho tự nhiên.',
   many: 'Dùng nhiều emoji sinh động.',
 }
 
 /** Mức trang trọng 0–100 → mô tả giọng (khớp nhãn FE: Trang trọng ↔ Rất gần gũi). */
-function formalityGuide(formality: number): string {
+export function formalityGuide(formality: number): string {
   if (formality >= 75) return 'rất gần gũi, thân mật như nói chuyện với bạn thân'
   if (formality >= 55) return 'gần gũi, thân thiện'
   if (formality >= 30) return 'cân bằng giữa thân thiện và chuyên nghiệp'

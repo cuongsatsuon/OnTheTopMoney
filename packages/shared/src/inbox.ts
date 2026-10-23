@@ -3,8 +3,9 @@
 // Story 4.3: DM (Messenger, Instagram Direct). Story 4.4: bình luận Facebook/Instagram và trả lời Threads (`channel=comment`,
 // bài được bình luận, tin bị sửa/xoá/ẩn, người trả lời khác trong cùng luồng). Story 4.6: tab lọc/đếm ở server, lệnh
 // Tiếp quản / bật lại AI / Đánh dấu xong. Story 4.7: gửi tin / gửi lại (mode theo kênh, giới hạn chữ theo nền tảng, mã lỗi
-// gửi tin của tin `failed`).
+// gửi tin của tin `failed`). Story 4.8: Gợi ý bằng AI (bản nháp + cụm vi phạm hậu kiểm).
 import { z } from 'zod'
+import { AiViolation } from './ai.ts'
 import {
   ContactStage,
   ConversationChannel,
@@ -270,3 +271,26 @@ export const SendMessageBody = z.object({
   mode: MessageDelivery.optional(),
 })
 export type SendMessageBody = z.input<typeof SendMessageBody>
+
+// ---------------------------------------------------------------------------------------------------------
+// Gợi ý bằng AI (Story 4.8, AD-7, AD-21)
+// ---------------------------------------------------------------------------------------------------------
+
+/**
+ * `POST /api/v1/conversations/:id/suggest` — bản nháp trả lời theo hồ sơ hiệu lực của trang và các tin gần nhất. `mode`
+ * bỏ trống → mặc định của kênh (như gửi tin). Chạy trong request (không job); nút "Dừng" = client huỷ request.
+ */
+export const SuggestReplyBody = z.object({
+  mode: MessageDelivery.optional(),
+})
+export type SuggestReplyBody = z.input<typeof SuggestReplyBody>
+
+/**
+ * Bản nháp AI (KHÔNG gửi) — FE điền vào ô soạn. `violations` rỗng = sạch; có = vẫn vi phạm `ai.checkOutput` sau khi
+ * sinh lại một lần → FE đánh dấu cụm vi phạm để chủ shop sửa trước khi gửi.
+ */
+export const SuggestReplyResponse = z.object({
+  draft: z.string(),
+  violations: z.array(AiViolation),
+})
+export type SuggestReplyResponse = z.infer<typeof SuggestReplyResponse>

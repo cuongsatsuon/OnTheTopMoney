@@ -2,7 +2,8 @@
 // (giờ VN), gộp trang tin, URL đính kèm. Story 4.4: nhãn kênh bình luận/Threads, dòng bài, nhãn xoá/ẩn, người viết tin,
 // ghi chú ô soạn theo kênh. Story 4.6: thao tác theo trạng thái, công tắc AI, ghi chú handoff (UX-DR5), khoá query tab/
 // badge nằm dưới gốc `conversations` để hint realtime làm cũ. Story 4.7: cách gửi + giới hạn chữ theo kênh, phím `⌘↵`,
-// nhãn trạng thái gửi, câu lỗi + gợi ý theo mã gửi tin, "Gửi lại", nhận diện từ chối gửi (409 mã gửi tin).
+// nhãn trạng thái gửi, câu lỗi + gợi ý theo mã gửi tin, "Gửi lại", nhận diện từ chối gửi (409 mã gửi tin). Story 4.8:
+// khoá nút "Gợi ý bằng AI" theo nguồn, mã khoá trong lỗi API, cụm vi phạm còn trong chữ đang soạn.
 import {
   CONVERSATION_STATES,
   INBOX_TABS,
@@ -47,7 +48,14 @@ import {
   previewText,
   senderLabel,
   serverScope,
+  SUGGEST_HINTS,
+  remainingViolations,
+  suggestErrorMessage,
+  suggestLock,
+  suggestLockCodeOf,
 } from './inbox'
+import { AI_LOCK_HINTS } from './openai'
+import { ERROR_MESSAGES } from './error-messages'
 import { ApiError } from './api'
 
 const UUID = '019a0000-0000-7000-8000-00000000abcd'
@@ -272,5 +280,46 @@ describe('gửi tin (Story 4.7)', () => {
     expect(isSendRefusal(new ApiError('VALIDATION_FAILED', 400, 'x'))).toBe(false)
     expect(isSendRefusal(new ApiError('RATE_LIMITED', 429, 'x'))).toBe(false)
     expect(isSendRefusal(new Error('x'))).toBe(false)
+  })
+})
+
+describe('Gợi ý bằng AI (Story 4.8)', () => {
+  const open = { locked: false, hint: null }
+  const base = { key: open, budgetBlocked: false, configMissing: false, serverCode: null, pageId: UUID } as const
+
+  it('suggestLock: mở khi mọi nguồn ổn; khoá theo thứ tự khoá OpenAI → hạn mức → hồ sơ → mã server', () => {
+    expect(suggestLock(base)).toEqual({ locked: false, hint: null, link: null })
+    // Đang tải trạng thái khoá: mờ, không tooltip (tránh nháy).
+    expect(suggestLock({ ...base, key: { locked: true, hint: null }, budgetBlocked: true })).toEqual({ locked: true, hint: null, link: null })
+    expect(suggestLock({ ...base, key: { locked: true, hint: AI_LOCK_HINTS.missing } }).hint).toBe(AI_LOCK_HINTS.missing)
+    expect(suggestLock({ ...base, budgetBlocked: true, configMissing: true })).toEqual({ locked: true, hint: SUGGEST_HINTS.budget, link: null })
+    expect(suggestLock({ ...base, configMissing: true })).toEqual({ locked: true, hint: SUGGEST_HINTS.config, link: { to: `/trang-nhom/trang/${UUID}`, label: 'Tạo hồ sơ' } })
+  })
+
+  it('suggestLock: mã lỗi lần gọi trước → khoá đúng câu', () => {
+    expect(suggestLock({ ...base, serverCode: 'OPENAI_KEY_MISSING' }).hint).toBe(AI_LOCK_HINTS.missing)
+    expect(suggestLock({ ...base, serverCode: 'OPENAI_KEY_INVALID' }).hint).toBe(AI_LOCK_HINTS.invalid)
+    expect(suggestLock({ ...base, serverCode: 'AI_BUDGET_EXCEEDED' })).toMatchObject({ locked: true, hint: SUGGEST_HINTS.budget })
+    expect(suggestLock({ ...base, serverCode: 'CONFIG_MISSING' })).toMatchObject({ locked: true, hint: SUGGEST_HINTS.config, link: { label: 'Tạo hồ sơ' } })
+  })
+
+  it('suggestLockCodeOf / suggestErrorMessage: chỉ 4 mã khoá; lỗi khác → null + câu chung', () => {
+    expect(suggestLockCodeOf(new ApiError('AI_BUDGET_EXCEEDED', 402, 'x'))).toBe('AI_BUDGET_EXCEEDED')
+    expect(suggestLockCodeOf(new ApiError('CONFIG_MISSING', 422, 'x'))).toBe('CONFIG_MISSING')
+    expect(suggestLockCodeOf(new ApiError('AI_PROVIDER_ERROR', 502, 'x'))).toBeNull()
+    expect(suggestLockCodeOf(new Error('x'))).toBeNull()
+    expect(suggestErrorMessage(new ApiError('CONFIG_MISSING', 422, 'x'))).toContain('chưa có hồ sơ thương hiệu')
+    expect(suggestErrorMessage(new ApiError('AI_PROVIDER_ERROR', 502, 'x'))).toBe(ERROR_MESSAGES.AI_PROVIDER_ERROR)
+  })
+
+  it('remainingViolations: giữ cụm còn trong chữ (không phân biệt hoa thường), too_long theo độ dài hiện tại', () => {
+    const v = [
+      { kind: 'banned_word', text: 'GIẢM GIÁ' },
+      { kind: 'disallowed_url', text: 'http://evil.com' },
+      { kind: 'too_long', text: '120/100' },
+    ] as const
+    expect(remainingViolations('đang giảm giá, vào http://evil.com', v)).toEqual(v.slice(0, 2))
+    expect(remainingViolations('đã sửa hết', v)).toEqual([])
+    expect(remainingViolations('x'.repeat(101), v)).toEqual([v[2]])
   })
 })
