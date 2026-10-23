@@ -122,7 +122,7 @@ export function replyInput(brand: ReplyBrand, ctx: ReplyContext): string {
  * Ghi chú cho lần sinh lại sau khi hậu kiểm (AD-21) chặn lần đầu: nêu đúng vi phạm vừa gặp để model không lặp lại
  * (Story 5.4 — cả Gợi ý AI và AI trả lời). Gắn vào cuối `input`; rỗng khi không có vi phạm.
  */
-export function retryNote(violations: readonly AiViolation[]): string {
+export function retryNote(violations: readonly AiViolation[], subject = 'Bản trả lời'): string {
   const lines: string[] = []
   const banned = [...new Set(violations.filter((v) => v.kind === 'banned_word').map((v) => v.text))]
   const urls = [...new Set(violations.filter((v) => v.kind === 'disallowed_url').map((v) => v.text))]
@@ -130,7 +130,7 @@ export function retryNote(violations: readonly AiViolation[]): string {
   if (banned.length) lines.push(`- Bỏ hẳn các cụm shop cấm dùng: ${banned.map((b) => `"${b}"`).join(', ')}.`)
   if (urls.length) lines.push(`- Không đưa các đường link sau: ${urls.join(', ')}.`)
   if (long) lines.push(`- Bản trước quá dài (${long.text} ký tự) — viết ngắn hơn hẳn giới hạn.`)
-  return lines.length ? ['Bản trả lời trước bị chặn, hãy viết lại và sửa đúng các lỗi sau:', ...lines].join('\n') : ''
+  return lines.length ? [`${subject} trước bị chặn, hãy viết lại và sửa đúng các lỗi sau:`, ...lines].join('\n') : ''
 }
 
 export function buildReplyPrompt(brand: ReplyBrand, ctx: ReplyContext): { instructions: string; input: string; maxOutputTokens: number } {

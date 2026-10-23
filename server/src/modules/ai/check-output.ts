@@ -2,7 +2,8 @@
 // Thuần, xác định (không gọi mạng, không DB): từ cấm của hồ sơ (không phân biệt hoa thường, chuẩn hoá dấu),
 // URL ngoài `allowedDomains`, độ dài tối đa theo `kind` (và `maxChars` của nền tảng nếu có). Mọi luồng AI (autoreply,
 // content, campaigns, composer) gọi đúng hàm này — không nhân bản luật ở chỗ khác (Boundaries "Never").
-import { AI_OUTPUT_MAX_CHARS, type AiOutputKind, type AiViolation } from '@ottm/shared'
+// Story 6.2: `platform` → đếm độ dài như nền tảng (`captionLength`: Threads tính emoji theo byte UTF-8).
+import { AI_OUTPUT_MAX_CHARS, captionLength, type AiOutputKind, type AiViolation, type Platform } from '@ottm/shared'
 
 /** Phần hồ sơ mà hậu kiểm cần (hồ sơ hiệu lực hoặc hồ sơ nháp). */
 export interface CheckBrand {
@@ -153,14 +154,18 @@ function urlViolations(text: string, allowed: readonly string[]): AiViolation[] 
  * Hậu kiểm AD-21. Thứ tự vi phạm: từ cấm → URL lạ → quá dài. Trả `{clean, violations}`; caller (composer) trả
  * nguyên văn kèm `violations` cho FE đánh dấu, autoreply/campaigns dùng `clean` để quyết định handoff / chờ duyệt.
  */
-export function checkOutput(text: string, opts: { brand: CheckBrand; kind: AiOutputKind; maxChars?: number }): CheckOutputResult {
+export function checkOutput(
+  text: string,
+  opts: { brand: CheckBrand; kind: AiOutputKind; maxChars?: number; platform?: Platform },
+): CheckOutputResult {
   const { brand, kind } = opts
   const { folded, offsets } = fold(text)
   const violations: AiViolation[] = [
     ...bannedViolations(text, folded, offsets, brand.bannedWords),
     ...urlViolations(text, brand.allowedDomains),
   ]
-  const length = [...text].length
+  // Đếm như nền tảng khi caller biết (Threads: emoji theo byte UTF-8, cùng `publishIssues`); không có → theo code point.
+  const length = captionLength(text, opts.platform)
   // Giới hạn theo nền tảng/cách gửi (`sendTextLimit`: Threads 500, tin nhắn Instagram 1000) khi caller biết — chặt hơn `kind`.
   const max = opts.maxChars !== undefined ? Math.min(AI_OUTPUT_MAX_CHARS[kind], opts.maxChars) : AI_OUTPUT_MAX_CHARS[kind]
   if (length > max) violations.push({ kind: 'too_long', text: `${length}/${max}` })

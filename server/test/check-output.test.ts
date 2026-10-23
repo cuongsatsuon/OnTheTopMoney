@@ -1,7 +1,18 @@
 // Hậu kiểm đầu ra AI (AD-21) — hàm thuần `checkOutput` + mẫu prompt caption (Story 3.4). Không DB, không mạng.
 import { AI_OUTPUT_MAX_CHARS } from '@ottm/shared'
 import { describe, expect, it } from 'vitest'
-import { buildCaptionPrompt, buildReplyPrompt, captionInput, captionInstructions, checkOutput, type CheckBrand, type ReplyContext } from '../src/modules/ai/index.ts'
+import {
+  buildCaptionPrompt,
+  buildComposePrompt,
+  buildReplyPrompt,
+  captionInput,
+  captionInstructions,
+  checkOutput,
+  retryNote,
+  type CheckBrand,
+  type ComposeContext,
+  type ReplyContext,
+} from '../src/modules/ai/index.ts'
 
 const brandOf = (patch: Partial<CheckBrand> = {}): CheckBrand => ({ bannedWords: [], allowedDomains: [], ...patch })
 
@@ -106,6 +117,80 @@ describe('checkOutput — độ dài theo kind', () => {
     expect(checkOutput('a'.repeat(over), { brand: brandOf(), kind: 'comment', maxChars: 5000 }).violations).toEqual([
       { kind: 'too_long', text: `${over}/${AI_OUTPUT_MAX_CHARS.comment}` },
     ])
+  })
+})
+
+describe('checkOutput — đếm theo nền tảng (Story 6.2, việc hoãn của 6.1)', () => {
+  it('Threads: emoji tính theo byte UTF-8 như Meta — 498 chữ + 2 emoji 😍 = 506 > 500', () => {
+    const text = `${'a'.repeat(498)}😍😍`
+    expect(checkOutput(text, { brand: brandOf(), kind: 'caption', maxChars: 500, platform: 'threads' }).violations).toEqual([{ kind: 'too_long', text: '506/500' }])
+    // Không truyền nền tảng (hoặc nền tảng khác) → đếm code point như cũ: 500 ký tự, sạch.
+    expect(checkOutput(text, { brand: brandOf(), kind: 'caption', maxChars: 500 }).clean).toBe(true)
+    expect(checkOutput(text, { brand: brandOf(), kind: 'caption', maxChars: 500, platform: 'facebook' }).clean).toBe(true)
+  })
+
+  it('Threads: chữ tiếng Việt có dấu vẫn tính 1 ký tự', () => {
+    expect(checkOutput('ạ'.repeat(500), { brand: brandOf(), kind: 'caption', maxChars: 500, platform: 'threads' }).clean).toBe(true)
+  })
+})
+
+describe('buildComposePrompt (mẫu prompt Soạn bài — Story 6.2)', () => {
+  const brand = {
+    name: '',
+    slogan: '',
+    industry: 'Gia dụng',
+    tones: ['Vui vẻ'],
+    formality: 80,
+    pronoun: 'Shop – bạn',
+    emoji: 'many' as const,
+    products: [{ name: 'Nồi chiên không dầu', price: '1.290.000đ' }],
+    audience: '',
+    hashtags: ['giadung'],
+    bannedWords: ['rẻ nhất'],
+    allowedDomains: [],
+  }
+  const ctx: ComposeContext = {
+    platform: 'threads',
+    pageName: 'Gia dụng Minh Phát',
+    topic: 'Khuyến mãi nồi chiên không dầu 20% cuối tuần',
+    goal: 'engagement',
+    length: 'long',
+    maxChars: 500,
+    revise: null,
+  }
+
+  it('viết mới: nền tảng, mục tiêu, độ dài, giới hạn, giọng, từ cấm, không link; input có trang, hồ sơ, ý tưởng', () => {
+    const p = buildComposePrompt(brand, ctx)
+    expect(p.maxOutputTokens).toBe(1200)
+    expect(p.instructions).toContain('đăng lên Threads')
+    expect(p.instructions).toContain('tối đa 1 hashtag')
+    expect(p.instructions).toContain('Mục tiêu: tăng tương tác')
+    expect(p.instructions).toContain('Độ dài: dài')
+    expect(p.instructions).toContain('KHÔNG quá 500 ký tự.')
+    expect(p.instructions).toContain('Xưng hô: Shop – bạn.')
+    expect(p.instructions).toContain('rẻ nhất')
+    expect(p.instructions).toContain('Không chèn bất kỳ liên kết')
+    expect(p.input).toContain('Trang đăng: Gia dụng Minh Phát (Threads)')
+    expect(p.input).toContain('Tên thương hiệu: Gia dụng Minh Phát') // hồ sơ chưa đặt tên → tên trang
+    expect(p.input).toContain('Nồi chiên không dầu (1.290.000đ)')
+    expect(p.input).toContain('Ý tưởng bài: Khuyến mãi nồi chiên không dầu 20% cuối tuần')
+    expect(p.input).not.toContain('Caption hiện tại')
+  })
+
+  it('sửa: rút gọn / thêm CTA / viết lại có caption hiện tại + yêu cầu tương ứng; rút gọn bỏ dòng độ dài', () => {
+    const shorter = buildComposePrompt(brand, { ...ctx, topic: '', revise: { action: 'shorter', caption: 'Bản cũ dài dòng' } })
+    expect(shorter.input).toContain('Caption hiện tại:\n«Bản cũ dài dòng»')
+    expect(shorter.input).toContain('rút gọn')
+    expect(shorter.input).not.toContain('Ý tưởng bài')
+    expect(shorter.instructions).not.toContain('Độ dài:')
+    expect(buildComposePrompt(brand, { ...ctx, revise: { action: 'cta', caption: 'Bản cũ' } }).input).toContain('lời kêu gọi hành động')
+    expect(buildComposePrompt(brand, { ...ctx, revise: { action: 'rewrite', caption: 'Bản cũ' } }).input).toContain('phiên bản KHÁC')
+  })
+
+  it('Facebook / Instagram: cách viết riêng; ghi chú sinh lại nêu "Bản caption"', () => {
+    expect(buildComposePrompt(brand, { ...ctx, platform: 'instagram', maxChars: 2200 }).instructions).toContain('KHÔNG quá 30')
+    expect(buildComposePrompt(brand, { ...ctx, platform: 'facebook', maxChars: 2200 }).instructions).toContain('Facebook Fanpage')
+    expect(retryNote([{ kind: 'banned_word', text: 'rẻ nhất' }], 'Bản caption')).toContain('Bản caption trước bị chặn')
   })
 })
 

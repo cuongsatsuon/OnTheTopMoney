@@ -1,17 +1,27 @@
 // Story 6.1 — helper thuần của Soạn bài: chọn đích theo Phạm vi / nhóm, luật nền tảng trên tab (cùng bảng với server),
 // chép caption, gắn ảnh, body lưu nháp, nạp nháp, kiểm file ảnh, câu lỗi.
-import { SavePostRequest, type MediaAssetDto, type PageDto, type PostDto } from '@ottm/shared'
+// Story 6.2 — caption AI: body gọi AI, áp kết quả từng tab, khoá nút AI, cụm vi phạm còn trong chữ, câu ghi chú / toast.
+import { ComposeCaptionsRequest, SavePostRequest, type ComposeCaptionResult, type MediaAssetDto, type PageDto, type PostDto } from '@ottm/shared'
 import { describe, expect, it } from 'vitest'
 import { ApiError } from './api'
+import { SUGGEST_HINTS } from './inbox'
+import { AI_LOCK_HINTS } from './openai'
 import {
   EMPTY_DRAFT,
+  aiErrorText,
+  applyComposeResults,
   applyImageToAll,
   assignImage,
   assignUploaded,
   blockingIssues,
+  buildComposeBody,
   buildSaveBody,
   captionCounter,
+  captionViolations,
   clearImage,
+  composeLock,
+  composeLockCodeOf,
+  composeToast,
   composerErrorMessage,
   copyCaptionToEmpty,
   draftFromPost,
@@ -163,5 +173,88 @@ describe('file ảnh và câu lỗi', () => {
   it('lỗi dưới ô (details) ưu tiên; mã khác → câu chung', () => {
     expect(composerErrorMessage(new ApiError('VALIDATION_FAILED', 400, 'x', [{ path: ['image'], message: 'Định dạng ảnh không khớp' }]))).toBe('Định dạng ảnh không khớp')
     expect(composerErrorMessage(new ApiError('MEDIA_NOT_CONFIGURED', 500, 'x'))).toMatch(/Cloudinary/)
+  })
+})
+
+describe('Viết caption bằng AI (Story 6.2)', () => {
+  const A = id(1)
+  const B = id(2)
+  const C = id(3)
+
+  it('buildComposeBody: viết mới / sửa một tab; body hợp lệ với hợp đồng server', () => {
+    const write = buildComposeBody({ topic: '  Khuyến mãi nồi chiên  ', goal: 'sales', length: 'short', pageIds: [A, B] })
+    expect(write).toEqual({ topic: 'Khuyến mãi nồi chiên', goal: 'sales', length: 'short', pageIds: [A, B] })
+    expect(ComposeCaptionsRequest.safeParse(write).success).toBe(true)
+    const shorter = buildComposeBody({ topic: '', goal: 'announce', length: 'medium', pageIds: [A], revise: { action: 'shorter', caption: 'Bản cũ' } })
+    expect(ComposeCaptionsRequest.safeParse(shorter).success).toBe(true)
+    // Viết mới khi chưa có ý tưởng → server từ chối đúng ô.
+    const bad = ComposeCaptionsRequest.safeParse(buildComposeBody({ topic: ' ', goal: 'sales', length: 'medium', pageIds: [A] }))
+    expect(bad.success).toBe(false)
+    expect(bad.error?.issues[0]?.path).toEqual(['topic'])
+  })
+
+  it('applyComposeResults: tab ok đổi caption + nhãn AI; tab lỗi giữ caption + ghi mã; mã khoá đầu tiên', () => {
+    const drafts: Drafts = {
+      [A]: { ...EMPTY_DRAFT, caption: 'cũ A', edited: true, ai: true, mediaIds: ['m1'] },
+      [B]: { ...EMPTY_DRAFT, caption: 'cũ B' },
+    }
+    const results: ComposeCaptionResult[] = [
+      { pageId: A, status: 'ok', caption: 'Mới A', violations: [{ kind: 'banned_word', text: 'rẻ nhất' }] },
+      { pageId: B, status: 'error', errorCode: 'CONFIG_MISSING' },
+      { pageId: C, status: 'error', errorCode: 'AI_PROVIDER_ERROR' },
+    ]
+    const r = applyComposeResults(drafts, { [B]: { violations: [] } }, results)
+    expect(r.drafts[A]).toEqual({ caption: 'Mới A', mediaIds: ['m1'], ai: true, edited: false })
+    expect(r.drafts[B]).toEqual(drafts[B])
+    expect(r.drafts[C]).toBeUndefined()
+    expect(r.notes).toEqual({
+      [A]: { violations: [{ kind: 'banned_word', text: 'rẻ nhất' }] },
+      [B]: { errorCode: 'CONFIG_MISSING' },
+      [C]: { errorCode: 'AI_PROVIDER_ERROR' },
+    })
+    expect(r).toMatchObject({ written: 1, failed: 2, lockCode: null })
+    const budget = applyComposeResults({}, {}, [
+      { pageId: A, status: 'ok', caption: 'x', violations: [] },
+      { pageId: B, status: 'error', errorCode: 'AI_BUDGET_EXCEEDED' },
+      { pageId: C, status: 'error', errorCode: 'OPENAI_KEY_INVALID' },
+    ])
+    expect(budget.lockCode).toBe('AI_BUDGET_EXCEEDED')
+  })
+
+  it('composeLock: mở khi mọi nguồn ổn; khoá theo khoá OpenAI → hạn mức → mã lần trước (không có liên kết hồ sơ)', () => {
+    const key = { locked: false, hint: null }
+    expect(composeLock({ key, budgetBlocked: false, serverCode: null })).toEqual({ locked: false, hint: null, link: null })
+    expect(composeLock({ key: { locked: true, hint: AI_LOCK_HINTS.invalid }, budgetBlocked: true, serverCode: null })).toEqual({ locked: true, hint: AI_LOCK_HINTS.invalid, link: null })
+    expect(composeLock({ key, budgetBlocked: true, serverCode: null })).toEqual({ locked: true, hint: SUGGEST_HINTS.budget, link: null })
+    expect(composeLock({ key, budgetBlocked: false, serverCode: 'OPENAI_KEY_MISSING' }).hint).toBe(AI_LOCK_HINTS.missing)
+    expect(composeLock({ key, budgetBlocked: false, serverCode: 'AI_BUDGET_EXCEEDED' }).hint).toBe(SUGGEST_HINTS.budget)
+    expect(composeLockCodeOf(new ApiError('OPENAI_KEY_INVALID', 400, 'x'))).toBe('OPENAI_KEY_INVALID')
+    expect(composeLockCodeOf(new ApiError('CONFIG_MISSING', 422, 'x'))).toBeNull()
+    expect(composeLockCodeOf(new Error('x'))).toBeNull()
+  })
+
+  it('captionViolations: cụm còn trong chữ (không phân biệt hoa thường); too_long đếm như nền tảng (Threads: emoji theo byte)', () => {
+    const v = [
+      { kind: 'banned_word', text: 'rẻ nhất' },
+      { kind: 'disallowed_url', text: 'evil.com' },
+      { kind: 'too_long', text: '506/500' },
+    ] as const
+    const threads = `${'a'.repeat(490)} RẺ NHẤT😍`
+    expect(captionViolations(threads, 'threads', v).map((x) => x.kind)).toEqual(['banned_word', 'too_long']) // 490+1+7+4 = 502
+    expect(captionViolations(`${'a'.repeat(495)}😍`, 'threads', v)).toEqual([]) // 495 + 4 = 499
+    expect(captionViolations(`${'a'.repeat(495)}😍😍`, 'facebook', v)).toEqual([]) // code point: 497
+  })
+
+  it('aiErrorText / composeToast: câu theo mã; tóm tắt số trang viết được / chưa', () => {
+    expect(aiErrorText('CONFIG_MISSING')).toContain('chưa có hồ sơ thương hiệu')
+    expect(aiErrorText('AI_PROVIDER_ERROR')).not.toBe('')
+    expect(composeToast([{ pageId: A, status: 'ok', caption: 'x', violations: [] }])).toBe('AI đã viết cho 1 trang')
+    expect(
+      composeToast([
+        { pageId: A, status: 'ok', caption: 'x', violations: [] },
+        { pageId: B, status: 'error', errorCode: 'CONFIG_MISSING' },
+      ]),
+    ).toBe('AI đã viết cho 1 trang · 1 trang chưa viết được')
+    expect(composeToast([{ pageId: B, status: 'error', errorCode: 'CONFIG_MISSING' }])).toBe(aiErrorText('CONFIG_MISSING'))
   })
 })

@@ -33,6 +33,7 @@ import { registerOnboarding } from './onboarding.ts'
 import { registerOpenAiSettings } from './openai-settings.ts'
 import { registerPages } from './pages.ts'
 import { registerPosts } from './posts.ts'
+import { registerPostsCompose } from './posts-compose.ts'
 import { registerSearch } from './search.ts'
 import { registerStream } from './stream.ts'
 import { registerWebhooks, type WebhooksDeps } from './webhooks.ts'
@@ -162,8 +163,8 @@ export function buildApp({ sql, db, logger, http = {}, loginLimiter, health, eve
   registerSearch(app, { db })
   // Màn chào 4 bước (Story 5.7): trạng thái dẫn xuất từ trang, khoá OpenAI (cần `cipher`), hồ sơ, cấu hình AI, tin AI.
   registerOnboarding(app, { db, cipher: ai?.cipher ?? null })
-  // Viết thử bằng AI (Story 3.4) + Gợi ý bằng AI ở Hộp thư (Story 4.8) + Thử AI trả lời (Story 5.3): cần `events`
-  // (reserve/settle hạn mức của AI gateway, AD-7).
+  // Viết thử bằng AI (Story 3.4) + Gợi ý bằng AI ở Hộp thư (Story 4.8) + Thử AI trả lời (Story 5.3) + caption Soạn bài
+  // (Story 6.2): cần `events` (reserve/settle hạn mức của AI gateway, AD-7).
   if (events) {
     const aiDeps = {
       db,
@@ -175,6 +176,7 @@ export function buildApp({ sql, db, logger, http = {}, loginLimiter, health, eve
     registerBrandSample(app, aiDeps)
     registerInboxSuggest(app, aiDeps)
     registerAutoreplyTest(app, aiDeps)
+    registerPostsCompose(app, aiDeps)
   }
   if (events && connections) {
     const deps: ConnectionsDeps = { ...connections, db, events, log: logger.child({ component: 'connections' }) }

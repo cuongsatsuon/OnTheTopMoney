@@ -1,0 +1,87 @@
+// Mẫu prompt caption Soạn bài theo hồ sơ hiệu lực của từng trang (Story 6.2, AD-7: mẫu prompt dùng chung ở
+// `modules/ai/prompts/`, export qua `ai/index.ts`). Thuần, xác định — dựng `{instructions, input}` cho
+// `generateText(feature='compose_caption')`. Dùng lại giọng / dữ liệu hồ sơ / ràng buộc từ cấm-link của mẫu caption
+// (Viết thử, Story 3.4); thêm nền tảng đích, mục tiêu, độ dài, ý tưởng và yêu cầu sửa (viết lại / ngắn hơn / thêm CTA).
+// Ngữ cảnh là dữ liệu trung lập do `content` dựng — module này không biết bảng bài viết.
+import type { ComposeGoal, ComposeLength, ComposeReviseAction, Platform } from '@ottm/shared'
+import { EMOJI_GUIDE, brandFactLines, captionGuardLines, formalityGuide, type CaptionBrand } from './caption.ts'
+
+/** Token đầu ra tối đa cho một caption Soạn bài (đủ cho 2.200 ký tự tiếng Việt, vẫn chặn chi phí). */
+export const COMPOSE_MAX_OUTPUT_TOKENS = 1_200
+
+export interface ComposeContext {
+  platform: Platform
+  /** Tên trang — dùng khi hồ sơ chưa đặt tên thương hiệu. */
+  pageName: string
+  /** Ý tưởng bài (có thể rỗng khi chỉ rút gọn / thêm CTA). */
+  topic: string
+  goal: ComposeGoal
+  length: ComposeLength
+  /** Giới hạn ký tự của caption trên nền tảng này (đếm như nền tảng). */
+  maxChars: number
+  /** Sửa caption hiện tại của trang thay vì viết mới. */
+  revise: { action: ComposeReviseAction; caption: string } | null
+}
+
+const PLATFORM_GUIDE: Record<Platform, string> = {
+  facebook: 'Nền tảng: Facebook Fanpage. Câu mở đầu thu hút, thân bài nêu rõ lợi ích/ưu đãi, có thể chia đoạn ngắn; hashtag (nếu có) để cuối bài, tối đa 5.',
+  instagram:
+    'Nền tảng: Instagram. Câu đầu thật cuốn (người xem chỉ thấy 1–2 dòng đầu), xuống dòng thoáng; hashtag để cuối bài, 5–10 hashtag liên quan, KHÔNG quá 30.',
+  threads:
+    'Nền tảng: Threads. Ngắn gọn, giọng trò chuyện tự nhiên như đang tâm sự; tối đa 1 hashtag. Threads tính mỗi emoji bằng nhiều ký tự nên dùng rất ít emoji.',
+}
+
+const GOAL_GUIDE: Record<ComposeGoal, string> = {
+  sales: 'Mục tiêu: bán hàng — nêu rõ sản phẩm, lợi ích, ưu đãi và kết bằng lời kêu gọi đặt hàng / nhắn tin cho shop.',
+  engagement: 'Mục tiêu: tăng tương tác — gợi chuyện, đặt câu hỏi mời khách bình luận hoặc chia sẻ trải nghiệm.',
+  announce: 'Mục tiêu: thông báo — truyền đạt thông tin rõ ràng, đủ ý (cái gì, khi nào, ở đâu), không quảng cáo quá đà.',
+}
+
+const LENGTH_GUIDE: Record<ComposeLength, string> = {
+  short: 'Độ dài: ngắn, 1–2 câu.',
+  medium: 'Độ dài: vừa, khoảng 3–5 câu.',
+  long: 'Độ dài: dài, khoảng 6–10 câu, chia đoạn cho dễ đọc.',
+}
+
+const PLATFORM_NAME: Record<Platform, string> = { facebook: 'Facebook', instagram: 'Instagram', threads: 'Threads' }
+
+/** Yêu cầu cuối của `input` theo thao tác. */
+const ASK: Record<ComposeReviseAction | 'write', string> = {
+  write: 'Hãy viết caption cho bài đăng theo ý tưởng trên, đúng giọng văn và ràng buộc.',
+  rewrite: 'Hãy viết một phiên bản KHÁC cho bài này theo ý tưởng trên: đổi cách mở đầu và cách diễn đạt, giữ đúng giọng văn và ràng buộc.',
+  shorter: 'Hãy rút gọn caption hiện tại cho ngắn hơn hẳn: giữ ý chính, ưu đãi, giọng văn và lời kêu gọi.',
+  cta: 'Hãy giữ gần như nguyên caption hiện tại và thêm một lời kêu gọi hành động rõ ràng, hợp mục tiêu (vd nhắn tin, bình luận, đặt hàng).',
+}
+
+/** Hướng dẫn hệ thống (`instructions`): vai trò, nền tảng, mục tiêu, độ dài, giọng, RÀNG BUỘC từ cấm / link / độ dài (song song với hậu kiểm AD-21). */
+export function composeInstructions(brand: CaptionBrand, ctx: ComposeContext): string {
+  return [
+    'Bạn là trợ lý viết nội dung mạng xã hội cho một shop bán hàng online tại Việt Nam.',
+    `Viết MỘT caption tiếng Việt để đăng lên ${PLATFORM_NAME[ctx.platform]} của shop. Chỉ trả về nội dung caption, không thêm giải thích, tiêu đề hay dấu ngoặc kép bao ngoài.`,
+    PLATFORM_GUIDE[ctx.platform],
+    GOAL_GUIDE[ctx.goal],
+    ctx.revise?.action === 'shorter' ? '' : LENGTH_GUIDE[ctx.length],
+    `KHÔNG quá ${ctx.maxChars} ký tự.`,
+    `Giọng văn: ${brand.tones.length ? brand.tones.join(', ') : 'thân thiện'}; mức độ ${formalityGuide(brand.formality)}.`,
+    brand.pronoun ? `Xưng hô: ${brand.pronoun}.` : '',
+    EMOJI_GUIDE[brand.emoji],
+    'Chỉ nêu giá, ưu đãi có trong ý tưởng hoặc danh sách sản phẩm; không bịa thêm khuyến mãi.',
+    ...captionGuardLines(brand),
+  ]
+    .filter(Boolean)
+    .join('\n')
+}
+
+/** Dữ liệu (`input`): trang, hồ sơ, ý tưởng, caption hiện tại (khi sửa), yêu cầu. */
+export function composeInput(brand: CaptionBrand, ctx: ComposeContext): string {
+  const parts = [[`Trang đăng: ${ctx.pageName} (${PLATFORM_NAME[ctx.platform]})`, ...brandFactLines(brand, ctx.pageName)].join('\n')]
+  if (ctx.topic) parts.push(`Ý tưởng bài: ${ctx.topic}`)
+  if (ctx.revise && ctx.revise.caption.trim()) parts.push(`Caption hiện tại:\n«${ctx.revise.caption.trim()}»`)
+  parts.push(ASK[ctx.revise?.action ?? 'write'])
+  return parts.join('\n\n')
+}
+
+/** Dựng prompt Soạn bài đầy đủ cho gateway. */
+export function buildComposePrompt(brand: CaptionBrand, ctx: ComposeContext): { instructions: string; input: string; maxOutputTokens: number } {
+  return { instructions: composeInstructions(brand, ctx), input: composeInput(brand, ctx), maxOutputTokens: COMPOSE_MAX_OUTPUT_TOKENS }
+}

@@ -2,6 +2,7 @@
 // một đích, caption/ảnh có thể riêng). Bảng ràng buộc nền tảng ở đây là nguồn DUY NHẤT: FE báo ngay trên tab trang,
 // server (`content.assertPublishable`) chặn khi lên lịch (Story 6.4). Nháp được lưu cả khi còn vi phạm.
 import { z } from 'zod'
+import { AiViolation } from './ai.ts'
 import { MediaAssetSource, Platform, PostSource, PostTargetStatus } from './enums.ts'
 import { ErrorCode } from './errors.ts'
 
@@ -174,3 +175,72 @@ export const PostDto = z.object({
   updatedAt: IsoDateTime,
 })
 export type PostDto = z.infer<typeof PostDto>
+
+/* ---------- Viết caption bằng AI (Story 6.2, AD-7, AD-21) ---------- */
+
+/** Mục tiêu bài (ô "Mục tiêu" ở Soạn bài): bán hàng, tương tác, thông báo. */
+export const COMPOSE_GOALS = ['sales', 'engagement', 'announce'] as const
+export const ComposeGoal = z.enum(COMPOSE_GOALS)
+export type ComposeGoal = z.infer<typeof ComposeGoal>
+
+/** Độ dài mong muốn (ô "Độ dài"): ngắn, vừa, dài. */
+export const COMPOSE_LENGTHS = ['short', 'medium', 'long'] as const
+export const ComposeLength = z.enum(COMPOSE_LENGTHS)
+export type ComposeLength = z.infer<typeof ComposeLength>
+
+/** Sửa caption của MỘT tab: viết bản khác, rút gọn, thêm lời kêu gọi hành động. */
+export const COMPOSE_REVISE_ACTIONS = ['rewrite', 'shorter', 'cta'] as const
+export const ComposeReviseAction = z.enum(COMPOSE_REVISE_ACTIONS)
+export type ComposeReviseAction = z.infer<typeof ComposeReviseAction>
+
+/** Caption hiện tại dài nhất gửi cho AI sửa [ASSUMPTION] — chặn prompt phình (caption AI tối đa 2.200 ký tự). */
+export const COMPOSE_REVISE_CAPTION_MAX = 5_000
+
+/**
+ * Body `POST /api/v1/posts/compose` — AI viết caption cho từng trang theo hồ sơ hiệu lực của trang đó (không lưu bài).
+ * Không `revise` = viết mới cho mọi trang trong `pageIds` (cần ý tưởng). Có `revise` = sửa caption của đúng một trang.
+ */
+export const ComposeCaptionsRequest = z
+  .object({
+    topic: z.string().trim().max(POST_TOPIC_MAX, `Ý tưởng tối đa ${POST_TOPIC_MAX} ký tự`).default(''),
+    goal: ComposeGoal.default('sales'),
+    length: ComposeLength.default('medium'),
+    pageIds: z.array(z.uuid()).min(1, 'Chọn ít nhất 1 trang').max(POST_TARGETS_MAX, `Tối đa ${POST_TARGETS_MAX} trang`),
+    revise: z
+      .object({
+        action: ComposeReviseAction,
+        caption: z.string().max(COMPOSE_REVISE_CAPTION_MAX, `Nội dung quá dài để AI sửa (tối đa ${COMPOSE_REVISE_CAPTION_MAX} ký tự)`),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict()
+  .superRefine((body, ctx) => {
+    const seen = new Set<string>()
+    body.pageIds.forEach((id, i) => {
+      if (seen.has(id)) ctx.addIssue({ code: 'custom', path: ['pageIds', i], message: 'Trang bị chọn hai lần' })
+      seen.add(id)
+    })
+    const action = body.revise?.action
+    if ((!action || action === 'rewrite') && !body.topic) ctx.addIssue({ code: 'custom', path: ['topic'], message: 'Nhập ý tưởng để AI viết' })
+    if (action && body.pageIds.length !== 1) ctx.addIssue({ code: 'custom', path: ['pageIds'], message: 'Chỉ sửa được caption của một trang mỗi lần' })
+    if ((action === 'shorter' || action === 'cta') && !body.revise?.caption.trim()) {
+      ctx.addIssue({ code: 'custom', path: ['revise', 'caption'], message: 'Chưa có nội dung để AI sửa' })
+    }
+  })
+export type ComposeCaptionsRequest = z.input<typeof ComposeCaptionsRequest>
+export type ParsedComposeCaptionsRequest = z.output<typeof ComposeCaptionsRequest>
+
+/**
+ * Kết quả của một trang: `ok` = caption AI (kèm cụm vi phạm hậu kiểm còn lại sau một lần sinh lại, FE đánh dấu);
+ * `error` = trang đó không viết được (`CONFIG_MISSING` = chưa có hồ sơ thương hiệu; mã AI như `AI_BUDGET_EXCEEDED`).
+ */
+export const ComposeCaptionResult = z.discriminatedUnion('status', [
+  z.object({ pageId: z.uuid(), status: z.literal('ok'), caption: z.string(), violations: z.array(AiViolation) }),
+  z.object({ pageId: z.uuid(), status: z.literal('error'), errorCode: ErrorCode }),
+])
+export type ComposeCaptionResult = z.infer<typeof ComposeCaptionResult>
+
+/** `POST /api/v1/posts/compose` → 200. `results` đúng thứ tự `pageIds`; một trang lỗi không chặn trang khác. */
+export const ComposeCaptionsResponse = z.object({ results: z.array(ComposeCaptionResult) })
+export type ComposeCaptionsResponse = z.infer<typeof ComposeCaptionsResponse>

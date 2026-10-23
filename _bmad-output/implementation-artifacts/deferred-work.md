@@ -158,6 +158,15 @@
     - "Lưu nháp" rồi mở lại `/soan-bai?bai=<id>`;
     - chạy `npm run media:check` để xác nhận Cloudinary nhận `a_exif,cs_srgb,fl_force_strip.strip_profile` và ảnh ra JPEG sRGB; tải một ảnh điện thoại dọc có EXIF `Orientation` ≠ 1 + GPS, kiểm bản gốc đứng đúng chiều và không còn EXIF.
   evidence: Chỉ có test API (Postgres thật, Cloudinary giả không đọc `transformation`) và test helper web (`web/src/lib/composer.test.ts`). Chưa chạy UI với phiên chủ shop, và chưa gửi incoming transformation `cs_srgb` [ASSUMPTION] lên Cloudinary thật.
-- source_spec: `spec-6-1-soan-bai-nhap.md`
-  summary: Story 6.2 kiểm caption AI cho Threads phải đếm bằng `captionLength(caption, 'threads')` (emoji theo byte UTF-8 như Meta), không chỉ `checkOutput({maxChars})` (đếm code point) — không thì caption AI nhiều emoji qua kiểm nhưng bị Threads từ chối khi đăng.
-  evidence: Review gọn 6.1 sửa `captionLength`/`publishIssues` theo tài liệu Meta "Threads Posts" (Limitations: "Emojis are counted as the number of UTF-8 bytes"); `ai/check-output.ts` vẫn đếm `[...text].length`.
+- source_spec: `spec-6-2-caption-ai.md`
+  summary: Kiểm bằng trình duyệt + OpenAI thật nút AI ở Soạn bài:
+    - "Tạo bằng AI" cho 3 trang (một trang chưa có hồ sơ → tab báo + "Tạo hồ sơ"), Dừng giữa chừng giữ nguyên nội dung;
+    - "Viết bằng AI cho N trang", Viết lại / Ngắn hơn / Thêm CTA trên một tab, cụm vi phạm được đánh dấu;
+    - khoá nút khi khoá OpenAI hỏng / hết hạn mức; chất lượng caption theo nền tảng và độ dài (`COMPOSE_MAX_OUTPUT_TOKENS` 1.200 [ASSUMPTION]).
+  evidence: Chỉ có test API (Postgres thật, OpenAI giả) và test helper web (`web/src/lib/composer.test.ts`); chưa chạy UI với phiên chủ shop (dev không có mật khẩu mẫu) + khoá OpenAI thật.
+- source_spec: `spec-6-2-caption-ai.md`
+  summary: Trả lời công khai / Gợi ý AI / AI tự trả lời trên Threads vẫn hậu kiểm độ dài bằng code point — nên truyền `platform` vào `checkOutput` (đã hỗ trợ từ 6.2) nếu trả lời Threads cũng bị Meta đếm emoji theo byte.
+  evidence: 6.2 thêm `checkOutput({platform})` và chỉ Soạn bài truyền; `inbox/suggest.ts`, `autoreply` giữ cách đếm cũ. Tài liệu Meta chỉ nêu giới hạn emoji ở "Threads Posts" (trả lời cũng là post) — cần thử bằng Meta thật trước khi đổi.
+- source_spec: `spec-6-2-caption-ai.md`
+  summary: Soạn bài viết song song 3 trang khi hạn mức còn sát: chỗ giữ của các trang đang chạy làm trang sau gặp `AI_BUDGET_EXCEEDED` dù hạn mức chưa hết (`remainingVnd > 0`) → thành mã dừng cho các trang chưa bắt đầu, FE khoá mọi nút AI ("hết hạn mức") tới khi trạng thái hạn mức đổi.
+  evidence: `content/compose.ts` `STOP_CODES` gồm `AI_BUDGET_EXCEEDED` không phân biệt `details.remainingVnd`; `ai/budget.ts` `reserve` cộng chỗ giữ đang mở. Hướng sửa: chỉ coi là mã dừng khi `remainingVnd === 0` (còn lại → lỗi riêng trang, có "Thử lại"), FE chỉ khoá theo `lockCode` đó.

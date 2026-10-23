@@ -2,12 +2,15 @@
 export {
   CAPTION_MAX_OUTPUT_TOKENS,
   EMOJI_GUIDE,
+  brandFactLines,
   buildCaptionPrompt,
+  captionGuardLines,
   captionInput,
   captionInstructions,
   formalityGuide,
   type CaptionBrand,
 } from './caption.ts'
+export { COMPOSE_MAX_OUTPUT_TOKENS, buildComposePrompt, composeInput, composeInstructions, type ComposeContext } from './compose.ts'
 export {
   REPLY_MAX_OUTPUT_TOKENS,
   buildReplyPrompt,

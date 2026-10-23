@@ -1,7 +1,9 @@
 // Soạn bài AI `/soan-bai` (F4). Story 6.1: đích là trang/nhóm thật, mỗi trang một tab với caption + ảnh riêng, luật
 // nền tảng báo ngay trên tab (bảng `publishIssues` dùng chung với server), tải ảnh thật, "Lưu nháp" thật và mở lại
-// nháp bằng `?bai=<id>`. Còn mô phỏng: viết caption bằng AI (Story 6.2). Sinh ảnh AI (6.3), lên lịch / đăng (6.4)
-// chưa bật.
+// nháp bằng `?bai=<id>`. Story 6.2: "Tạo bằng AI", "Viết bằng AI cho N trang", Viết lại / Ngắn hơn / Thêm CTA gọi AI thật
+// theo hồ sơ từng trang (`POST /posts/compose`, nút Dừng huỷ request); tab báo lỗi riêng (chưa có hồ sơ…) và đánh dấu
+// cụm vi phạm; nút AI khoá theo khoá OpenAI / hạn mức / mã lỗi, vẫn soạn tay được. Sinh ảnh AI (6.3), lên lịch / đăng
+// (6.4) chưa bật.
 import {
   AlertCircle,
   Bookmark,
@@ -31,7 +33,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import type { MediaAssetDto, PageDto } from '@ottm/shared'
+import type { ComposeGoal, ComposeLength, ComposeReviseAction, MediaAssetDto, PageDto } from '@ottm/shared'
 import { AiLockHint } from '../components/AiLockHint'
 import { Content } from '../components/AppShell'
 import { Skeleton } from '../components/Skeleton'
@@ -56,17 +58,28 @@ import {
   platformLabel,
 } from '../components/ui'
 import type { Page } from '../data/mock'
+import { useAiBudget } from '../lib/ai-budget'
 import { useApp } from '../lib/app-context'
 import {
+  GOAL_OPTIONS,
   IMAGE_ACCEPT,
+  LENGTH_OPTIONS,
   POST_PARAM,
+  aiErrorText,
+  applyComposeResults,
   applyImageToAll,
   assignImage,
   assignUploaded,
   blockingIssues,
+  brandProfileLink,
+  buildComposeBody,
   buildSaveBody,
   captionCounter,
+  captionViolations,
   clearImage,
+  composeLock,
+  composeLockCodeOf,
+  composeToast,
   composerErrorMessage,
   copyCaptionToEmpty,
   draftFromPost,
@@ -78,92 +91,19 @@ import {
   issuesFor,
   orderedTargets,
   toggleGroupSelection,
+  useComposeCaptions,
   usePost,
   useSavePost,
   useUploadPostImage,
+  type AiNote,
+  type AiNotes,
+  type ComposeLockCode,
   type Drafts,
   type TargetDraft,
 } from '../lib/composer'
 import { toUiPage, usePages } from '../lib/connections'
 import { useGroups } from '../lib/groups'
-
-/* ---------- Bộ sinh caption mô phỏng (thay bằng AI thật ở Story 6.2) ---------- */
-
-type Goal = 'Bán hàng' | 'Tương tác' | 'Thông báo'
-type Length = 'short' | 'medium' | 'long'
-
-const GOALS: Goal[] = ['Bán hàng', 'Tương tác', 'Thông báo']
-
-const OPENERS: Record<Goal, string[]> = {
-  'Bán hàng': ['🔥 {idea}!', '⚡ Deal cực hời: {idea}', '🛒 Chốt đơn liền tay: {idea}', '💥 Chỉ trong tuần này: {idea}'],
-  'Tương tác': ['Bạn đã thử chưa? {idea} 👇', '💬 Cùng bàn nhé: {idea}', '✨ {idea} — bạn nghĩ sao?', '🤔 Hỏi nhanh: {idea}?'],
-  'Thông báo': ['📢 Thông báo: {idea}', '📌 Cập nhật mới: {idea}', '🔔 {idea}', '📣 Tin vui cho khách quen: {idea}'],
-}
-
-const BODY = [
-  'Số lượng có hạn, ưu tiên khách đặt sớm nha.',
-  'Hàng chính hãng, đổi trả trong 7 ngày nếu có lỗi.',
-  'Giao nhanh toàn quốc, kiểm tra hàng trước khi nhận.',
-  'Hơn 2.000 khách đã tin dùng và đánh giá 5 sao ⭐',
-  'Tư vấn miễn phí để chọn đúng sản phẩm hợp với bạn.',
-  'Quà tặng kèm cho 50 đơn đầu tiên 🎁',
-]
-
-const CTA_LINE = '🎁 Bình luận “QUAN TÂM” để nhận ưu đãi riêng nhé!'
-
-const stripMarks = (s: string) =>
-  s
-    .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
-    .replace(/đ/g, 'd')
-    .replace(/Đ/g, 'D')
-
-function hashStr(s: string) {
-  let h = 7
-  for (const c of s) h = (h * 31 + c.charCodeAt(0)) | 0
-  return Math.abs(h)
-}
-
-function hashtags(page: Page, idea: string, goal: Goal, n: number) {
-  const words = stripMarks(idea).toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter((w) => w.length > 2)
-  const tags = new Set<string>()
-  const handle = page.handle.replace(/[^a-z0-9]/gi, '')
-  if (handle) tags.add('#' + handle)
-  if (words.length >= 2) tags.add('#' + words.slice(0, 3).join(''))
-  ;(goal === 'Bán hàng' ? ['#sale', '#deal', '#muasam'] : goal === 'Tương tác' ? ['#chiase', '#meohay', '#review'] : ['#thongbao', '#tinmoi'])
-    .forEach((t) => tags.add(t))
-  words.slice(0, 4).forEach((w) => tags.add('#' + w))
-  return [...tags].slice(0, n).join(' ')
-}
-
-function writeCaption(page: Page, idea: string, goal: Goal, length: Length, variant: number) {
-  const seed = hashStr(page.id + idea) + variant * 7
-  const opener = OPENERS[goal][seed % OPENERS[goal].length]!.replace('{idea}', idea.trim())
-  const n = length === 'short' ? 1 : length === 'medium' ? 2 : 4
-  const body = Array.from({ length: n }, (_, i) => BODY[(seed + i * 2) % BODY.length]!)
-
-  if (page.platform === 'threads') {
-    return [opener.replace(/[!.]$/, ''), `Mình nói thật: ${body[0]!.charAt(0).toLowerCase()}${body[0]!.slice(1)}`, 'Ai thử rồi kể mình nghe với 👀', hashtags(page, idea, goal, 1)].join('\n\n')
-  }
-  if (page.platform === 'instagram') {
-    return [opener, body.join(' '), `📍 Link mua hàng ở bio${page.handle ? ` @${page.handle}` : ''}`, '.\n.\n' + hashtags(page, idea, goal, 7)].join('\n\n')
-  }
-  return [opener, body.join(' '), `👉 Inbox ngay cho ${page.name} để được tư vấn!`, hashtags(page, idea, goal, 4)].join('\n\n')
-}
-
-function shorten(caption: string) {
-  const parts = caption.split('\n\n')
-  if (parts.length <= 2) return parts[0]!.split(/(?<=[.!?])\s/)[0]!
-  return [parts[0], parts[parts.length - 1]].join('\n\n')
-}
-
-function addCta(caption: string) {
-  if (caption.includes(CTA_LINE)) return caption
-  const parts = caption.split('\n\n')
-  const last = parts[parts.length - 1]!
-  if (last.trim().startsWith('#') || last.trim().startsWith('.')) return [...parts.slice(0, -1), CTA_LINE, last].join('\n\n')
-  return caption + '\n\n' + CTA_LINE
-}
+import { markViolations } from '../lib/profiles'
 
 /** Lên lịch / Đăng ngay mở ở Story 6.4 — tới lúc đó chỉ lưu nháp. */
 const SCHEDULE_SOON = 'Sắp có: lên lịch và đăng bài. Hiện bạn lưu nháp trước.'
@@ -171,7 +111,7 @@ const SCHEDULE_SOON = 'Sắp có: lên lịch và đăng bài. Hiện bạn lưu
 /* ---------- Màn hình ---------- */
 
 export default function Composer() {
-  const { scope, notify, openAiKeySet } = useApp()
+  const { scope, notify, aiLock, openAiKeyStatus } = useApp()
   const [params, setParams] = useSearchParams()
   const postId = params.get(POST_PARAM)
   const pagesQuery = usePages()
@@ -179,6 +119,7 @@ export default function Composer() {
   const postQuery = usePost(postId)
   const save = useSavePost()
   const upload = useUploadPostImage()
+  const compose = useComposeCaptions()
 
   const allPages = useMemo(() => pagesQuery.data ?? [], [pagesQuery.data])
   const groupList = groupsQuery.data ?? []
@@ -193,11 +134,24 @@ export default function Composer() {
   /** Nháp đã nạp vào state: `'new'` (bài mới) hoặc id bài. Đổi `?bai=` → nạp lại. */
   const [loadedKey, setLoadedKey] = useState<string | null>(null)
 
-  const [goal, setGoal] = useState<Goal>('Bán hàng')
-  const [length, setLength] = useState<Length>('medium')
-  const [useBrand, setUseBrand] = useState(true)
-  const [writing, setWriting] = useState(false)
-  const [busyAction, setBusyAction] = useState<string | null>(null)
+  const [goal, setGoal] = useState<ComposeGoal>('sales')
+  const [length, setLength] = useState<ComposeLength>('medium')
+  /** "Tạo bằng AI" đang chạy: số trang đang viết (`null` = không chạy). */
+  const [writing, setWriting] = useState<number | null>(null)
+  /** Viết lại / Ngắn hơn / Thêm CTA đang chạy cho tab nào. */
+  const [busy, setBusy] = useState<{ pageId: string; action: ComposeReviseAction } | null>(null)
+  /** Ghi chú AI theo tab: cụm vi phạm của caption AI, hoặc mã lỗi khiến trang đó chưa viết được. */
+  const [notes, setNotes] = useState<AiNotes>({})
+  const controller = useRef<AbortController | null>(null)
+  /** Lần nạp nháp (đổi `?bai=`, bấm "Soạn bài" mới): đổi → huỷ AI đang viết để kết quả không đổ vào nháp khác. */
+  const [session, setSession] = useState(0)
+
+  // Khoá nút AI (UX-DR2): khoá OpenAI → hạn mức → mã khoá của lần gọi trước. Mã lần trước chỉ còn hiệu lực khi khoá /
+  // hạn mức chưa đổi (realtime làm cũ query) — đổi rồi thì để trạng thái mới quyết định.
+  const budgetState = useAiBudget().data?.state
+  const lockStamp = `${openAiKeyStatus}|${budgetState ?? ''}`
+  const [serverLock, setServerLock] = useState<{ code: ComposeLockCode; stamp: string } | null>(null)
+  const lock = composeLock({ key: aiLock, budgetBlocked: budgetState === 'blocked', serverCode: serverLock?.stamp === lockStamp ? serverLock.code : null })
 
   // Nạp trạng thái ban đầu ngay khi đủ dữ liệu (trong lúc render, không qua effect): bài mới → chọn sẵn theo Phạm vi;
   // `?bai=<id>` → nội dung nháp đã lưu.
@@ -220,6 +174,8 @@ export default function Composer() {
       setExpanded(groupOf(ids))
     }
     setActiveTab('')
+    setNotes({})
+    setSession((s) => s + 1)
     setLoadedKey(initKey)
   }
 
@@ -236,15 +192,10 @@ export default function Composer() {
     )
   }, [postId, postQuery.isError, postQuery.error, notify, setParams])
 
-  const timers = useRef<number[]>([])
   const fileRef = useRef<HTMLInputElement>(null)
-  useEffect(() => () => timers.current.forEach((t) => clearTimeout(t)), [])
-  const later = (fn: () => void, ms: number) => {
-    const id = window.setTimeout(fn, ms)
-    timers.current.push(id)
-    return id
-  }
-  const genTimer = useRef<number | null>(null)
+  // Rời màn hoặc nạp nháp khác khi AI đang viết → huỷ request (server truyền AbortSignal sang OpenAI). Lưu nháp mới đổi
+  // `?bai=` nhưng không nạp lại (`loadedKey` đặt trước) nên không huỷ.
+  useEffect(() => () => controller.current?.abort(), [session])
 
   const targets = orderedTargets(allPages, selected)
   const targetIds = targets.map((p) => p.id)
@@ -283,45 +234,59 @@ export default function Composer() {
       return { ...prev, [pageId]: { ...d, caption, edited: d.ai } }
     })
 
-  const canGenerate = openAiKeySet && targets.length > 0 && idea.trim().length > 0 && !writing
+  const running = writing !== null || busy !== null
+  const canGenerate = !lock.locked && targets.length > 0 && idea.trim().length > 0 && !running
 
-  // Mô phỏng (Story 6.2 thay bằng gọi AI thật theo hồ sơ từng trang): viết cho mọi tab hoặc chỉ tab còn trống.
-  function generate(onlyEmpty = false) {
-    const list = onlyEmpty ? emptyTabs : targets
-    if (!list.length) return
-    setWriting(true)
-    genTimer.current = later(() => {
-      setDrafts((prev) => {
-        const next = { ...prev }
-        list.forEach((p) => (next[p.id] = { ...draftOf(prev, p.id), caption: writeCaption(toUiPage(p), idea, goal, length, 0), ai: true, edited: false }))
-        return next
-      })
-      setWriting(false)
-      genTimer.current = null
-      notify(`AI đã viết cho ${list.length} trang`)
-    }, 1500)
+  /**
+   * Gọi AI cho `list` (Story 6.2): viết mới cho mọi tab / các tab trống, hoặc sửa caption của một tab (`revise`).
+   * Trang viết được → caption mới (nhãn "AI tạo"); trang lỗi giữ caption, tab hiện lý do. Dừng → giữ nguyên nội dung.
+   */
+  function runCompose(list: PageDto[], revise?: { action: ComposeReviseAction; caption: string }) {
+    if (!list.length || lock.locked || controller.current) return
+    const ctrl = new AbortController()
+    controller.current = ctrl
+    if (revise) setBusy({ pageId: list[0]!.id, action: revise.action })
+    else setWriting(list.length)
+    const stamp = lockStamp
+    compose.mutate(
+      { body: buildComposeBody({ topic: idea, goal, length, pageIds: list.map((p) => p.id), ...(revise ? { revise } : {}) }), signal: ctrl.signal },
+      {
+        onSuccess: ({ results }) => {
+          if (ctrl.signal.aborted) return // Dừng / đã nạp nháp khác ngay lúc kết quả về: bỏ kết quả
+          // Cập nhật theo state mới nhất: trong lúc sửa một tab, chủ shop vẫn có thể gõ ở tab khác.
+          setDrafts((d) => applyComposeResults(d, {}, results).drafts)
+          setNotes((n) => applyComposeResults({}, n, results).notes)
+          const { lockCode } = applyComposeResults({}, {}, results)
+          setServerLock(lockCode ? { code: lockCode, stamp } : null)
+          notify(composeToast(results))
+        },
+        onError: (err) => {
+          if (ctrl.signal.aborted) return // nút Dừng: giữ nguyên nội dung
+          const code = composeLockCodeOf(err)
+          setServerLock(code ? { code, stamp } : null)
+          notify(composerErrorMessage(err))
+        },
+        onSettled: () => {
+          if (controller.current === ctrl) controller.current = null
+          setWriting(null)
+          setBusy(null)
+        },
+      },
+    )
   }
 
   function stop() {
-    if (genTimer.current) clearTimeout(genTimer.current)
-    genTimer.current = null
-    setWriting(false)
+    controller.current?.abort()
+    controller.current = null
+    setWriting(null)
+    setBusy(null)
     notify('Đã dừng AI')
   }
 
-  function quickAction(kind: 'rewrite' | 'shorter' | 'cta') {
+  /** Viết lại / Ngắn hơn / Thêm CTA cho tab đang mở. */
+  function revise(action: ComposeReviseAction) {
     if (!activePage || !activeDraft) return
-    const page = activePage
-    setBusyAction(kind)
-    later(() => {
-      setDrafts((prev) => {
-        const d = draftOf(prev, page.id)
-        const caption =
-          kind === 'rewrite' ? writeCaption(toUiPage(page), idea, goal, length, hashStr(d.caption) % 5 + 1) : kind === 'shorter' ? shorten(d.caption) : addCta(d.caption)
-        return { ...prev, [page.id]: { ...d, caption, ai: true, edited: false } }
-      })
-      setBusyAction(null)
-    }, 700)
+    runCompose([activePage], { action, caption: activeDraft.caption })
   }
 
   function copyToEmpty() {
@@ -497,38 +462,27 @@ export default function Composer() {
 
             <div className="grid grid-cols-2 gap-3">
               <Field label="Mục tiêu">
-                <Select options={GOALS} value={goal} onChange={(e) => setGoal(e.target.value as Goal)} />
+                <Select options={GOAL_OPTIONS} value={goal} onChange={(e) => setGoal(e.target.value as ComposeGoal)} />
               </Field>
               <div>
                 <span className="mb-1.5 block text-[13px] font-medium">Độ dài</span>
-                <Segmented
-                  options={[
-                    { id: 'short', label: 'Ngắn' },
-                    { id: 'medium', label: 'Vừa' },
-                    { id: 'long', label: 'Dài' },
-                  ]}
-                  value={length}
-                  onChange={setLength}
-                />
+                <Segmented options={LENGTH_OPTIONS} value={length} onChange={setLength} />
               </div>
             </div>
 
-            <label className="flex items-start gap-2.5 text-sm">
-              <input type="checkbox" className="mt-0.5 size-4 accent-primary" checked={useBrand} onChange={(e) => setUseBrand(e.target.checked)} />
-              <span>
-                Dùng hồ sơ thương hiệu của từng trang
-                <span className="block text-xs text-muted-foreground">AI viết theo giọng điệu, sản phẩm và từ cấm của mỗi trang.</span>
-              </span>
-            </label>
+            <p className="flex items-start gap-2 text-xs text-muted-foreground">
+              <Sparkles size={14} className="mt-px shrink-0 text-ai" />
+              AI viết riêng cho từng trang theo hồ sơ thương hiệu của trang đó: giọng điệu, sản phẩm và từ cấm.
+            </p>
 
             <div>
-              <AiLockHint locked={!openAiKeySet} className="flex w-full">
-                <Button variant="ai" className="h-11 w-full text-[15px]" disabled={!canGenerate} onClick={() => generate()}>
-                  {writing ? 'AI đang viết…' : 'Tạo bằng AI'}
+              <AiLockHint locked={lock.locked} hint={lock.hint} link={lock.link} className="flex w-full">
+                <Button variant="ai" className="h-11 w-full text-[15px]" disabled={!canGenerate} onClick={() => runCompose(targets)}>
+                  {writing !== null ? 'AI đang viết…' : 'Tạo bằng AI'}
                 </Button>
               </AiLockHint>
-              {/* Chưa có khoá: gợi ý + liên kết Cài đặt nằm ở AiLockHint của nút. */}
-              {openAiKeySet && (targets.length === 0 || !idea.trim()) && (
+              {/* Khoá (thiếu khoá OpenAI, hết hạn mức…): gợi ý + liên kết nằm ở AiLockHint của nút. */}
+              {!lock.locked && (targets.length === 0 || !idea.trim()) && (
                 <p className="mt-2 text-center text-xs text-muted-foreground">
                   {targets.length === 0 ? 'Chọn ít nhất 1 trang để tạo bài.' : 'Nhập ý tưởng để AI bắt đầu viết.'}
                 </p>
@@ -546,8 +500,8 @@ export default function Composer() {
               <Skeleton className="h-48" />
               <Skeleton className="h-24" />
             </div>
-          ) : writing ? (
-            <WritingSkeleton onStop={stop} count={(emptyTabs.length && emptyTabs.length < targets.length ? emptyTabs : targets).length} />
+          ) : writing !== null ? (
+            <WritingSkeleton onStop={stop} count={writing} />
           ) : !activePage || !activeDraft ? (
             <EmptyState icon={<PenSquare size={22} />} title="Chưa chọn trang">
               Chọn trang đích ở cột bên trái. Mỗi trang có một tab để viết nội dung và chọn ảnh riêng.
@@ -563,6 +517,7 @@ export default function Composer() {
                       <PlatformIcon platform={p.platform} size={14} />
                       {p.name}
                       {tabsWithIssues.some((t) => t.id === p.id) && <AlertCircle size={13} className="text-danger" aria-label="Chưa đúng luật nền tảng" />}
+                      {notes[p.id] && 'errorCode' in notes[p.id]! && <AlertCircle size={13} className="text-amber-600" aria-label="AI chưa viết được cho trang này" />}
                     </span>
                   ),
                 }))}
@@ -579,8 +534,8 @@ export default function Composer() {
                         Chép sang trang còn trống
                       </Button>
                     )}
-                    <AiLockHint locked={!openAiKeySet} align="end">
-                      <Button variant="ai" size="sm" onClick={() => generate(true)} disabled={!openAiKeySet || !idea.trim()}>
+                    <AiLockHint locked={lock.locked} hint={lock.hint} link={lock.link} align="end">
+                      <Button variant="ai" size="sm" onClick={() => runCompose(emptyTabs)} disabled={lock.locked || running || !idea.trim()}>
                         Viết bằng AI cho {emptyTabs.length} trang
                       </Button>
                     </AiLockHint>
@@ -588,16 +543,24 @@ export default function Composer() {
                 </div>
               )}
 
-              <TabEditor page={activePage} draft={activeDraft} busy={!!busyAction} onChange={(c) => setCaption(activePage.id, c)} />
-              <AiLockHint locked={!openAiKeySet} align="start" className="mt-2 flex">
-                <div className={cn('flex flex-wrap gap-1.5', openAiKeySet && 'mt-2')}>
-                  <AiQuick icon={<RefreshCw size={13} />} onClick={() => quickAction('rewrite')} disabled={!!busyAction || !openAiKeySet || !idea.trim()}>
+              <TabEditor
+                page={activePage}
+                draft={activeDraft}
+                note={notes[activePage.id] ?? null}
+                busy={busy?.pageId === activePage.id}
+                onStop={stop}
+                onChange={(c) => setCaption(activePage.id, c)}
+                onRetry={!lock.locked && !running && idea.trim() ? () => runCompose([activePage]) : null}
+              />
+              <AiLockHint locked={lock.locked} hint={lock.hint} link={lock.link} align="start" className="mt-2 flex">
+                <div className={cn('flex flex-wrap gap-1.5', !lock.locked && 'mt-2')}>
+                  <AiQuick icon={<RefreshCw size={13} />} onClick={() => revise('rewrite')} disabled={running || lock.locked || !idea.trim()}>
                     Viết lại
                   </AiQuick>
-                  <AiQuick icon={<Scissors size={13} />} onClick={() => quickAction('shorter')} disabled={!!busyAction || !openAiKeySet || !activeDraft.caption.trim()}>
+                  <AiQuick icon={<Scissors size={13} />} onClick={() => revise('shorter')} disabled={running || lock.locked || !activeDraft.caption.trim()}>
                     Ngắn hơn
                   </AiQuick>
-                  <AiQuick icon={<Megaphone size={13} />} onClick={() => quickAction('cta')} disabled={!!busyAction || !openAiKeySet}>
+                  <AiQuick icon={<Megaphone size={13} />} onClick={() => revise('cta')} disabled={running || lock.locked || !activeDraft.caption.trim()}>
                     Thêm CTA
                   </AiQuick>
                 </div>
@@ -672,7 +635,7 @@ export default function Composer() {
             action={activePage ? <PlatformIcon platform={activePage.platform} size={18} /> : undefined}
           />
           <div className="bg-slate-50 p-4">
-            {writing ? (
+            {writing !== null ? (
               <div className="space-y-3 rounded-lg border border-border bg-white p-3">
                 <div className="flex items-center gap-2">
                   <div className="size-9 animate-pulse rounded-full bg-slate-200" />
@@ -721,11 +684,34 @@ function PageCheck({ page, checked, onToggle }: { page: PageDto; checked: boolea
   )
 }
 
-/** Ô nội dung của một tab: caption, bộ đếm ký tự theo nền tảng, dòng lỗi luật nền tảng (cùng bảng với server). */
-function TabEditor({ page, draft, busy, onChange }: { page: PageDto; draft: TargetDraft; busy: boolean; onChange: (caption: string) => void }) {
+/**
+ * Ô nội dung của một tab: caption, bộ đếm ký tự theo nền tảng, dòng lỗi luật nền tảng (cùng bảng với server).
+ * Story 6.2: ghi chú AI của tab — lý do AI chưa viết được (chưa có hồ sơ → "Tạo hồ sơ"; lỗi khác → "Thử lại"), hoặc
+ * cụm vi phạm hậu kiểm còn trong chữ được đánh dấu (từ cấm, link lạ) + ghi chú quá dài.
+ */
+function TabEditor({
+  page,
+  draft,
+  note,
+  busy,
+  onStop,
+  onChange,
+  onRetry,
+}: {
+  page: PageDto
+  draft: TargetDraft
+  note: AiNote | null
+  busy: boolean
+  onStop: () => void
+  onChange: (caption: string) => void
+  /** `null` = không thử lại được lúc này (nút AI đang khoá / đang chạy / chưa có ý tưởng). */
+  onRetry: (() => void) | null
+}) {
   const { caption, ai, edited } = draft
   const issues = issuesFor(page.platform, draft)
   const counter = captionCounter(page.platform, caption)
+  const violations = note && 'violations' in note ? captionViolations(caption, page.platform, note.violations) : []
+  const marks = violations.filter((v) => v.kind !== 'too_long')
   return (
     <div className="mt-4">
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
@@ -736,10 +722,30 @@ function TabEditor({ page, draft, busy, onChange }: { page: PageDto; draft: Targ
         </div>
         <span className={cn('tabular text-xs', counter.over ? 'font-medium text-danger' : 'text-muted-foreground')}>{counter.text}</span>
       </div>
+      {note && 'errorCode' in note && !busy && (
+        <div className="mb-2 flex flex-wrap items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800" role="alert">
+          <AlertCircle size={13} className="shrink-0" />
+          <span className="flex-1">{aiErrorText(note.errorCode)}</span>
+          {note.errorCode === 'CONFIG_MISSING' ? (
+            <Link to={brandProfileLink(page.id).to} className="font-semibold underline underline-offset-2">
+              {brandProfileLink(page.id).label}
+            </Link>
+          ) : (
+            onRetry && (
+              <button type="button" onClick={onRetry} className="font-semibold underline underline-offset-2">
+                Thử lại
+              </button>
+            )
+          )}
+        </div>
+      )}
       {busy ? (
         <div className="space-y-2 rounded-sm border border-ai/30 bg-ai-soft/30 p-3">
           <div className="flex items-center gap-1.5 text-[13px] font-medium text-ai">
             <Sparkles size={14} className="animate-pulse" /> AI đang viết…
+            <button type="button" onClick={onStop} className="ml-auto rounded px-1.5 py-0.5 text-xs font-medium hover:bg-ai/10">
+              Dừng
+            </button>
           </div>
           {[90, 100, 70, 85].map((w, i) => (
             <div key={i} className="h-3 animate-pulse rounded bg-ai-soft" style={{ width: `${w}%` }} />
@@ -764,6 +770,28 @@ function TabEditor({ page, draft, busy, onChange }: { page: PageDto; draft: Targ
             </li>
           ))}
         </ul>
+      )}
+      {violations.some((v) => v.kind === 'too_long') && (
+        <p className="mt-2 rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-800" role="alert">
+          Caption AI vẫn dài hơn giới hạn — rút gọn bớt trước khi đăng.
+        </p>
+      )}
+      {marks.length > 0 && (
+        <div className="mt-2 rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-800" role="alert">
+          <p className="font-medium">AI vẫn dùng cụm cần tránh của trang này — sửa lại trước khi đăng:</p>
+          {/* Từ cấm (đỏ) và link ngoài danh sách cho phép (cam); markViolations dùng chung với Viết thử (Story 3.4). */}
+          <p className="mt-1 leading-relaxed break-words whitespace-pre-wrap text-amber-900">
+            {markViolations(caption, marks).map((seg, i) =>
+              seg.kind === null ? (
+                <span key={i}>{seg.text}</span>
+              ) : (
+                <mark key={i} className={cn('rounded px-0.5', seg.kind === 'banned_word' ? 'bg-red-200 text-red-900' : 'bg-orange-200 text-orange-900')}>
+                  {seg.text}
+                </mark>
+              ),
+            )}
+          </p>
+        </div>
       )}
     </div>
   )

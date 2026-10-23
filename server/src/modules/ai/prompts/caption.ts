@@ -1,6 +1,6 @@
 // Mẫu prompt caption theo hồ sơ thương hiệu (AD-7: mẫu prompt dùng chung ở `modules/ai/prompts/`, export qua
 // `ai/index.ts`). Thuần, xác định — dựng `{instructions, input}` cho `generateText(feature='brand_sample')`.
-// Dùng cho "Viết thử bằng AI" (Story 3.4); các story sau (Soạn bài, chiến dịch) có thể tái dùng.
+// Dùng cho "Viết thử bằng AI" (Story 3.4); Soạn bài (Story 6.2, `compose.ts`) dùng lại dữ liệu hồ sơ + ràng buộc.
 import type { ParsedBrandSample } from '@ottm/shared'
 
 /** Số token đầu ra tối đa cho một caption viết thử (đủ cho bài dài, vẫn chặn chi phí). */
@@ -37,6 +37,13 @@ export function captionInstructions(brand: CaptionBrand): string {
     EMOJI_GUIDE[brand.emoji],
     'Độ dài vừa phải, khoảng 3–6 câu và KHÔNG quá 2000 ký tự.',
   ]
+  lines.push(...captionGuardLines(brand))
+  return lines.filter(Boolean).join('\n')
+}
+
+/** Ràng buộc từ cấm / liên kết của caption (song song với hậu kiểm AD-21) — dùng chung với mẫu Soạn bài (Story 6.2). */
+export function captionGuardLines(brand: Pick<CaptionBrand, 'bannedWords' | 'allowedDomains'>): string[] {
+  const lines: string[] = []
   if (brand.bannedWords.length) {
     lines.push(`TUYỆT ĐỐI KHÔNG dùng các từ/cụm từ bị cấm sau (kể cả biến thể có dấu khác): ${brand.bannedWords.join(', ')}.`)
   }
@@ -45,23 +52,29 @@ export function captionInstructions(brand: CaptionBrand): string {
   } else {
     lines.push('Không chèn bất kỳ liên kết (URL) nào vào caption.')
   }
-  return lines.filter(Boolean).join('\n')
+  return lines
 }
 
 /** Dữ liệu hồ sơ (`input`) để AI viết đúng chất shop. */
 export function captionInput(brand: CaptionBrand): string {
-  const products = brand.products.filter((p) => p.name || p.price).map((p) => (p.price ? `${p.name} (${p.price})` : p.name))
   const lines = [
-    `Tên thương hiệu: ${brand.name || 'Thương hiệu của bạn'}`,
+    ...brandFactLines(brand, 'Thương hiệu của bạn'),
+    'Hãy viết caption mẫu quảng bá shop hoặc một sản phẩm chủ lực, đúng giọng văn và ràng buộc ở trên.',
+  ]
+  return lines.join('\n')
+}
+
+/** Dữ liệu hồ sơ (tên, slogan, ngành, khách, sản phẩm + giá, hashtag) — dùng chung với mẫu Soạn bài (Story 6.2). */
+export function brandFactLines(brand: CaptionBrand, fallbackName: string): string[] {
+  const products = brand.products.filter((p) => p.name || p.price).map((p) => (p.price ? `${p.name} (${p.price})` : p.name))
+  return [
+    `Tên thương hiệu: ${brand.name || fallbackName}`,
     brand.slogan ? `Slogan: ${brand.slogan}` : '',
     brand.industry ? `Ngành hàng: ${brand.industry}` : '',
     brand.audience ? `Khách hàng mục tiêu: ${brand.audience}` : '',
     products.length ? `Sản phẩm chủ lực (chỉ báo giá theo danh sách này): ${products.join('; ')}` : '',
     brand.hashtags.length ? `Hashtag gợi ý: ${brand.hashtags.map((h) => (h.startsWith('#') ? h : `#${h}`)).join(' ')}` : '',
-    '',
-    'Hãy viết caption mẫu quảng bá shop hoặc một sản phẩm chủ lực, đúng giọng văn và ràng buộc ở trên.',
-  ]
-  return lines.filter((l) => l !== '').join('\n')
+  ].filter((l) => l !== '')
 }
 
 /** Dựng prompt caption đầy đủ cho gateway. */
