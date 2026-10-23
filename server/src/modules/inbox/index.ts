@@ -9,7 +9,45 @@
 // Story 4.5: tin của chính trang (echo) — khớp tin app đã gửi / `app_unmatched` / `external_human`, job
 // `inbox.echo_match`; "đã nhận / đã xem" của tin outbound.
 // Story 4.8: Gợi ý bằng AI — bản nháp trả lời theo hồ sơ hiệu lực (bên gọi truyền vào) + tin gần nhất, qua `ai`.
+// Story 4.9: khách hàng — danh sách theo phạm vi, hồ sơ (thẻ, giai đoạn, ghi chú, SĐT), lịch sử nhiều trang, gộp khách
+// bằng tay + gợi ý gộp từ nhắn riêng, tóm tắt AI bằng job `inbox.contact_summary`. Trường dẫn xuất (`pageIds`,
+// `handledBy`) ghép ở `app/read-models/contacts.ts`.
 export const MODULE = 'inbox'
+
+export {
+  bulkUpdateContacts,
+  contactActivity,
+  contactFacets,
+  getContact,
+  listContactMessages,
+  listContacts,
+  listMergeSuggestions,
+  mergeContacts,
+  suggestMerge,
+  updateContact,
+  type BulkContactOp,
+  type ContactActivity,
+  type ContactFacets,
+  type ContactListQuery,
+  type ContactPatch,
+  type ContactRecord,
+  type ContactsDeps,
+  type MergeResult,
+} from './contacts.ts'
+export {
+  ContactSummaryRetryableError,
+  SUMMARY_CONTEXT_MESSAGES,
+  SUMMARY_TEXT_MAX,
+  aiSummaryStatusOf,
+  handleContactSummaryJob,
+  parseContactSummaryJobData,
+  requestContactSummary,
+  summarizeContact,
+  type ContactSummaryDeps,
+  type RequestSummaryDeps,
+  type RequestSummaryResult,
+  type SummaryOutcome,
+} from './contact-summary.ts'
 
 export {
   ECHO_MATCH_ATTEMPTS,

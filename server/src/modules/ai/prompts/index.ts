@@ -17,3 +17,10 @@ export {
   type ReplyContext,
   type ReplyTurn,
 } from './reply.ts'
+export {
+  CONTACT_SUMMARY_MAX_OUTPUT_TOKENS,
+  buildContactSummaryPrompt,
+  contactSummaryInput,
+  contactSummaryInstructions,
+  type ContactSummaryTurn,
+} from './contact-summary.ts'

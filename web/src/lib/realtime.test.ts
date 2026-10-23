@@ -109,6 +109,12 @@ describe('createRealtimeClient — Hộp thư (Story 4.3)', () => {
     expect(hintInvalidates('conversations', 'conversation')).toBe(true)
     // conversation.state_changed ghi kèm tin `system` (lý do chuyển) → khung chat cũng phải tải lại.
     expect(hintInvalidates('messages', 'conversation')).toBe(true)
+    // Story 4.9: danh sách / chi tiết / lịch sử khách theo tin và trạng thái hội thoại; sửa / gộp khách → tên trong tin.
+    expect(hintInvalidates('contacts', 'contact')).toBe(true)
+    expect(hintInvalidates('contacts', 'message')).toBe(true)
+    expect(hintInvalidates('contacts', 'conversation')).toBe(true)
+    expect(hintInvalidates('messages', 'contact')).toBe(true)
+    expect(hintInvalidates('contacts', 'page')).toBe(false)
   })
 
   it('conversation.state_changed (Tiếp quản ở tab khác) → làm cũ danh sách theo tab, badge, chi tiết và khung chat (Story 4.6)', async () => {

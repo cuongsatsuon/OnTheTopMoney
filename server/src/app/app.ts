@@ -17,6 +17,7 @@ import { registerAiBudget } from './ai-budget.ts'
 import { registerBrandProfiles } from './brand-profiles.ts'
 import { registerBrandSample } from './brand-sample.ts'
 import { registerConnections } from './connections.ts'
+import { registerContacts } from './contacts.ts'
 import { registerCors } from './cors.ts'
 import { registerGroups } from './groups.ts'
 import { registerHealthz, type HealthOptions } from './healthz.ts'
@@ -139,6 +140,8 @@ export function buildApp({ sql, db, logger, http = {}, loginLimiter, health, eve
   registerBrandProfiles(app, { db, media: mediaStores })
   // Hộp thư (Story 4.3): hội thoại, tin, đính kèm (đọc từ kho riêng tư); Story 4.7: gửi tin (cần `events` + `jobs`).
   registerInbox(app, { db, media: mediaStores, events, jobs })
+  // Khách hàng (Story 4.9): danh sách, hồ sơ, lịch sử, gộp (cần `events`), tóm tắt AI (cần `events` + `jobs`).
+  registerContacts(app, { db, events, jobs, ...(clock ? { now: clock } : {}) })
   // Viết thử bằng AI (Story 3.4) + Gợi ý bằng AI ở Hộp thư (Story 4.8): cần `events` (reserve/settle hạn mức của AI
   // gateway, AD-7).
   if (events) {

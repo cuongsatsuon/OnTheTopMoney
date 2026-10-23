@@ -21,6 +21,7 @@ import type { JobSender } from '../../platform/jobs/index.ts'
 import { getAccessToken } from '../connections/index.ts'
 import { getPage, getPlatformAccountId } from '../pages/index.ts'
 import { reportTokenInvalid } from './meta-token.ts'
+import { suggestMerge } from './contacts.ts'
 import { contactIdentities, conversations, messages } from './schema.ts'
 import { applyHumanReply, lockConversation } from './state.ts'
 
@@ -358,7 +359,10 @@ async function returnToPending(db: DbExecutor, messageId: string): Promise<void>
     .where(and(eq(messages.id, messageId), eq(messages.status, 'sending')))
 }
 
-/** Nhắn riêng thành công: gắn `recipient_id` vào cùng contact của người bình luận (AD-11). Không tự gộp khách. */
+/**
+ * Nhắn riêng thành công: gắn `recipient_id` vào cùng contact của người bình luận (AD-11). Định danh đã thuộc khách khác
+ * → không tự gộp, chỉ ghi gợi ý gộp (Story 4.9) để chủ shop gộp bằng tay.
+ */
 async function linkRecipient(tx: DbExecutor, deps: DeliverDeps, msg: MessageRow, recipientId: string, now: Date): Promise<void> {
   const [owner] = await tx
     .select({ contactId: contactIdentities.contactId })
@@ -377,7 +381,11 @@ async function linkRecipient(tx: DbExecutor, deps: DeliverDeps, msg: MessageRow,
     .from(contactIdentities)
     .where(and(eq(contactIdentities.pageId, msg.pageId), eq(contactIdentities.platformUserId, recipientId)))
   if (existing && existing.contactId !== owner.contactId) {
-    deps.log?.warn({ messageId: msg.id, pageId: msg.pageId }, 'inbox: định danh nhắn riêng đã thuộc khách khác — giữ nguyên, gộp bằng tay')
+    if (await suggestMerge(tx, owner.contactId, existing.contactId, 'private_reply')) {
+      await deps.events.publishEvent(tx, 'contact.updated', { id: owner.contactId, pageId: msg.pageId })
+      await deps.events.publishEvent(tx, 'contact.updated', { id: existing.contactId, pageId: msg.pageId })
+    }
+    deps.log?.warn({ messageId: msg.id, pageId: msg.pageId }, 'inbox: định danh nhắn riêng đã thuộc khách khác — ghi gợi ý gộp, gộp bằng tay')
   }
 }
 

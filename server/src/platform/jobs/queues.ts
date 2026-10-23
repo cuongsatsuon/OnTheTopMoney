@@ -60,6 +60,7 @@ export interface QueuePayloads {
   'inbox.fetch_post_text': { conversationId: string }
   'inbox.send': { messageId: string }
   'inbox.send_sweep': Record<string, never>
+  'inbox.contact_summary': { contactId: string }
   /** Story 4.5: tin của chính trang chưa khớp tin nào của app — bản chuẩn hoá (dạng JSON) để thử khớp lại. */
   'inbox.echo_match': {
     pageId: string
@@ -270,6 +271,20 @@ export const QUEUES = {
     retryDelay: 5,
     concurrency: 5,
     expireInSeconds: 60,
+    pollingIntervalSeconds: 0.5,
+  },
+  // Module `inbox` (Story 4.9, AD-2, AD-7): tóm tắt khách bằng AI (`feature=contact_summary`) khi chủ shop bấm. Route
+  // đánh dấu chờ + enqueue cùng transaction, không enqueue lại khi đang chờ — chống trùng bằng điều kiện trạng thái.
+  // Chỉ lỗi tạm (`RATE_LIMITED`, OpenAI 5xx) ném để retry; lỗi khác / lần cuối ghi mã lỗi lên khách rồi kết thúc êm.
+  // Retry 2 backoff, concurrency 2. Hỏi job 0,5 giây để bản tóm tắt hiện sớm. Hạn 180 giây > hết giờ OpenAI (120 giây)
+  // để lời gọi tự hết giờ trước khi pg-boss huỷ `job.signal`.
+  'inbox.contact_summary': {
+    policy: 'standard',
+    retryLimit: 2,
+    retryDelay: 10,
+    retryBackoff: true,
+    concurrency: 2,
+    expireInSeconds: 180,
     pollingIntervalSeconds: 0.5,
   },
 } as const satisfies { [N in keyof QueuePayloads]: QueueDef }

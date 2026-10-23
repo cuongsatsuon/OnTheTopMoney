@@ -409,15 +409,23 @@ describe('nhắn riêng người bình luận', () => {
     expect(dmOwner!.contact_id).toBe(owner!.contact_id)
   })
 
-  it('recipient_id đã thuộc khách khác → giữ nguyên, không lỗi', async () => {
+  it('recipient_id đã thuộc khách khác → giữ nguyên định danh, ghi gợi ý gộp (Story 4.9), không lỗi', async () => {
     const fb = await page('facebook', 'FB_11')
-    await dm(fb, 'PSID_TAKEN', ago(HOUR))
+    const d = await dm(fb, 'PSID_TAKEN', ago(HOUR))
     const c = await comment(fb, 'C11', 'U11', ago(HOUR))
     const id = await queued(c, { text: 'x', mode: 'private_reply' })
     graph.on('POST', '/me/messages', { ok: true, data: { recipient_id: 'PSID_TAKEN', message_id: 'm_PR_2' } })
     expect(await deliver(id)).toBe('sent')
-    const owners = await handle.sql`select contact_id from contact_identities where page_id = ${fb} and platform_user_id = 'PSID_TAKEN'`
+    const owners = await handle.sql<{ contact_id: string }[]>`select contact_id from contact_identities where page_id = ${fb} and platform_user_id = 'PSID_TAKEN'`
     expect(owners).toHaveLength(1)
+    const ownerOf = async (convId: string) =>
+      (await handle.sql<{ contact_id: string }[]>`select ci.contact_id from conversations c join contact_identities ci on ci.id = c.contact_identity_id where c.id = ${convId}`)[0]!
+        .contact_id
+    const [commenter, dmContact] = [await ownerOf(c), await ownerOf(d)]
+    expect(owners[0]!.contact_id).toBe(dmContact)
+    const suggestions = await handle.sql`select contact_id, other_contact_id, reason from contact_merge_suggestions`
+    expect(suggestions).toEqual([{ contact_id: commenter, other_contact_id: dmContact, reason: 'private_reply' }])
+    expect(emittedOf('contact.updated').map((e) => e.id).sort()).toEqual([commenter, dmContact].sort())
   })
 
   it('bình luận cũ hơn 7 ngày / chỉ còn bình luận đã xoá → PRIVATE_REPLY_INVALID; tin nhắn riêng lỗi không tính là đã dùng', async () => {

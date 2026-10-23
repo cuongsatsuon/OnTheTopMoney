@@ -19,6 +19,7 @@ import {
   subscribePage,
 } from '../modules/connections/index.ts'
 import {
+  handleContactSummaryJob,
   handleEchoMatchJob,
   handleFetchAttachmentJob,
   handleFetchPostTextJob,
@@ -178,6 +179,14 @@ try {
       'inbox.echo_match': async (job) => {
         const result = await handleEchoMatchJob({ db: dbHandle.db, events, jobs, appIds }, job as JobWithMetadata<unknown>)
         logger.debug({ jobId: job.id, result: result.status }, 'inbox.echo_match')
+      },
+      // Story 4.9: tóm tắt khách bằng AI (gateway `contact_summary`). Lỗi tạm ném lại; lần cuối / lỗi khác ghi mã lỗi.
+      'inbox.contact_summary': async (job) => {
+        const result = await handleContactSummaryJob(
+          { db: dbHandle.db, events, cipher, log: logger.child({ component: 'contact_summary' }) },
+          job as JobWithMetadata<unknown>,
+        )
+        logger.debug({ jobId: job.id, result }, 'inbox.contact_summary')
       },
       // Story 4.7: tin kẹt `sending` quá 15 phút → `failed` `SEND_UNKNOWN`.
       'inbox.send_sweep': async () => {

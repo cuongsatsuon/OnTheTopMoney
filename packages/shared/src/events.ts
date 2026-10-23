@@ -44,8 +44,10 @@ export const EVENTS = {
   'message.failed': event(true, { pageId: Id, conversationId: Id, errorCode: ErrorCode }),
   // Story 4.3: tin đã có đổi phần hiển thị (đính kèm tải xong/lỗi); Story 4.4: bình luận bị sửa/xoá/ẩn/bỏ ẩn.
   'message.updated': event(true, { pageId: Id, conversationId: Id }),
-  // Story 4.3: thông tin khách đổi (tên lấy từ Meta). `id` = contactId.
+  // Story 4.3: thông tin khách đổi (tên lấy từ Meta); Story 4.9: hồ sơ (thẻ, giai đoạn, ghi chú, SĐT, tóm tắt AI). `id` = contactId.
   'contact.updated': event(true, {}),
+  // Story 4.9: khách `id` đã được gộp vào khách `intoId` (đã xoá) — web làm cũ danh sách, đóng hồ sơ cũ.
+  'contact.merged': event(true, { intoId: Id }),
   'post_target.published': event(true, { pageId: Id, campaignId: Id.nullable() }),
   'post_target.failed': event(true, { pageId: Id, campaignId: Id.nullable(), errorCode: ErrorCode }),
   'post_target.cancelled': event(true, { pageId: Id, campaignId: Id.nullable() }),

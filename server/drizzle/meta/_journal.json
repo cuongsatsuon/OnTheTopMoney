@@ -141,6 +141,13 @@
       "when": 1792771900009,
       "tag": "0019_crazy_yellow_claw",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1792774603544,
+      "tag": "0020_curved_venom",
+      "breakpoints": true
     }
   ]
 }

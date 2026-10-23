@@ -175,29 +175,7 @@ export async function getConversation(db: DbExecutor, id: string): Promise<Conve
 
 async function toConversationDtos(db: DbExecutor, rows: ConversationRow[]): Promise<ConversationDto[]> {
   if (rows.length === 0) return []
-  const ids = rows.map((r) => r.id)
-  // Tin hiệu lực mới nhất của từng hội thoại (DISTINCT ON theo index (conversation_id, ts, id)).
-  const previews = await db
-    .selectDistinctOn([messages.conversationId], {
-      conversationId: messages.conversationId,
-      id: messages.id,
-      text: messages.text,
-      origin: messages.origin,
-      at: messages.platformTimestamp,
-    })
-    .from(messages)
-    .where(and(inArray(messages.conversationId, ids), effectiveMessage))
-    .orderBy(messages.conversationId, desc(messages.platformTimestamp), desc(messages.id))
-  const previewIds = previews.map((p) => p.id)
-  const attachmentCounts = previewIds.length
-    ? await db
-        .select({ messageId: messageAttachments.messageId, n: count() })
-        .from(messageAttachments)
-        .where(inArray(messageAttachments.messageId, previewIds))
-        .groupBy(messageAttachments.messageId)
-    : []
-  const countOf = new Map(attachmentCounts.map((c) => [c.messageId, Number(c.n)]))
-  const previewOf = new Map(previews.map((p) => [p.conversationId, p]))
+  const previewOf = await previewsOf(db, rows.map((r) => r.id))
   // Trang khách đã nhắn (dẫn xuất từ định danh — AD-11).
   const contactIds = [...new Set(rows.map((r) => r.contactId))]
   const identities = await db
@@ -213,10 +191,7 @@ async function toConversationDtos(db: DbExecutor, rows: ConversationRow[]): Prom
   }
 
   return rows.map((r) => {
-    const p = previewOf.get(r.id)
-    const preview: ConversationPreview | null = p
-      ? { text: p.text, origin: p.origin as MessageOrigin, attachmentCount: countOf.get(p.id) ?? 0, at: p.at.toISOString() }
-      : null
+    const preview = previewOf.get(r.id) ?? null
     const state = r.state as ConversationState
     return {
       id: r.id,
@@ -234,6 +209,40 @@ async function toConversationDtos(db: DbExecutor, rows: ConversationRow[]): Prom
       post: r.platformPostId ? { platformPostId: r.platformPostId, text: r.postTextSnapshot } : null,
     }
   })
+}
+
+/**
+ * Xem trước của từng hội thoại: tin hiệu lực mới nhất (DISTINCT ON theo index (conversation_id, ts, id)) kèm số đính
+ * kèm. Dùng chung cho danh sách Hộp thư và hội thoại của khách (Story 4.9).
+ */
+export async function previewsOf(db: DbExecutor, conversationIds: readonly string[]): Promise<Map<string, ConversationPreview>> {
+  if (conversationIds.length === 0) return new Map()
+  const previews = await db
+    .selectDistinctOn([messages.conversationId], {
+      conversationId: messages.conversationId,
+      id: messages.id,
+      text: messages.text,
+      origin: messages.origin,
+      at: messages.platformTimestamp,
+    })
+    .from(messages)
+    .where(and(inArray(messages.conversationId, [...conversationIds]), effectiveMessage))
+    .orderBy(messages.conversationId, desc(messages.platformTimestamp), desc(messages.id))
+  const previewIds = previews.map((p) => p.id)
+  const attachmentCounts = previewIds.length
+    ? await db
+        .select({ messageId: messageAttachments.messageId, n: count() })
+        .from(messageAttachments)
+        .where(inArray(messageAttachments.messageId, previewIds))
+        .groupBy(messageAttachments.messageId)
+    : []
+  const countOf = new Map(attachmentCounts.map((c) => [c.messageId, Number(c.n)]))
+  return new Map(
+    previews.map((p) => [
+      p.conversationId,
+      { text: p.text, origin: p.origin as MessageOrigin, attachmentCount: countOf.get(p.id) ?? 0, at: p.at.toISOString() },
+    ]),
+  )
 }
 
 /**
@@ -269,14 +278,17 @@ export async function listMessages(db: DbExecutor, conversationId: string, query
     .limit(query.limit + 1)
   const page = rows.slice(0, query.limit)
   const oldest = page.at(-1)
-  const items = await toMessageDtos(db, conversationId, page.reverse())
+  const items = await toMessageDtos(db, page.reverse())
   return { items, nextCursor: rows.length > query.limit && oldest ? encodeCursor(oldest.platformTimestamp, oldest.id) : null }
 }
 
-type MessageRow = typeof messages.$inferSelect
+export type MessageRow = typeof messages.$inferSelect
 
-/** Dòng tin (cùng hội thoại, đúng thứ tự hiển thị) → DTO kèm đính kèm và người viết. */
-async function toMessageDtos(db: DbExecutor, conversationId: string, rows: MessageRow[]): Promise<MessageDto[]> {
+/**
+ * Dòng tin (đúng thứ tự hiển thị) → DTO kèm đính kèm và người viết. Story 4.9: dòng có thể thuộc nhiều hội thoại (lịch
+ * sử khách).
+ */
+export async function toMessageDtos(db: DbExecutor, rows: MessageRow[]): Promise<MessageDto[]> {
   const ids = rows.map((m) => m.id)
   const attachments = ids.length
     ? await db
@@ -299,11 +311,15 @@ async function toMessageDtos(db: DbExecutor, conversationId: string, rows: Messa
     attachmentsOf.set(a.messageId, list)
   }
   // Khách viết tin inbound: định danh của tin; tin trước Story 4.4 chưa có → định danh của hội thoại.
-  const [conv] = await db
-    .select({ identityId: conversations.contactIdentityId })
-    .from(conversations)
-    .where(eq(conversations.id, conversationId))
-  const senderIdOf = (m: MessageRow) => (m.direction === 'inbound' ? (m.senderIdentityId ?? conv?.identityId ?? null) : null)
+  const convIds = [...new Set(rows.map((m) => m.conversationId))]
+  const convs = convIds.length
+    ? await db
+        .select({ id: conversations.id, identityId: conversations.contactIdentityId })
+        .from(conversations)
+        .where(inArray(conversations.id, convIds))
+    : []
+  const identityOfConv = new Map(convs.map((c) => [c.id, c.identityId]))
+  const senderIdOf = (m: MessageRow) => (m.direction === 'inbound' ? (m.senderIdentityId ?? identityOfConv.get(m.conversationId) ?? null) : null)
   const identityIds = [...new Set(rows.map(senderIdOf).filter((id): id is string => id !== null))]
   const senders = identityIds.length
     ? await db
@@ -338,6 +354,6 @@ export async function getMessage(db: DbExecutor, id: string): Promise<MessageDto
   if (!UUID_RE.test(id)) return null
   const [row] = await db.select().from(messages).where(eq(messages.id, id))
   if (!row) return null
-  const [dto] = await toMessageDtos(db, row.conversationId, [row])
+  const [dto] = await toMessageDtos(db, [row])
   return dto ?? null
 }

@@ -77,8 +77,8 @@
   summary: Bật lại AI cho hội thoại mà khách đang chờ (tin không phải `system` mới nhất là `customer`) → cần chạy cổng AI ngay cho tin chờ sẵn (hoặc chặn/cảnh báo), không để hội thoại nằm ở tab "AI đang trả lời" mà không ai trả lời.
   evidence: `applyUserAction('enable-ai')` đặt `waiting_since=null`, hội thoại rời "Cần xử lý"; `autoreply.triage` chỉ chạy khi có `message.received` mới. Trước Epic 5 cổng luôn đóng nên AI không bao giờ trả lời tin đó. Làm cùng chuỗi cổng AD-16 ở Epic 5 (kích hoạt quyết định khi bật lại AI).
 - source_spec: `spec-4-7-gui-tin-24-gio.md`
-  summary: Nhắn riêng tạo sẵn hội thoại `dm` với `origin_conversation_id` = hội thoại bình luận (AD-10/AD-11 bản đầy đủ), và gợi ý gộp khi `recipient_id` đã thuộc khách khác.
-  evidence: 4.7 chỉ gắn định danh `(page, recipient_id)` vào cùng khách; khách trả lời qua Messenger thì vào hội thoại `dm` mới của cùng khách nhưng không có liên kết ngược. Định danh đã thuộc khách khác chỉ được log (gộp bằng tay ở Story 4.9).
+  summary: Nhắn riêng tạo sẵn hội thoại `dm` với `origin_conversation_id` = hội thoại bình luận (AD-10/AD-11 bản đầy đủ).
+  evidence: 4.7 chỉ gắn định danh `(page, recipient_id)` vào cùng khách; khách trả lời qua Messenger thì vào hội thoại `dm` mới của cùng khách nhưng không có liên kết ngược. (Phần "gợi ý gộp khi `recipient_id` đã thuộc khách khác" đã làm ở Story 4.9 — `contact_merge_suggestions`.)
 - source_spec: `spec-4-7-gui-tin-24-gio.md`
   summary: Gửi lại / xử lý tin `app_ai` gửi lỗi (Epic 5) — hiện "Gửi lại" chỉ cho tin `app_human`.
   evidence: `resendMessage` trả `conflict` cho tin AI; khi Epic 5 ghi tin AI qua `inbox.send` cần quyết định: chủ shop gửi lại tin AI (thành `HUMAN_REPLIED`?) hay chỉ handoff.
@@ -103,3 +103,15 @@
 - source_spec: `spec-4-8-goi-y-bang-ai.md`
   summary: Kiểm bằng trình duyệt nút "Gợi ý bằng AI" (Dừng, Hoàn tác, tooltip khoá theo nguồn) và "Viết thử bằng AI" sau khi đổi cách bắt huỷ request.
   evidence: Chỉ có test HTTP thật (fetch + AbortController) và test helper web; chưa chạy UI với phiên chủ shop + trang đã kết nối + khoá OpenAI.
+- source_spec: `spec-4-9-khach-hang.md`
+  summary: Kiểm bằng trình duyệt màn Khách hàng (lọc, hàng loạt, ngăn kéo: hồ sơ, lịch sử, Gộp khách, Tóm tắt bằng AI) và panel khách trong Hộp thư.
+  evidence: Chỉ có test API (Postgres thật, fake OpenAI) và test helper web; chưa chạy UI với phiên chủ shop + trang đã kết nối + khoá OpenAI + worker chạy job `inbox.contact_summary`.
+- source_spec: `spec-4-9-khach-hang.md`
+  summary: "Bỏ qua" gợi ý gộp khách (chủ shop không muốn gộp) — hiện gợi ý chỉ mất khi gộp.
+  evidence: `contact_merge_suggestions` không có cờ bỏ qua; gợi ý chỉ sinh khi Meta xác nhận cùng người (nhắn riêng) nên hiếm khi sai. Thêm `DELETE /api/v1/contacts/:id/merge-suggestions/:otherId` nếu chủ shop phản ánh.
+- source_spec: `spec-4-9-khach-hang.md`
+  summary: Tìm khách không dấu (`unaccent` + `pg_trgm`) thay cho `q` ILIKE đơn giản của danh sách Khách hàng và hộp chọn "Gộp khách".
+  evidence: `listContacts` (server/src/modules/inbox/contacts.ts) lọc `q` bằng `ILIKE` (collation `pg_c_utf8`) trên tên/thẻ + chữ số SĐT — gõ "nguyen thu ha" không khớp "Nguyễn Thu Hà". Story 4.10 (`inbox.searchContacts`) nên dùng lại cho `q`.
+- source_spec: `spec-4-9-khach-hang.md`
+  summary: Đua giữa gộp khách và nhắn riêng thành công — `linkRecipient` có thể ghi định danh / gợi ý gộp trỏ tới khách nguồn vừa bị gộp (xoá).
+  evidence: `linkRecipient` (server/src/modules/inbox/send.ts) đọc `contact_id` của hội thoại rồi mới `insert contact_identities` / `suggestMerge`, không khoá dòng `contacts`; `mergeContacts` (server/src/modules/inbox/contacts.ts) commit xen giữa → lỗi khoá ngoại 23503, transaction giao tin rollback sau khi Meta đã nhận tin (retry có thể gửi trùng). Hiếm (gộp đúng lúc job gửi nhắn riêng); sửa bằng `select … for key share` dòng khách trong `linkRecipient` hoặc đọc lại `contact_id` khi gặp 23503.

@@ -1,7 +1,9 @@
 // Bảng của module `inbox` (AD-1, AD-9, AD-11). Story 4.3: `contacts`, `contact_identities`, `conversations`,
 // `messages`, `message_attachments`. Chỉ `inbox` ghi; module khác đọc qua `index.ts`.
 // - Định danh theo trang: `contact_identities(page_id, platform_user_id)` thuộc đúng MỘT contact; định danh mới tạo
-//   contact mới, không tự gộp (gộp bằng tay ở Story 4.9).
+//   contact mới, không tự gộp (gộp bằng tay ở Story 4.9 — `mergeContacts`).
+// - Story 4.9: hồ sơ khách (SĐT, ghi chú, thẻ tự do, tóm tắt AI) trên `contacts`; `contact_merge_suggestions` ghi cặp
+//   khách Meta xác nhận cùng người (nhắn riêng trả `recipient_id` đã thuộc khách khác) để chủ shop gộp bằng tay.
 // - Hội thoại duy nhất theo `(page_id, channel, thread_key)`; DM: `thread_key` = PSID/IGSID; bình luận (Story 4.4):
 //   id bình luận gốc (Threads: id bài trả lời gốc), kèm `platform_post_id` chuẩn của bài và caption lấy một lần.
 // - Tin: UNIQUE(page_id, platform_message_id) khi id khác null; hiển thị theo `platform_timestamp` rồi `id`.
@@ -16,6 +18,7 @@ import {
   CONTACT_STAGES,
   CONVERSATION_CHANNELS,
   CONVERSATION_STATES,
+  MERGE_SUGGESTION_REASONS,
   MESSAGE_DELIVERIES,
   MESSAGE_DIRECTIONS,
   MESSAGE_ORIGINS,
@@ -31,17 +34,34 @@ import { pagesTable } from '../pages/index.ts'
 const list = (values: readonly string[]) => sql.raw(values.map((v) => `'${v}'`).join(', '))
 const ts = (name: string) => timestamp(name, { withTimezone: true, precision: 3 })
 
-/** Một khách. `name` trống khi chưa lấy được tên từ Meta (job `inbox.fetch_profile`) — FE hiện nhãn dự phòng. */
+/**
+ * Một khách. `name` trống khi chưa lấy được tên từ Meta (job `inbox.fetch_profile`) và chủ shop chưa đặt — FE hiện nhãn
+ * dự phòng. Story 4.9: hồ sơ chủ shop sửa (SĐT, ghi chú, thẻ) + tóm tắt AI (job `inbox.contact_summary`).
+ */
 export const contacts = pgTable(
   'contacts',
   {
     id: uuid('id').primaryKey().default(sql`uuidv7()`),
     name: text('name'),
     stage: text('stage').notNull().default('new'),
+    /** SĐT như chủ shop gõ (PII — không log). */
+    phone: text('phone'),
+    note: text('note'),
+    /** Thẻ tự do, đã bỏ trùng không phân biệt hoa thường. */
+    tags: text('tags').array().notNull().default(sql`'{}'::text[]`),
+    /** Tóm tắt AI gần nhất ("AI tạo") và lúc tạo. */
+    aiSummary: text('ai_summary'),
+    aiSummaryAt: ts('ai_summary_at'),
+    /** Lần chủ shop bấm "Tóm tắt bằng AI" gần nhất — đang chờ khi mới hơn `ai_summary_at` và chưa lỗi. */
+    aiSummaryRequestedAt: ts('ai_summary_requested_at'),
+    /** Mã lỗi của lần tóm tắt gần nhất (`ErrorCode`, kiểm ở TypeScript — không CHECK để thêm mã không cần migration); xoá khi yêu cầu lại. */
+    aiSummaryError: text('ai_summary_error'),
     createdAt: ts('created_at').notNull().defaultNow(),
     updatedAt: ts('updated_at').notNull().defaultNow(),
   },
-  (t) => [check('contacts_stage_check', sql`${t.stage} in (${list(CONTACT_STAGES)})`)],
+  (t) => [
+    check('contacts_stage_check', sql`${t.stage} in (${list(CONTACT_STAGES)})`),
+  ],
 )
 
 /** Id khách theo một trang (PSID Messenger, IGSID Instagram). */
@@ -211,5 +231,31 @@ export const messageAttachments = pgTable(
     check('message_attachments_status_check', sql`${t.status} in (${list(ATTACHMENT_STATUSES)})`),
     check('message_attachments_error_check', sql`${t.errorCode} in (${list(ATTACHMENT_ERRORS)})`),
     check('message_attachments_resource_type_check', sql`${t.fileResourceType} in ('image', 'raw')`),
+  ],
+)
+
+/**
+ * Gợi ý gộp (Story 4.9, AD-11): Meta xác nhận hai khách là một người (nhắn riêng trả `recipient_id` đã thuộc khách
+ * khác). Chỉ gợi ý — gộp vẫn bằng tay (`mergeContacts`). Một cặp một dòng (`contact_id` = khách được nhắn riêng); xoá
+ * theo cascade khi một trong hai khách bị gộp/xoá.
+ */
+export const contactMergeSuggestions = pgTable(
+  'contact_merge_suggestions',
+  {
+    id: uuid('id').primaryKey().default(sql`uuidv7()`),
+    contactId: uuid('contact_id')
+      .notNull()
+      .references(() => contacts.id, { onDelete: 'cascade' }),
+    otherContactId: uuid('other_contact_id')
+      .notNull()
+      .references(() => contacts.id, { onDelete: 'cascade' }),
+    reason: text('reason').notNull(),
+    createdAt: ts('created_at').notNull().defaultNow(),
+  },
+  (t) => [
+    unique('contact_merge_suggestions_pair_unique').on(t.contactId, t.otherContactId),
+    check('contact_merge_suggestions_reason_check', sql`${t.reason} in (${list(MERGE_SUGGESTION_REASONS)})`),
+    check('contact_merge_suggestions_distinct_check', sql`${t.contactId} <> ${t.otherContactId}`),
+    index('contact_merge_suggestions_other_idx').on(t.otherContactId),
   ],
 )

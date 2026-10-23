@@ -360,6 +360,7 @@ describe('worker thật: publish → events.notifications → thông báo; job h
         'inbox.send': async () => {},
         'inbox.send_sweep': async () => {},
         'inbox.echo_match': async () => {},
+        'inbox.contact_summary': async () => {},
         'events.notifications': async (job) => {
           await handleEvent(workerDeps, parseEventEnvelope(job.data))
         },

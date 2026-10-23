@@ -8,8 +8,9 @@
 // công khai), bong bóng hiện "Đang gửi…" / lỗi (icon đỏ + lý do theo mã + gợi ý) + "Gửi lại" — tin lỗi không mất.
 // Story 4.8: "Gợi ý bằng AI" trong ô soạn — "AI đang viết…" + Dừng (huỷ request thật), bản nháp điền vào ô soạn (không
 // gửi, có "Hoàn tác"), cụm vi phạm hậu kiểm được đánh dấu; nút khoá theo khoá OpenAI / hạn mức / hồ sơ / mã lỗi, ô soạn
-// vẫn gõ tay và gửi được. Thao tác của story sau (sửa panel khách — 4.9) hiện nhưng khoá, có gợi ý "Sắp có": không giả
-// lập thao tác trên khách thật.
+// vẫn gõ tay và gửi được.
+// Story 4.9: panel khách sửa được giai đoạn, thẻ, SĐT, ghi chú và "Tóm tắt bằng AI" (`ContactProfile`, API thật); liên
+// kết tới hồ sơ + lịch sử ở `/khach-hang`; báo khi có gợi ý gộp khách.
 import {
   INBOX_TABS,
   type AiViolation,
@@ -26,6 +27,7 @@ import { CheckCheck, CircleAlert, FileText, Hand, Lock, MessageSquareText, Newsp
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { AiLockHint } from '../components/AiLockHint'
+import { ContactProfile } from '../components/ContactProfile'
 import { Skeleton } from '../components/Skeleton'
 import { Avatar, Button, Chip, Drawer, EmptyState, PageAvatar, PlatformIcon, Switch, Tabs, cn } from '../components/ui'
 import { pages as pageStore, type Page } from '../data/mock'
@@ -72,42 +74,20 @@ import {
   useConversations,
   useMessages,
   useNeedsHumanCount,
+  useNow,
   useResendMessage,
   useSendMessage,
   useSuggestReply,
   type SuggestLockCode,
 } from '../lib/inbox'
+import { avatarColorOf, useContact } from '../lib/contacts'
 import { markViolations, useEffectiveBrandProfile } from '../lib/profiles'
 import { WEBHOOK_PRODUCT_LABEL, WEBHOOK_SETTINGS_PATH, stalledProducts, useWebhookHealth } from '../lib/webhooks'
 
-const STAGE_LABEL: Record<ConversationDto['contact']['stage'], string> = {
-  new: 'Mới',
-  consulting: 'Đang tư vấn',
-  ordered: 'Chốt đơn',
-  loyal: 'Khách quen',
-  complaint: 'Khiếu nại',
-}
-
-const AVATAR_COLORS = ['#FDE68A', '#BFDBFE', '#FBCFE8', '#C7D2FE', '#A7F3D0', '#FED7AA', '#FECACA', '#DDD6FE']
-/** Màu avatar ổn định theo id khách. */
-function avatarColor(id: string): string {
-  let h = 0
-  for (const ch of id) h = (h * 31 + ch.charCodeAt(0)) >>> 0
-  return AVATAR_COLORS[h % AVATAR_COLORS.length]!
-}
 
 /** Trang trong kho (trang thật đã chép vào kho mẫu khi tải `/pages`); chưa tải xong → undefined. */
 const findPage = (id: string): Page | undefined => pageStore.find((p) => p.id === id)
 
-/** Đồng hồ cho nhãn "x phút" (cập nhật mỗi 30 giây). */
-function useNow(intervalMs = 30_000): Date {
-  const [now, setNow] = useState(() => new Date())
-  useEffect(() => {
-    const t = window.setInterval(() => setNow(new Date()), intervalMs)
-    return () => window.clearInterval(t)
-  }, [intervalMs])
-  return now
-}
 
 /* ---------- Màn hình ---------- */
 
@@ -324,7 +304,7 @@ function ListSkeleton() {
 function CustomerAvatar({ name, id, platform, size = 40 }: { name: string; id: string; platform: Platform | undefined; size?: number }) {
   return (
     <span className="relative inline-flex shrink-0">
-      <Avatar name={name} color={avatarColor(id)} size={size} />
+      <Avatar name={name} color={avatarColorOf(id)} size={size} />
       {platform && (
         <span className="absolute -right-0.5 -bottom-0.5 rounded-full bg-white p-px">
           <PlatformIcon platform={platform} size={Math.max(12, Math.round(size * 0.38))} />
@@ -881,19 +861,41 @@ function Composer({ conv, platform }: { conv: ConversationDto; platform: Platfor
 
 function CustomerPanel({ conv, name, all, onOpenConv }: { conv: ConversationDto; name: string; all: readonly ConversationDto[]; onOpenConv: (id: string) => void }) {
   const page = findPage(conv.pageId)
+  const contact = useContact(conv.contact.id)
   const otherPages = conv.contact.pageIds.filter((id) => id !== conv.pageId)
+  const profileLink = `/khach-hang?id=${conv.contact.id}`
   return (
     <div className="space-y-5 p-5">
       <div className="flex flex-col items-center text-center">
         <CustomerAvatar name={name} id={conv.contact.id} platform={page?.platform} size={64} />
         <div className="mt-2 text-base font-semibold">{name}</div>
         {page && <div className="mt-0.5 text-[13px] text-muted-foreground">Khách {CHANNEL_LABEL[page.platform]} của {page.name}</div>}
+        <Link to={profileLink} className="mt-1 text-[13px] font-medium text-primary hover:underline">
+          Xem hồ sơ và lịch sử
+        </Link>
       </div>
 
-      <div>
-        <div className="mb-1.5 text-[13px] font-medium">Giai đoạn</div>
-        <Chip tone="neutral">{STAGE_LABEL[conv.contact.stage]}</Chip>
-      </div>
+      {contact.data ? (
+        <>
+          {contact.data.mergeSuggestions.length > 0 && (
+            <p className="rounded-md bg-amber-50 p-3 text-xs text-amber-900">
+              Meta xác nhận khách này cũng là {contact.data.mergeSuggestions.length === 1 ? 'một khách khác' : `${contact.data.mergeSuggestions.length} khách khác`} trong danh sách.{' '}
+              <Link to={profileLink} className="font-semibold underline">
+                Gộp khách
+              </Link>
+            </p>
+          )}
+          <ContactProfile key={contact.data.id} contact={contact.data} />
+        </>
+      ) : contact.isError ? (
+        <p className="rounded-md bg-slate-50 p-3 text-xs text-muted-foreground">Không tải được hồ sơ khách.</p>
+      ) : (
+        <div className="space-y-3" aria-label="Đang tải hồ sơ khách">
+          <Skeleton className="h-9 w-full" />
+          <Skeleton className="h-6 w-2/3" />
+          <Skeleton className="h-20 w-full" />
+        </div>
+      )}
 
       <div>
         <div className="mb-2 text-[13px] font-medium">Hội thoại trên trang khác</div>
@@ -903,7 +905,7 @@ function CustomerPanel({ conv, name, all, onOpenConv }: { conv: ConversationDto;
           <ul className="space-y-1">
             {otherPages.map((pid) => {
               const other = findPage(pid)
-              const otherConv = all.find((c) => c.contact.id === conv.contact.id && c.pageId === pid)
+              const otherConv = contact.data?.conversations.find((c) => c.pageId === pid) ?? all.find((c) => c.contact.id === conv.contact.id && c.pageId === pid)
               const body = (
                 <>
                   {other ? <PageAvatar page={other} size={24} /> : <span className="size-6 rounded-full bg-slate-200" />}
@@ -928,8 +930,6 @@ function CustomerPanel({ conv, name, all, onOpenConv }: { conv: ConversationDto;
           </ul>
         )}
       </div>
-
-      <p className="rounded-md bg-slate-50 p-3 text-xs text-muted-foreground">Thẻ, ghi chú, số điện thoại và tóm tắt bằng AI sắp có ở hồ sơ khách.</p>
     </div>
   )
 }

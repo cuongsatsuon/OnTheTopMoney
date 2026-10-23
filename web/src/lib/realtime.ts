@@ -38,13 +38,15 @@ export function entityMatches(root: unknown, entity: string): boolean {
  *   (xem trước, thứ tự, tên hiển thị) — Story 4.3;
  * - `conversation` (`conversation.state_changed`) → tin của hội thoại `['messages', …]` (tin `system` nêu lý do
  *   chuyển trạng thái được ghi cùng lúc).
+ * - Story 4.9: `message`, `conversation` → khách `['contacts', …]` (tin mới nhất, "Xử lý bởi", lịch sử); `contact`
+ *   (sửa hồ sơ, gộp khách `contact.merged`) → cả tin `['messages', …]` (tên người viết trong luồng bình luận).
  */
 export const ENTITY_ALSO_INVALIDATES: Readonly<Record<string, readonly string[]>> = {
   openai_key: ['settings'],
   settings: ['ai_budget'],
-  message: ['conversation'],
-  contact: ['conversation'],
-  conversation: ['message'],
+  message: ['conversation', 'contact'],
+  contact: ['conversation', 'message'],
+  conversation: ['message', 'contact'],
 }
 
 /** Query có khoá gốc `root` bị gợi ý của `entity` làm cũ? (chính thực thể đó hoặc thực thể kèm theo). */

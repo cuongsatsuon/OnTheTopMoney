@@ -37,6 +37,7 @@ import {
   type StateChangeReason,
 } from '@ottm/shared'
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useEffect, useState } from 'react'
 import { apiFetch, apiUrl, isApiError } from './api'
 import { errorMessageOf } from './error-messages'
 import { AI_LOCK_HINTS, type AiLock } from './openai'
@@ -531,4 +532,14 @@ export function messageTimeLabel(iso: string, now: Date): string {
   const d = new Date(iso)
   const p = vnParts(d)
   return dayKey(d) === dayKey(now) ? p.hm : `${p.day}/${p.month} ${p.hm}`
+}
+
+/** Đồng hồ cho nhãn "x phút" (cập nhật mỗi 30 giây) — Hộp thư, Khách hàng. */
+export function useNow(intervalMs = 30_000): Date {
+  const [now, setNow] = useState(() => new Date())
+  useEffect(() => {
+    const t = window.setInterval(() => setNow(new Date()), intervalMs)
+    return () => window.clearInterval(t)
+  }, [intervalMs])
+  return now
 }
