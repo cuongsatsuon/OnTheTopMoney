@@ -84,16 +84,16 @@ development_status:
   5-7-màn-chào-4-bước-chạy-trọn: review
   epic-5-retrospective: optional
 
-  epic-6: in-progress
+  epic-6: review
   6-1-soạn-bài-nháp-cho-nhiều-trang: review
   6-2-viết-caption-bằng-ai-theo-hồ-sơ-từng-trang: review
   6-3-sinh-ảnh-ai: review
   6-4-lên-lịch-và-đăng-bài-theo-từng-trang: review
-  6-5-lịch-nội-dung-với-kéo-thả: in-progress
+  6-5-lịch-nội-dung-với-kéo-thả: review
   epic-6-retrospective: optional
 
-  epic-7: backlog
-  7-1-wizard-tạo-chiến-dịch-mục-tiêu-trang-đích-nội-dung-và-lịch: backlog
+  epic-7: in-progress
+  7-1-wizard-tạo-chiến-dịch-mục-tiêu-trang-đích-nội-dung-và-lịch: in-progress
   7-2-xem-trước-7-bài-đầu: backlog
   7-3-bắt-đầu-chiến-dịch: backlog
   7-4-sinh-nội-dung-cuốn-chiếu-và-hàng-đợi-bài-chờ-duyệt: backlog

@@ -38,6 +38,7 @@ const target = (n: number, over: Partial<PostTargetDto> = {}): PostTargetDto => 
   pageId: id(n),
   status: 'draft',
   caption: 'x',
+  aiCaption: false,
   media: [],
   version: n,
   scheduledAt: null,

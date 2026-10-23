@@ -187,17 +187,25 @@
     - hành vi thật khi `media_publish` / `threads_publish` hết giờ (container chuyển `PUBLISHED`?), mã lỗi IG khi hết hạn mức đăng.
   evidence: Chỉ có test với Meta giả (`server/test/content-publish.test.ts`) và test helper web (`web/src/lib/publish.test.ts`); chưa chạy worker với trang thật, chưa thử `npm run media:check` với URL `c_pad`. Thời gian hỏi container (3 giây × 20) là [ASSUMPTION].
 - source_spec: `spec-6-4-len-lich-va-dang-bai.md`
-  summary: Sửa nội dung / huỷ target đã rời nháp:
+  summary: Sửa nội dung target đã rời nháp:
     - target `failed` (`PUBLISH_REJECTED` — câu lỗi bảo "Sửa nội dung rồi đăng lại") chỉ "Đăng lại" được với nội dung cũ, chưa có `failed → draft` hay sửa caption của riêng target đó;
-    - bài lẫn trạng thái (vd 2 trang đã đăng + 1 trang bỏ lịch về nháp) không sửa được nháp vì `updateDraftPost` đòi mọi target `draft`;
-    - chưa có `cancelled` (xoá bài khỏi lịch).
-  evidence: AD-13 chỉ có `failed → scheduled`; Story 6.5 (Lịch nội dung) là chỗ hợp để thêm "Xoá" (`cancel`) và mở sửa từng target không ở `publishing|published|cancelled`.
+    - bài lẫn trạng thái (vd 2 trang đã đăng + 1 trang bỏ lịch về nháp, hoặc 1 trang đã xoá `cancelled` + 1 trang nháp) không sửa được nháp vì `updateDraftPost` đòi mọi target `draft` và Soạn bài khoá cả bài (`isLocked`).
+  evidence: Story 6.5 đã thêm xoá (`cancel` → `cancelled` + `USER_DELETED`) và Lịch nội dung; phần sửa cần khoá theo từng tab ở Composer + `updateDraftPost` bỏ qua (không xoá) target đã rời nháp — đổi lớn ở Composer, chưa có AC nào đòi. Tạm thời: "Bỏ lịch" (bài 1 trang) rồi sửa, hoặc xoá và soạn lại.
 - source_spec: `spec-6-4-len-lich-va-dang-bai.md`
   summary: Job `publish.target` hết hạn (300 giây) trong lúc handler vẫn chạy rồi trả target về `scheduled` (lỗi tạm ở bước container) → không còn job nào chiếm lại cho tới lần cron `content.requeue` kế tiếp (trễ 10–25 phút).
   evidence: `publish.ts` `retryLater` ném lỗi cho job đã hết hạn (pg-boss bỏ qua); an toàn (không đăng trùng) nhưng trễ. Hiếm vì mỗi lời gọi Meta ≤30 giây. Hướng sửa: `retryLater` enqueue job mới `startAfter` khi `job.signal` đã huỷ.
 - source_spec: `spec-6-4-len-lich-va-dang-bai.md`
-  summary: Deadlock khoá advisory giới hạn/24h khi hai request lên lịch hai bài khác nhau cùng chạm các trang IG/Threads theo thứ tự ngược nhau.
-  evidence: `content/transitions.ts` `transitionPostTargets` gọi `transitionTarget` theo thứ tự `input.targets` (dòng target đã khoá theo id, nhưng `assertDailyLimit` lấy `pg_advisory_xact_lock(publish_limit:<page>)` theo thứ tự body) → Postgres huỷ một bên (40P01 → 500). Hướng sửa: lấy khoá advisory của mọi trang trong request theo `pageId` tăng dần trước vòng lặp (khoá xact lấy lại được trong cùng phiên). Quan trọng hơn khi Epic 7 tự lên lịch chiến dịch song song với chủ shop.
-- source_spec: `spec-6-4-len-lich-va-dang-bai.md`
   summary: Bài đã lên nhưng target vẫn `failed PUBLISH_UNKNOWN` khi cron `content.requeue` đổi target kẹt `publishing` trước lúc handler cũ ghi `published`.
   evidence: `content/publish.ts` `markPublished` chỉ nhận `status='publishing'`; `finishPublished` chỉ log khi không cập nhật được. Chủ shop thấy lỗi rồi "Đăng lại" → đăng trùng. Rất hiếm (handler phải chạy >15 phút). Hướng sửa: `markPublished` nhận cả `failed` + `error_code='PUBLISH_UNKNOWN'` cùng `schedule_version` (xoá `error_code`, phát `post_target.published`).
+- source_spec: `spec-6-5-lich-noi-dung.md`
+  summary: Kiểm bằng trình duyệt Lịch nội dung `/lich` + tab "Lịch đăng" của Chi tiết trang với phiên chủ shop + worker (`META_FAKE=1`):
+    - tuần / tháng theo giờ VN, lọc Phạm vi / nền tảng / trạng thái, ô "AI tạo", bài nhiều trang gom một ô;
+    - kéo thả (HTML5 drag & drop) đổi ngày / giờ, thả về quá khứ, bài đã đăng không kéo được; bài lỗi đỏ + "Đăng lại";
+    - ngăn chi tiết: Đổi giờ, Bỏ lịch, Xoá (xác nhận), Mở ở Soạn bài, Xem bài.
+  evidence: Chỉ có test API (Postgres thật, `server/test/content-calendar.test.ts`) và test helper web (`web/src/lib/calendar.test.ts`); chưa chạy UI (dev không có mật khẩu mẫu). Kéo thả HTML5 không dùng được trên màn cảm ứng — ngăn chi tiết có ô ngày giờ thay thế.
+- source_spec: `spec-6-5-lich-noi-dung.md`
+  summary: Lịch ở tab / máy khác không tự cập nhật khi đổi giờ / bỏ lịch / lên lịch (chỉ `post_target.published|failed|cancelled` có sự kiện realtime).
+  evidence: `transitionTarget` chỉ phát sự kiện khi xoá; web làm cũ `['post_targets']` sau mỗi lần tự chuyển trạng thái. Nếu Epic 7 tự lên lịch slot thì cần sự kiện kiểu `post_target.scheduled` (shared `events.ts`) để lịch đang mở thấy ngay.
+- source_spec: `spec-6-5-lich-noi-dung.md`
+  summary: Kéo thả một ô slot chiến dịch (nhiều bài 1 : 1 gom theo giờ) gửi mỗi bài một request — không nguyên tử: một bài lỗi (409 / giới hạn/24h) thì các bài trước đã đổi giờ.
+  evidence: `web/src/lib/calendar.ts` `groupCalls`; route chuyển trạng thái theo từng bài. Hiện `campaignId` luôn `null` (cột có ở Epic 7). Khi Epic 7 thêm slot: cân nhắc route chuyển trạng thái theo danh sách target nhiều bài, hoặc chấp nhận và báo "Đã dời n/m bài".

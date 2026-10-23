@@ -5,6 +5,7 @@ import { z } from 'zod'
 import { AiViolation } from './ai.ts'
 import { MediaAssetSource, MediaAssetStatus, Platform, PostSource, PostTargetStatus } from './enums.ts'
 import { ErrorCode } from './errors.ts'
+import { ScopeParam } from './scope.ts'
 
 const IsoDateTime = z.iso.datetime({ offset: false })
 
@@ -191,9 +192,11 @@ export const SavePostTarget = z
     pageId: z.uuid(),
     caption: z.string().max(POST_CAPTION_MAX, `Nội dung tối đa ${POST_CAPTION_MAX} ký tự`),
     mediaIds: z.array(z.uuid()).max(POST_TARGET_MEDIA_MAX, `Mỗi trang tối đa ${POST_TARGET_MEDIA_MAX} ảnh`),
+    /** Caption do AI viết (nhãn "AI tạo" của tab, kể cả khi chủ shop sửa lại) — Story 6.5, UX-DR10. */
+    aiCaption: z.boolean().default(false),
   })
   .strict()
-export type SavePostTarget = z.infer<typeof SavePostTarget>
+export type SavePostTarget = z.input<typeof SavePostTarget>
 
 /**
  * Body `POST /api/v1/posts` (tạo nháp thủ công) và `PUT /api/v1/posts/:id` (thay toàn bộ đích của nháp). `topic` =
@@ -225,6 +228,8 @@ export const PostTargetDto = z.object({
   pageId: z.uuid(),
   status: PostTargetStatus,
   caption: z.string(),
+  /** Caption do AI viết (Story 6.5) — Soạn bài mở lại nháp vẫn giữ nhãn "AI tạo". */
+  aiCaption: z.boolean(),
   /** Ảnh theo thứ tự đăng. */
   media: z.array(MediaAssetDto),
   /** Khoá lạc quan (AD-13) — tăng mỗi lần target đổi. */
@@ -254,9 +259,13 @@ export type PostDto = z.infer<typeof PostDto>
 
 /**
  * Hành động của chủ shop trên target (bảng chuyển trạng thái AD-13): `schedule` nháp → đã lên lịch (lên lịch / đăng
- * ngay), `reschedule` đổi giờ bài đã lên lịch, `unschedule` bỏ lịch (về nháp, sửa lại được), `retry` "Đăng lại" bài lỗi.
+ * ngay), `reschedule` đổi giờ bài đã lên lịch (Lịch nội dung: kéo thả), `unschedule` bỏ lịch (về nháp, sửa lại được),
+ * `retry` "Đăng lại" bài lỗi, `cancel` xoá bài chưa đăng khỏi lịch (Story 6.5: mọi trạng thái trước `publishing`, và
+ * `failed` → `cancelled` + `cancel_reason`).
  */
-export const TARGET_ACTIONS = ['schedule', 'reschedule', 'unschedule', 'retry'] as const
+export const TARGET_ACTIONS = ['schedule', 'reschedule', 'unschedule', 'retry', 'cancel'] as const
+/** Hành động không mang thời gian (cấm `scheduledAt`). */
+export const UNTIMED_TARGET_ACTIONS = ['unschedule', 'cancel'] as const satisfies readonly (typeof TARGET_ACTIONS)[number][]
 export const TargetAction = z.enum(TARGET_ACTIONS)
 export type TargetAction = z.infer<typeof TargetAction>
 
@@ -265,7 +274,8 @@ export const SCHEDULE_MAX_AHEAD_MS = 366 * 24 * 60 * 60_000
 
 /**
  * Body `POST /api/v1/posts/:id/targets/transition` — một hành động cho một hoặc nhiều target của bài, tất cả hoặc không.
- * `scheduledAt` (ISO UTC; FE đổi từ giờ VN): bắt buộc với mọi hành động trừ `unschedule`; `null` = đăng ngay. `version`
+ * `scheduledAt` (ISO UTC; FE đổi từ giờ VN): bắt buộc với mọi hành động trừ `unschedule` / `cancel` (cấm); `null` =
+ * đăng ngay. `version`
  * = khoá lạc quan của từng target (AD-13).
  */
 export const TransitionTargetsRequest = z
@@ -284,15 +294,67 @@ export const TransitionTargetsRequest = z
       if (seen.has(t.id)) ctx.addIssue({ code: 'custom', path: ['targets', i, 'id'], message: 'Trang bị chọn hai lần' })
       seen.add(t.id)
     })
-    if (body.action === 'unschedule' && body.scheduledAt !== undefined) {
-      ctx.addIssue({ code: 'custom', path: ['scheduledAt'], message: 'Bỏ lịch không cần thời gian' })
+    const untimed = (UNTIMED_TARGET_ACTIONS as readonly string[]).includes(body.action)
+    if (untimed && body.scheduledAt !== undefined) {
+      ctx.addIssue({ code: 'custom', path: ['scheduledAt'], message: body.action === 'cancel' ? 'Xoá bài không cần thời gian' : 'Bỏ lịch không cần thời gian' })
     }
-    if (body.action !== 'unschedule' && body.scheduledAt === undefined) {
+    if (!untimed && body.scheduledAt === undefined) {
       ctx.addIssue({ code: 'custom', path: ['scheduledAt'], message: 'Chọn thời gian đăng' })
     }
   })
 export type TransitionTargetsRequest = z.input<typeof TransitionTargetsRequest>
 export type ParsedTransitionTargetsRequest = z.output<typeof TransitionTargetsRequest>
+
+/* ---------- Lịch nội dung (Story 6.5, AD-13, AD-18) ---------- */
+
+/** Khoảng đọc lịch dài nhất: lưới tháng 6 tuần (42 ngày) + 1 ngày dư. */
+export const CALENDAR_RANGE_MAX_MS = 43 * 24 * 60 * 60_000
+/** Số target tối đa một lần đọc lịch [ASSUMPTION]; vượt → `truncated`. */
+export const CALENDAR_ITEMS_MAX = 2_000
+/** Độ dài tiêu đề ô lịch (code point đầu của caption). */
+export const CALENDAR_TITLE_MAX = 120
+
+/**
+ * Query `GET /api/v1/calendar`: phạm vi (`all|group:<id>|page:<id>`, mặc định `all`) + khoảng `[from, to)` ISO UTC (FE
+ * đổi từ lưới ngày giờ VN). `from < to`, dài tối đa `CALENDAR_RANGE_MAX_MS`.
+ */
+export const CalendarQuery = z
+  .object({ scope: ScopeParam.optional(), from: IsoDateTime, to: IsoDateTime })
+  .strict()
+  .superRefine((q, ctx) => {
+    const span = Date.parse(q.to) - Date.parse(q.from)
+    if (span <= 0) ctx.addIssue({ code: 'custom', path: ['to'], message: 'Khoảng thời gian không hợp lệ' })
+    else if (span > CALENDAR_RANGE_MAX_MS) ctx.addIssue({ code: 'custom', path: ['to'], message: 'Chỉ xem tối đa 6 tuần một lần' })
+  })
+export type CalendarQuery = z.input<typeof CalendarQuery>
+
+/**
+ * Một target trên lịch (mỗi trang một dòng; FE gom thành "bài trên lịch"). `ai` = nội dung do AI sinh (caption AI, ảnh
+ * AI hoặc slot chiến dịch) → nhãn chữ "AI tạo" (UX-DR10). `campaignId` có từ Epic 7 (slot 1 post : 1 target, FE gom
+ * theo giờ). `title` = đầu caption của trang đó (trống → `null`).
+ */
+export const CalendarItemDto = z.object({
+  id: z.uuid(),
+  postId: z.uuid(),
+  pageId: z.uuid(),
+  status: PostTargetStatus,
+  /** Khoá lạc quan (AD-13) — body của `POST /posts/:id/targets/transition`. */
+  version: z.number().int().nonnegative(),
+  scheduledAt: IsoDateTime,
+  publishedAt: IsoDateTime.nullable(),
+  errorCode: ErrorCode.nullable(),
+  permalink: z.string().nullable(),
+  ai: z.boolean(),
+  source: PostSource,
+  campaignId: z.uuid().nullable(),
+  title: z.string().nullable(),
+  thumbnailUrl: z.url().nullable(),
+})
+export type CalendarItemDto = z.infer<typeof CalendarItemDto>
+
+/** `GET /api/v1/calendar` → 200, theo `scheduledAt` tăng dần. `truncated` = còn target ngoài `CALENDAR_ITEMS_MAX`. */
+export const CalendarResponse = z.object({ items: z.array(CalendarItemDto), truncated: z.boolean() })
+export type CalendarResponse = z.infer<typeof CalendarResponse>
 
 /* ---------- Viết caption bằng AI (Story 6.2, AD-7, AD-21) ---------- */
 

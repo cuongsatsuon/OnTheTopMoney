@@ -69,7 +69,7 @@ export async function createPost(tx: DbExecutor, input: CreatePostInput): Promis
   for (const [position, t] of input.targets.entries()) {
     const [row] = await tx
       .insert(postTargets)
-      .values({ postId: post!.id, pageId: t.pageId, position, status: 'draft' satisfies PostTargetStatus, caption: t.caption })
+      .values({ postId: post!.id, pageId: t.pageId, position, status: 'draft' satisfies PostTargetStatus, caption: t.caption, aiCaption: t.aiCaption })
       .returning({ id: postTargets.id })
     await insertTargetMedia(tx, row!.id, t.mediaIds)
   }
@@ -103,14 +103,14 @@ export async function updateDraftPost(tx: DbExecutor, postId: string, input: Par
     if (existing) {
       await tx
         .update(postTargets)
-        .set({ caption: t.caption, position, version: sql`${postTargets.version} + 1`, updatedAt: sql`now()` })
+        .set({ caption: t.caption, aiCaption: t.aiCaption, position, version: sql`${postTargets.version} + 1`, updatedAt: sql`now()` })
         .where(eq(postTargets.id, existing))
       await tx.delete(postTargetMedia).where(eq(postTargetMedia.postTargetId, existing))
       await insertTargetMedia(tx, existing, t.mediaIds)
     } else {
       const [row] = await tx
         .insert(postTargets)
-        .values({ postId, pageId: t.pageId, position, status: 'draft' satisfies PostTargetStatus, caption: t.caption })
+        .values({ postId, pageId: t.pageId, position, status: 'draft' satisfies PostTargetStatus, caption: t.caption, aiCaption: t.aiCaption })
         .returning({ id: postTargets.id })
       await insertTargetMedia(tx, row!.id, t.mediaIds)
     }
@@ -142,6 +142,7 @@ export async function getPost(db: DbExecutor, postId: string): Promise<PostDto |
         pageId: t.pageId,
         status: t.status as PostTargetStatus,
         caption: t.caption,
+        aiCaption: t.aiCaption,
         media: media.filter((m) => m.targetId === t.id).map((m) => toMediaAssetDto(m.asset)),
         version: t.version,
         scheduledAt: t.scheduledAt?.toISOString() ?? null,

@@ -152,13 +152,17 @@ export function publishedToast(names: readonly string[]): string {
 
 /* ---------- Hook ---------- */
 
-/** Một hành động cho các target của bài; kết quả (bài mới nhất) ghi thẳng vào cache. */
+/**
+ * Một hành động cho các target của bài; kết quả (bài mới nhất) ghi thẳng vào cache. Story 6.5: xong (cả khi lỗi — 409 là
+ * dữ liệu cũ) thì làm cũ Lịch nội dung (khoá gốc `post_targets`) — đổi giờ / bỏ lịch không phát sự kiện realtime.
+ */
 export function useTransitionTargets() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: ({ postId, body }: { postId: string; body: TransitionTargetsRequest }) =>
       apiFetch(`/posts/${postId}/targets/transition`, { method: 'POST', body, schema: PostDto }),
     onSuccess: (post) => qc.setQueryData(postKey(post.id), post),
+    onSettled: () => qc.invalidateQueries({ queryKey: ['post_targets'] }),
   })
 }
 

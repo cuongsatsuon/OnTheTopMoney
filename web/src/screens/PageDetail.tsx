@@ -1,14 +1,16 @@
 import { ArrowLeft, CalendarDays, ExternalLink, Eye, Heart, PenLine, RefreshCw, TriangleAlert, Users } from 'lucide-react'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { Content } from '../components/AppShell'
 import { BrandProfileForm } from '../components/BrandProfileForm'
 import { AiBadge, Button, Card, CardHeader, Chip, EmptyState, GroupChip, KpiCard, PageAvatar, StatusChip, Tabs, platformColor, platformLabel } from '../components/ui'
-import { compact, engagement30d, formatNumber, pages, posts, type Page, type Platform, type PostStatus } from '../data/mock'
+import { compact, engagement30d, formatNumber, pages, posts, type Page, type Platform } from '../data/mock'
 import { ScreenSkeleton } from '../components/Skeleton'
 import { useApp } from '../lib/app-context'
+import { CALENDAR_STATUS_LABEL, CALENDAR_STATUS_TONE, addDays, groupTitle, todayKey, useCalendar, weekdayIndex } from '../lib/calendar'
 import { usePages } from '../lib/connections'
+import { isoToVnInput, vnToIso, type StatusTone } from '../lib/publish'
 import { pageSubscriptionErrorOf, subscribeErrorLabel, useWebhookHealth } from '../lib/webhooks'
 import { AutoReplyForm } from './AutoReply'
 
@@ -21,15 +23,11 @@ const PROFILE_URL: Record<Platform, (h: string) => string> = {
   threads: (h) => `https://www.threads.net/@${h}`,
 }
 
-const POST_STATUS: Record<PostStatus, { label: string; tone: 'info' | 'warning' | 'danger' | 'neutral' | 'success' }> = {
-  scheduled: { label: 'Đã lên lịch', tone: 'info' },
-  pending: { label: 'Chờ duyệt', tone: 'warning' },
-  failed: { label: 'Đăng lỗi', tone: 'danger' },
-  draft: { label: 'Nháp', tone: 'neutral' },
-  published: { label: 'Đã đăng', tone: 'success' },
-}
+const STATUS_TONE: Record<StatusTone, 'info' | 'danger' | 'neutral' | 'success'> = { info: 'info', danger: 'danger', muted: 'neutral', success: 'success' }
+/** Tab "Lịch đăng" (Story 6.5): bài của trang trong 6 tuần tới (từ đầu hôm nay, giờ VN). */
+const UPCOMING_DAYS = 42
 
-const WEEKDAYS = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7']
+const WEEKDAYS = ['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN']
 
 /** Chuỗi tương tác 30 ngày ước tính cho một trang: tỉ lệ theo người theo dõi trong cùng nền tảng. */
 function pageSeries(page: Page) {
@@ -86,7 +84,14 @@ function PageDetailView({ page }: { page: Page }) {
     notify(`Đã kết nối lại ${page.name}`)
   }
 
-  const upcoming = posts.filter((p) => p.pageIds.includes(page.id) && p.status !== 'published').sort((a, b) => `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`))
+  // Story 6.5: bài sắp đăng của trang đọc từ Lịch nội dung (`scope=page:<id>`); bài nhiều trang trả kèm target của trang
+  // khác → "Đăng cùng". Khoảng cố định theo ngày (khoá query không đổi mỗi lần vẽ).
+  const [range] = useState(() => {
+    const today = todayKey()
+    return { from: vnToIso(today, '00:00')!, to: vnToIso(addDays(today, UPCOMING_DAYS), '00:00')! }
+  })
+  const calendar = useCalendar({ kind: 'page', id: page.id }, range)
+  const upcoming = useMemo(() => (calendar.data?.items ?? []).filter((it) => it.pageId === page.id && it.status !== 'published'), [calendar.data, page.id])
   const published = posts.filter((p) => p.pageIds.includes(page.id) && p.status === 'published')
 
   return (
@@ -166,7 +171,7 @@ function PageDetailView({ page }: { page: Page }) {
         <Card>
           <CardHeader
             title="Bài sắp đăng"
-            subtitle={`${upcoming.length} bài cho trang này`}
+            subtitle={`${upcoming.length} bài cho trang này trong ${UPCOMING_DAYS / 7} tuần tới`}
             action={
               <div className="flex gap-2">
                 <Link to="/lich" className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border px-3 text-[13px] font-medium hover:bg-slate-50">
@@ -184,24 +189,29 @@ function PageDetailView({ page }: { page: Page }) {
             </EmptyState>
           ) : (
             <ul className="divide-y divide-border">
-              {upcoming.map((p) => {
-                const d = new Date(`${p.date}T00:00:00`)
-                const st = POST_STATUS[p.status]
-                const others = p.pageIds.filter((x) => x !== page.id).map((x) => pages.find((pg) => pg.id === x)).filter((x): x is Page => !!x)
+              {upcoming.map((it) => {
+                const { date, time } = isoToVnInput(it.scheduledAt)
+                const others = (calendar.data?.items ?? [])
+                  .filter((x) => x.postId === it.postId && x.pageId !== page.id)
+                  .map((x) => pages.find((pg) => pg.id === x.pageId))
+                  .filter((x): x is Page => !!x)
                 return (
-                  <li key={p.id} className="flex items-center gap-4 px-4 py-3">
+                  <li key={it.id} className="flex items-center gap-4 px-4 py-3">
                     <div className="w-12 shrink-0 text-center">
-                      <div className="text-xs text-muted-foreground">{WEEKDAYS[d.getDay()]}</div>
-                      <div className="text-lg leading-tight font-bold">{d.getDate()}</div>
-                      <div className="text-xs text-muted-foreground">Th{d.getMonth() + 1}</div>
+                      <div className="text-xs text-muted-foreground">{WEEKDAYS[weekdayIndex(date)]}</div>
+                      <div className="text-lg leading-tight font-bold">{Number(date.slice(8, 10))}</div>
+                      <div className="text-xs text-muted-foreground">Th{Number(date.slice(5, 7))}</div>
                     </div>
-                    <img src={p.image} alt="" className="size-14 shrink-0 rounded-md border border-border object-cover" />
+                    {it.thumbnailUrl ? (
+                      <img src={it.thumbnailUrl} alt="" className="size-14 shrink-0 rounded-md border border-border object-cover" />
+                    ) : (
+                      <div className="size-14 shrink-0 rounded-md border border-dashed border-border bg-slate-50" />
+                    )}
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
-                        <span className="truncate font-medium">{p.title}</span>
-                        {p.ai && <AiBadge />}
+                        <span className="truncate font-medium">{groupTitle(it)}</span>
+                        {it.ai && <AiBadge />}
                       </div>
-                      <p className="mt-0.5 truncate text-[13px] text-muted-foreground">{p.caption}</p>
                       {others.length > 0 && (
                         <div className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
                           Đăng cùng:
@@ -211,9 +221,9 @@ function PageDetailView({ page }: { page: Page }) {
                         </div>
                       )}
                     </div>
-                    <div className="tabular w-14 shrink-0 text-right text-sm font-medium">{p.time}</div>
+                    <div className="tabular w-14 shrink-0 text-right text-sm font-medium">{time}</div>
                     <div className="w-28 shrink-0 text-right">
-                      <Chip tone={st.tone}>{st.label}</Chip>
+                      <Chip tone={STATUS_TONE[CALENDAR_STATUS_TONE[it.status]]}>{CALENDAR_STATUS_LABEL[it.status]}</Chip>
                     </div>
                   </li>
                 )

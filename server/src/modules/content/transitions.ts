@@ -1,5 +1,7 @@
 // Chuyển trạng thái `post_targets` do chủ shop bấm (Story 6.4, AD-13): lên lịch / đăng ngay (`draft → scheduled`), đổi
-// giờ (`scheduled → scheduled`), bỏ lịch (`scheduled → draft`), đăng lại (`failed → scheduled`).
+// giờ (`scheduled → scheduled` — cả kéo thả trên Lịch nội dung, Story 6.5), bỏ lịch (`scheduled → draft`), đăng lại
+// (`failed → scheduled`), xoá (Story 6.5: mọi trạng thái trước `publishing` và `failed` → `cancelled` + `cancel_reason`,
+// phát `post_target.cancelled`).
 // - `transitionTarget`: MỘT target, khoá lạc quan `version`. Mọi chuyển tới `scheduled` gọi `assertPublishable` và kiểm
 //   giới hạn đăng/24h của nền tảng, rồi enqueue `publish.target {targetId, scheduleVersion}` `startAfter=scheduled_at`
 //   cùng transaction (AD-2). `schedule_version` tăng mỗi lần vào/rời `scheduled` hoặc đổi giờ — job cũ thấy lệch rồi bỏ
@@ -7,10 +9,19 @@
 // - `transitionPostTargets`: nhiều target của một bài, tất cả hoặc không (Soạn bài "Lên lịch" cho mọi trang).
 // Phần job (`scheduled → publishing → published|failed`) ở `publish.ts`, cũng là `UPDATE` có điều kiện trạng thái.
 // Không gọi Meta ở đây.
-import { PLATFORM_RULES, SCHEDULE_MAX_AHEAD_MS, type ParsedTransitionTargetsRequest, type PostDto, type PostTargetStatus, type TargetAction } from '@ottm/shared'
+import {
+  PLATFORM_RULES,
+  SCHEDULE_MAX_AHEAD_MS,
+  type CancelReason,
+  type ParsedTransitionTargetsRequest,
+  type PostDto,
+  type PostTargetStatus,
+  type TargetAction,
+} from '@ottm/shared'
 import { and, asc, count, eq, inArray, ne, sql } from 'drizzle-orm'
 import { bossDbFor, type DbExecutor } from '../../platform/db/index.ts'
 import { AppError } from '../../platform/errors/index.ts'
+import type { EventPublisher } from '../../platform/events/index.ts'
 import type { JobSender } from '../../platform/jobs/index.ts'
 import { getPage } from '../pages/index.ts'
 import { getPost } from './posts.ts'
@@ -19,24 +30,44 @@ import { postTargets, posts } from './schema.ts'
 
 export interface TransitionDeps {
   jobs: JobSender
+  /** Phát `post_target.cancelled` khi xoá (Story 6.5). */
+  events: EventPublisher
   now?: () => Date
 }
 
-/** Hành động + thời điểm: `'now'` = đăng ngay (giờ máy chủ); giờ cụ thể phải ở tương lai. */
-export type TargetTransition = { action: Exclude<TargetAction, 'unschedule'>; at: Date | 'now' } | { action: 'unschedule' }
+/** Hành động + thời điểm: `'now'` = đăng ngay (giờ máy chủ); giờ cụ thể phải ở tương lai. Xoá kèm lý do (AD-13). */
+export type TargetTransition =
+  | { action: Exclude<TargetAction, 'unschedule' | 'cancel'>; at: Date | 'now' }
+  | { action: 'unschedule' }
+  | { action: 'cancel'; reason: CancelReason }
 
 /** Trạng thái nguồn hợp lệ của từng hành động (bảng AD-13). */
-const FROM: Record<TargetAction, PostTargetStatus> = {
-  schedule: 'draft',
-  reschedule: 'scheduled',
-  unschedule: 'scheduled',
-  retry: 'failed',
+const FROM: Record<TargetAction, readonly PostTargetStatus[]> = {
+  schedule: ['draft'],
+  reschedule: ['scheduled'],
+  unschedule: ['scheduled'],
+  retry: ['failed'],
+  // "Mọi trạng thái trước `publishing`" + bài lỗi (chưa lên trang — xoá khỏi lịch).
+  cancel: ['planned', 'draft', 'pending_approval', 'scheduled', 'failed'],
 }
+
+/** Hành động đưa target tới `scheduled` (qua luật nền tảng + giới hạn/24h). */
+const TO_SCHEDULED: readonly TargetAction[] = ['schedule', 'reschedule', 'retry']
 
 const DAY_MS = 24 * 60 * 60_000
 
 /** Trạng thái được tính vào giới hạn đăng/24h: đã lên lịch, đang đăng, đã đăng. */
 const COUNTED: readonly PostTargetStatus[] = ['scheduled', 'publishing', 'published']
+
+async function dailyLimitOf(tx: DbExecutor, pageId: string): Promise<number | null> {
+  const page = await getPage(tx, pageId)
+  return page ? PLATFORM_RULES[page.platform].dailyPublishMax : null
+}
+
+/** Khoá advisory theo trang tới hết transaction (lấy lại trong cùng transaction không chờ). */
+async function lockDailyLimit(tx: DbExecutor, pageId: string): Promise<void> {
+  await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`publish_limit:${pageId}`}, 0))`)
+}
 
 /**
  * Giới hạn đăng/24h của nền tảng (`PLATFORM_RULES.dailyPublishMax`): đếm bài của trang có mốc (`published_at`, chưa
@@ -44,10 +75,9 @@ const COUNTED: readonly PostTargetStatus[] = ['scheduled', 'publishing', 'publis
  * advisory theo trang để hai lần lên lịch song song không cùng lọt.
  */
 async function assertDailyLimit(tx: DbExecutor, target: { id: string; pageId: string }, at: Date): Promise<void> {
-  const page = await getPage(tx, target.pageId)
-  const max = page ? PLATFORM_RULES[page.platform].dailyPublishMax : null
+  const max = await dailyLimitOf(tx, target.pageId)
   if (max === null) return
-  await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`publish_limit:${target.pageId}`}, 0))`)
+  await lockDailyLimit(tx, target.pageId)
   const mark = sql`coalesce(${postTargets.publishedAt}, ${postTargets.scheduledAt})`
   const [row] = await tx
     .select({ n: count() })
@@ -88,11 +118,29 @@ export async function transitionTarget(
     .where(eq(postTargets.id, targetId))
     .for('update')
   if (!target) throw new AppError('NOT_FOUND', 404, { message: 'Đích của bài không tồn tại', details: { targetId } })
-  if (target.version !== expectedVersion || target.status !== FROM[transition.action]) {
+  if (target.version !== expectedVersion || !FROM[transition.action].includes(target.status as PostTargetStatus)) {
     throw new AppError('VERSION_CONFLICT', 409, {
       message: 'Trạng thái bài vừa đổi',
       details: { targetId, status: target.status, version: target.version },
     })
+  }
+
+  if (transition.action === 'cancel') {
+    const [row] = await tx
+      .update(postTargets)
+      .set({
+        status: 'cancelled' satisfies PostTargetStatus,
+        cancelReason: transition.reason,
+        errorCode: null,
+        // Rời `scheduled` → job đang chờ thấy lệch rồi bỏ qua.
+        ...(target.status === 'scheduled' ? { scheduleVersion: sql`${postTargets.scheduleVersion} + 1` } : {}),
+        version: sql`${postTargets.version} + 1`,
+        updatedAt: sql`now()`,
+      })
+      .where(eq(postTargets.id, targetId))
+      .returning({ version: postTargets.version })
+    await deps.events.publishEvent(tx, 'post_target.cancelled', { id: targetId, pageId: target.pageId, campaignId: null, version: row!.version })
+    return
   }
 
   if (transition.action === 'unschedule') {
@@ -139,6 +187,8 @@ export async function transitionTarget(
 /**
  * Một hành động cho nhiều target của bài `postId` (`POST /posts/:id/targets/transition`), tất cả hoặc không. Khoá dòng
  * `posts` rồi các target theo id (cùng thứ tự với `updateDraftPost` — không deadlock). Target không thuộc bài → 404.
+ * Hành động tới `scheduled`: lấy trước khoá giới hạn/24h của mọi trang có giới hạn theo `pageId` tăng dần — hai request
+ * chạm cùng các trang theo thứ tự body ngược nhau không deadlock (khoá xact lấy lại trong vòng lặp không chờ).
  */
 export async function transitionPostTargets(
   tx: DbExecutor,
@@ -150,7 +200,7 @@ export async function transitionPostTargets(
   if (!post) throw new AppError('NOT_FOUND', 404, { message: 'Bài không tồn tại', details: { postId } })
   const ids = input.targets.map((t) => t.id)
   const owned = await tx
-    .select({ id: postTargets.id })
+    .select({ id: postTargets.id, pageId: postTargets.pageId })
     .from(postTargets)
     .where(and(eq(postTargets.postId, postId), inArray(postTargets.id, ids)))
     .orderBy(asc(postTargets.id))
@@ -159,10 +209,18 @@ export async function transitionPostTargets(
   const stranger = ids.find((id) => !ownedIds.has(id))
   if (stranger) throw new AppError('NOT_FOUND', 404, { message: 'Đích không thuộc bài này', details: { postId, targetId: stranger } })
 
+  if (TO_SCHEDULED.includes(input.action)) {
+    for (const pageId of [...new Set(owned.map((t) => t.pageId))].sort()) {
+      if ((await dailyLimitOf(tx, pageId)) !== null) await lockDailyLimit(tx, pageId)
+    }
+  }
+
   const transition: TargetTransition =
     input.action === 'unschedule'
       ? { action: 'unschedule' }
-      : { action: input.action, at: input.scheduledAt ? new Date(input.scheduledAt) : 'now' }
+      : input.action === 'cancel'
+        ? { action: 'cancel', reason: 'USER_DELETED' }
+        : { action: input.action, at: input.scheduledAt ? new Date(input.scheduledAt) : 'now' }
   // "Đăng ngay": mọi target cùng một mốc.
   const now = deps.now?.() ?? new Date()
   const fixed = { ...deps, now: () => now }

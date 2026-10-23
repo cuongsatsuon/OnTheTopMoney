@@ -1,0 +1,2 @@
+ALTER TABLE "post_targets" ADD COLUMN "ai_caption" boolean DEFAULT false NOT NULL;--> statement-breakpoint
+ALTER TABLE "post_targets" ADD CONSTRAINT "post_targets_cancelled_reason_check" CHECK (("post_targets"."status" = 'cancelled') = ("post_targets"."cancel_reason" is not null));

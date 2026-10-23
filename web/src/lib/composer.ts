@@ -166,13 +166,13 @@ export const clearImage = (drafts: Drafts, pageId: string): Drafts => ({ ...draf
 
 /* ---------- Lưu / nạp nháp ---------- */
 
-/** Body lưu nháp: đúng thứ tự tab; ý tưởng trống → `null`. */
+/** Body lưu nháp: đúng thứ tự tab; ý tưởng trống → `null`; `aiCaption` theo nhãn "AI tạo" của tab (Story 6.5). */
 export function buildSaveBody(topic: string, targets: readonly Pick<PageDto, 'id'>[], drafts: Drafts): SavePostRequest {
   return {
     topic: topic.trim() || null,
     targets: targets.map((p) => {
       const d = draftOf(drafts, p.id)
-      return { pageId: p.id, caption: d.caption, mediaIds: [...d.mediaIds] }
+      return { pageId: p.id, caption: d.caption, mediaIds: [...d.mediaIds], aiCaption: d.ai }
     }),
   }
 }
@@ -193,7 +193,8 @@ export function draftFromPost(post: PostDto, knownPageIds: ReadonlySet<string>):
   for (const t of post.targets) {
     if (!knownPageIds.has(t.pageId)) continue
     selected.add(t.pageId)
-    drafts[t.pageId] = { caption: t.caption, mediaIds: t.media.map((m) => m.id), ai: false, edited: false }
+    // Story 6.5: nhãn "AI tạo" lưu ở server; không biết đã sửa lại hay chưa → không gắn "Đã sửa".
+    drafts[t.pageId] = { caption: t.caption, mediaIds: t.media.map((m) => m.id), ai: t.aiCaption, edited: false }
     for (const m of t.media) if (!pool.has(m.id)) pool.set(m.id, m)
   }
   return { topic: post.topic ?? '', selected, drafts, pool: [...pool.values()] }

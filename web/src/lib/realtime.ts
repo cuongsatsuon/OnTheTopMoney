@@ -42,6 +42,7 @@ export function entityMatches(root: unknown, entity: string): boolean {
  *   (sửa hồ sơ, gộp khách `contact.merged`) → cả tin `['messages', …]` (tên người viết trong luồng bình luận).
  * - Story 4.10: `page` (kết nối lại đổi tên, gỡ), `group` (xoá nhóm), `contact` → kết quả ⌘K `['search', …]`.
  * - Story 6.4: `post_target` (`post_target.published|failed`) → bài `['posts', …]`.
+ *   Story 6.5: Lịch nội dung `['post_targets', …]` khớp chính thực thể (cả `post_target.cancelled`).
  * - Story 5.7: `page`, `openai_key`, `settings`, `message` → trạng thái Màn chào `['onboarding']` (bước xong, tin AI đã
  *   gửi); `message` → sức khoẻ webhook `['webhooks', …]` ("Nhận tin gần nhất: vừa xong" ngay khi tin về, không chờ
  *   lần hỏi lại mỗi phút).

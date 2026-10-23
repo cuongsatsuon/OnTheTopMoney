@@ -2,12 +2,12 @@
 // `post_target_media`. Chỉ `content` ghi; module khác đi qua `content/index.ts`.
 // - Một bài thủ công = 1 `posts` + n `post_targets` (mỗi trang một đích). Caption nằm ở target (giá trị hiệu lực của
 //   trang đó). Cột lịch/lỗi (`scheduled_at`, `schedule_version`, `error_code`, `cancel_reason`) do Story 6.4/6.5 dùng;
-//   Story 6.4 thêm cột đăng (`publishing_at`, `published_at`, `PublishedRef`).
+//   Story 6.4 thêm cột đăng (`publishing_at`, `published_at`, `PublishedRef`); Story 6.5 thêm `ai_caption`.
 // - `media_assets` chỉ chứa ảnh bài (không logo, không đính kèm của khách); ảnh gắn vào target qua `post_target_media`.
 // - FK tới `pages`/`posts` `on delete cascade`: trang chỉ bị xoá cứng khi xoá dữ liệu theo yêu cầu (gỡ trang là soft-delete).
 import { CANCEL_REASONS, IMAGE_ERROR_CODES, MEDIA_ASSET_SOURCES, MEDIA_ASSET_STATUSES, POST_SOURCES, POST_TARGET_STATUSES } from '@ottm/shared'
 import { sql } from 'drizzle-orm'
-import { check, index, integer, pgTable, primaryKey, text, timestamp, unique, uuid } from 'drizzle-orm/pg-core'
+import { boolean, check, index, integer, pgTable, primaryKey, text, timestamp, unique, uuid } from 'drizzle-orm/pg-core'
 import { pagesTable } from '../pages/index.ts'
 
 const inList = (xs: readonly string[]) => sql.raw(xs.map((s) => `'${s}'`).join(', '))
@@ -42,6 +42,8 @@ export const postTargets = pgTable(
     status: text('status').notNull(),
     /** Caption của trang này. Không log. */
     caption: text('caption').notNull().default(''),
+    /** Caption do AI viết (Story 6.5, nhãn "AI tạo" — UX-DR10); web gửi theo nhãn của tab Soạn bài. */
+    aiCaption: boolean('ai_caption').notNull().default(false),
     /** Khoá lạc quan (AD-13): tăng mỗi lần target đổi. */
     version: integer('version').notNull().default(0),
     /** Tăng mỗi lần đổi `scheduled_at` hoặc vào/rời `scheduled` (Story 6.4). */
@@ -70,6 +72,8 @@ export const postTargets = pgTable(
     check('post_targets_error_code_check', sql`(${t.status} = 'failed') = (${t.errorCode} is not null)`),
     check('post_targets_scheduled_at_check', sql`${t.status} <> 'scheduled' or ${t.scheduledAt} is not null`),
     check('post_targets_cancel_reason_check', sql`${t.cancelReason} is null or ${t.cancelReason} in (${inList(CANCEL_REASONS)})`),
+    // Story 6.5: huỷ luôn kèm lý do, và chỉ target `cancelled` có lý do.
+    check('post_targets_cancelled_reason_check', sql`(${t.status} = 'cancelled') = (${t.cancelReason} is not null)`),
   ],
 )
 

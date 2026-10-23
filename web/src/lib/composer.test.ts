@@ -154,8 +154,8 @@ describe('lưu / nạp nháp', () => {
     expect(body).toEqual({
       topic: null,
       targets: [
-        { pageId: FB.id, caption: 'fb', mediaIds: [id(50)] },
-        { pageId: SOLO.id, caption: '', mediaIds: [] },
+        { pageId: FB.id, caption: 'fb', mediaIds: [id(50)], aiCaption: false },
+        { pageId: SOLO.id, caption: '', mediaIds: [], aiCaption: false },
       ],
     })
     expect(SavePostRequest.safeParse(body).success).toBe(true)
@@ -163,7 +163,7 @@ describe('lưu / nạp nháp', () => {
   })
 
   it('nạp PostDto → state; bỏ target của trang không còn; kho ảnh không trùng', () => {
-    const t = (pageId: string, caption: string, media: MediaAssetDto[]) => ({ id: id(70 + caption.length), pageId, status: 'draft' as const, caption, media, version: 0, scheduledAt: null, errorCode: null, publishedAt: null, permalink: null })
+    const t = (pageId: string, caption: string, media: MediaAssetDto[]) => ({ id: id(70 + caption.length), pageId, status: 'draft' as const, caption, aiCaption: caption === 'fb', media, version: 0, scheduledAt: null, errorCode: null, publishedAt: null, permalink: null })
     const post: PostDto = {
       id: id(60),
       source: 'manual',
@@ -176,6 +176,8 @@ describe('lưu / nạp nháp', () => {
     expect(loaded.topic).toBe('')
     expect([...loaded.selected]).toEqual([FB.id, IG.id])
     expect(loaded.drafts[IG.id]).toEqual(draft('ig', [id(50)]))
+    // Story 6.5: nhãn "AI tạo" của caption giữ khi mở lại nháp.
+    expect(loaded.drafts[FB.id]).toEqual({ ...draft('fb', [id(50)]), ai: true })
     expect(loaded.pool.map((m) => m.id)).toEqual([id(50)])
   })
 })
