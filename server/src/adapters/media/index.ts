@@ -40,6 +40,17 @@ export const PRIVATE_FILE_MIMES = [
   'application/pdf',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   'text/plain',
+  // Đính kèm của khách (Story 4.3, AD-11): sticker/ảnh động, voice, video. Lưu `raw` (chỉ server tải về).
+  'image/gif',
+  'audio/mpeg',
+  'audio/mp4',
+  'audio/aac',
+  'audio/ogg',
+  'audio/wav',
+  'audio/webm',
+  'video/mp4',
+  'video/quicktime',
+  'video/webm',
 ] as const
 export type PrivateFileMime = (typeof PRIVATE_FILE_MIMES)[number]
 

@@ -10,6 +10,15 @@ import { QueryCache, QueryClient, MutationCache } from '@tanstack/react-query'
 export const API_ORIGIN = (import.meta.env.VITE_API_ORIGIN ?? '').trim().replace(/\/+$/, '')
 export const API_BASE = `${API_ORIGIN}/api/v1`
 
+/**
+ * URL tuyệt đối tới một tài nguyên api dùng trực tiếp trong thẻ HTML (`<img src>`, `<audio src>`, link tải) — theo
+ * `API_ORIGIN` nên đúng cả khi web và api khác origin (chế độ tách, spec 1.3c). Đường tương đối kiểu `/api/v1/...`
+ * sẽ rơi vào SPA của web ở Hostinger và nhận `index.html`.
+ */
+export function apiUrl(path: string): string {
+  return `${API_BASE}${path.startsWith('/') ? path : `/${path}`}`
+}
+
 export class ApiError extends Error {
   readonly code: ErrorCode
   /** HTTP status; 0 khi không tới được server. */

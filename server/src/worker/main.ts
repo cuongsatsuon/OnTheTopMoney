@@ -6,7 +6,9 @@ import { assertBossDbSupported, createDb, newId } from '../platform/db/index.ts'
 import { createEventPublisher, parseEventEnvelope } from '../platform/events/index.ts'
 import { QUEUES, createBoss, createJobSender, ensureQueues, isCriticalQueue, startWorkers } from '../platform/jobs/index.ts'
 import { createSecretCipher } from '../adapters/crypto/index.ts'
+import { createMediaStores } from '../adapters/media/index.ts'
 import { gcReservations, handleAiEvent } from '../modules/ai/index.ts'
+import { handleTriageEvent } from '../modules/autoreply/index.ts'
 import {
   cleanupExpiredOAuth,
   createMetaClients,
@@ -16,6 +18,7 @@ import {
   runTokenCheck,
   subscribePage,
 } from '../modules/connections/index.ts'
+import { handleFetchAttachmentJob, handleFetchProfileJob } from '../modules/inbox/index.ts'
 import { handleEvent } from '../modules/notifications/index.ts'
 import { handleProfilesEvent } from '../modules/profiles/index.ts'
 import { handleRouteJob, markEventFailed, routeWebhookEvent, runHealthCheck } from '../modules/webhooks/index.ts'
@@ -37,6 +40,9 @@ const cipher =
 // client Graph để đăng ký webhook trang (`connections.subscribe_page`, Story 4.2).
 const { graph, threads } = createMetaClients({ config, db: dbHandle.db, log: logger.child({ component: 'meta' }) })
 const jobs = createJobSender(boss)
+// Kho file riêng tư (AD-14) cho đính kèm của khách (Story 4.3); thiếu `CLOUDINARY_URL` → đính kèm `failed`
+// `MEDIA_NOT_CONFIGURED`, tin vẫn vào Hộp thư.
+const media = createMediaStores({ CLOUDINARY_URL: config.CLOUDINARY_URL, CLOUDINARY_FOLDER: config.CLOUDINARY_FOLDER })
 
 let heartbeatTimer: NodeJS.Timeout | undefined
 let closing = false
@@ -98,13 +104,13 @@ try {
         })
         logger.info({ refreshed, expiring }, 'connections: kiểm hạn token xong')
       },
-      // Module `webhooks` (Story 4.1, AD-4): chuẩn hoá + đặt `status` cho một mục. Logic nhánh catch (lần thử
+      // Module `webhooks` (Story 4.1, AD-4): chuẩn hoá + đặt `status` cho một mục; Story 4.3: tin DM → `inbox.ingest`. Logic nhánh catch (lần thử
       // cuối → ghi `failed`) nằm trong `handleRouteJob` (đã unit-test). startWorkers chạy includeMetadata nên
       // job có retryCount/retryLimit lúc chạy.
       'webhook.route': (job) =>
         handleRouteJob(
           {
-            route: (data) => routeWebhookEvent({ db: dbHandle.db }, data),
+            route: (data) => routeWebhookEvent({ db: dbHandle.db, events, jobs }, data),
             markFailed: (eventId, errorCode) => markEventFailed(dbHandle.db, eventId, errorCode),
           },
           job as JobWithMetadata<unknown>,
@@ -124,6 +130,24 @@ try {
           },
           job as JobWithMetadata<unknown>,
         ),
+      // Story 4.3: tin khách → giải `triage` ngay (trước Epic 5: `human` với `AI_OFF`).
+      'autoreply.triage': async (job) => {
+        const result = await handleTriageEvent({ db: dbHandle.db, events }, job.data)
+        logger.debug({ jobId: job.id, result }, 'autoreply.triage')
+      },
+      // Story 4.3: tải đính kèm của khách về kho riêng tư. Lỗi tạm ném lại; lần thử cuối ghi `failed`.
+      'inbox.fetch_attachment': async (job) => {
+        const result = await handleFetchAttachmentJob({ db: dbHandle.db, events, media }, job as JobWithMetadata<unknown>)
+        logger.debug({ jobId: job.id, result }, 'inbox.fetch_attachment')
+      },
+      // Story 4.3: tên khách cho định danh mới (không ghi đè tên đã có).
+      'inbox.fetch_profile': async (job) => {
+        const result = await handleFetchProfileJob(
+          { db: dbHandle.db, events, cipher, graph, log: logger.child({ component: 'fetch_profile' }) },
+          job as JobWithMetadata<unknown>,
+        )
+        logger.debug({ jobId: job.id, result }, 'inbox.fetch_profile')
+      },
       // Story 4.2: sức khoẻ webhook mỗi 5 phút; phát `webhook.stalled|recovered` khi đổi trạng thái.
       'webhooks.health': async () => {
         const results = await runHealthCheck({ db: dbHandle.db, events })

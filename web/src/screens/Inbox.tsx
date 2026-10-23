@@ -1,263 +1,127 @@
-import { CheckCheck, Hand, ImagePlus, MessageSquareText, Phone, Plus, Search, Send, Sparkles, Square, TriangleAlert, UserRound, X } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from 'react'
+// Hộp thư `/hop-thu` (Story 4.3): danh sách hội thoại, khung chat, panel khách đọc API thật. Tin mới tới → hint
+// realtime làm cũ `['conversations', …]` + `['messages', …]` → refetch (≤3 giây); mất kết nối → dải "Đang kết nối
+// lại…" của AppShell, nối lại thì tải bù (lib/realtime.ts).
+// Thao tác của story sau (Tiếp quản, Đánh dấu xong, bật AI — 4.6; gửi tin — 4.7; Gợi ý bằng AI — 4.8; sửa panel
+// khách — 4.9) hiện nhưng khoá, có gợi ý "Sắp có": không giả lập thao tác trên khách thật.
+import type { AttachmentDto, ConversationDto, MessageDto, Platform } from '@ottm/shared'
+import { CheckCheck, FileText, Hand, MessageSquareText, Paperclip, Search, Sparkles, TriangleAlert, UserRound } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { AiLockHint } from '../components/AiLockHint'
-import {
-  Avatar,
-  Button,
-  Chip,
-  Drawer,
-  EmptyState,
-  PageAvatar,
-  PlatformIcon,
-  Select,
-  Switch,
-  Tabs,
-  Textarea,
-  cn,
-} from '../components/ui'
-import {
-  contactById,
-  conversations as seedConversations,
-  pageById,
-  type Contact,
-  type Conversation,
-  type Message,
-  type Stage,
-} from '../data/mock'
+import { Skeleton } from '../components/Skeleton'
+import { Avatar, Button, Chip, Drawer, EmptyState, PageAvatar, PlatformIcon, Tabs, cn } from '../components/ui'
+import { pages as pageStore, type Page } from '../data/mock'
 import { useApp } from '../lib/app-context'
+import { errorMessageOf } from '../lib/error-messages'
+import {
+  ATTACHMENT_ERROR_TEXT,
+  CHANNEL_LABEL,
+  REASON_TEXT,
+  attachmentUrl,
+  bubbleKind,
+  contactLabel,
+  countNeedsAttention,
+  durationLabel,
+  flattenMessages,
+  listTimeLabel,
+  matchesTab,
+  messageTimeLabel,
+  previewText,
+  useConversation,
+  useConversations,
+  useMessages,
+  type InboxTab,
+} from '../lib/inbox'
 import { WEBHOOK_PRODUCT_LABEL, WEBHOOK_SETTINGS_PATH, stalledProducts, useWebhookHealth } from '../lib/webhooks'
 
-/* ---------- Dữ liệu cục bộ ---------- */
+/** Gợi ý trên nút của story sau. */
+const SOON = 'Sắp có — tạm thời trả lời khách trên Messenger/Instagram'
 
-type InboxTab = 'all' | 'needs' | 'ai' | 'done'
-
-const STAGES: Stage[] = ['Mới', 'Đang tư vấn', 'Chốt đơn', 'Khách quen', 'Khiếu nại']
-
-const QUICK_REPLIES = ['Dạ shop kiểm tra và báo lại ngay ạ', 'Cho shop xin SĐT và địa chỉ nhận hàng ạ', 'Dạ sản phẩm còn hàng ạ', 'Shop cảm ơn bạn nhiều ạ 💕']
-
-/** Câu gợi ý "Gợi ý bằng AI" theo từng hội thoại mẫu. */
-const AI_SUGGESTIONS: Record<string, string> = {
-  cv1: 'Dạ chị Hà ơi, serum Vitamin C 30ml giá 450.000đ ạ. Tuần này shop tặng kèm mini kem chống nắng cho đơn từ 400k. Chị cho shop xin SĐT và địa chỉ để lên đơn luôn nha!',
-  cv2: 'Dạ shop xin lỗi anh Long vì nồi bị lỗi nút nguồn ạ. Anh gửi giúp shop ảnh hoặc video lỗi kèm mã đơn, shop sẽ đổi nồi mới và cho shipper qua lấy máy cũ miễn phí trong 1–2 ngày ạ.',
-  cv3: 'Dạ shop cảm ơn chị Giang ạ! Chị xác nhận giúp shop địa chỉ nhận hàng như lần trước nha, shop gửi 2 hộp kem chống nắng kèm freeship ạ.',
-  cv4: 'Dạ shop có giao Đà Nẵng anh nhé. Phí ship 30.000đ, nhận hàng sau 2–3 ngày ạ. Anh nhắn shop địa chỉ để shop báo phí chính xác nha.',
-  cv5: 'Dạ shop cảm ơn chị Châu nhiều ạ 💕 Lần tới chị ghé, shop gửi tặng chị voucher 10% dành cho khách thân thiết nha!',
-  cv6: 'Dạ áo len BST thu còn size M ạ. Bạn cho shop xin chiều cao và cân nặng để shop tư vấn size chuẩn nhất nha.',
-  cv7: 'Dạ nhà mình 4 người thì nồi 7L là vừa đẹp ạ, nướng được gà nguyên con 1,5kg. Cuối tuần này shop giảm 20%, anh muốn shop giữ hàng không ạ?',
-}
-const FALLBACK_SUGGESTION = 'Dạ shop cảm ơn bạn đã nhắn tin ạ. Shop kiểm tra và phản hồi bạn ngay nhé!'
-
-/** Lịch sử ngắn của khách trên các trang khác (không có hội thoại mở). */
-const OTHER_PAGE_HISTORY: Record<string, string> = {
-  'c1:p2': 'Hỏi kem chống nắng nâng tông · 3 ngày trước',
-  'c5:p1': 'Mua combo dưỡng da 3 bước · 2 tuần trước',
-  'c7:p4': 'Hỏi thời gian bảo hành · 5 ngày trước',
+const STAGE_LABEL: Record<ConversationDto['contact']['stage'], string> = {
+  new: 'Mới',
+  consulting: 'Đang tư vấn',
+  ordered: 'Chốt đơn',
+  loyal: 'Khách quen',
+  complaint: 'Khiếu nại',
 }
 
-const nowTime = () => new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })
+const AVATAR_COLORS = ['#FDE68A', '#BFDBFE', '#FBCFE8', '#C7D2FE', '#A7F3D0', '#FED7AA', '#FECACA', '#DDD6FE']
+/** Màu avatar ổn định theo id khách. */
+function avatarColor(id: string): string {
+  let h = 0
+  for (const ch of id) h = (h * 31 + ch.charCodeAt(0)) >>> 0
+  return AVATAR_COLORS[h % AVATAR_COLORS.length]!
+}
 
-const lastRealMessage = (c: Conversation) => [...c.messages].reverse().find((m) => m.from !== 'system')
+/** Trang trong kho (trang thật đã chép vào kho mẫu khi tải `/pages`); chưa tải xong → undefined. */
+const findPage = (id: string): Page | undefined => pageStore.find((p) => p.id === id)
 
-/** Cần bạn xử lý: AI đã chuyển cho bạn, hoặc bạn đã tiếp quản mà khách đang chờ trả lời. */
-const needsYou = (c: Conversation) => c.state === 'handoff' || (c.state === 'human' && lastRealMessage(c)?.from === 'customer')
-
-const matchesTab = (c: Conversation, tab: InboxTab) =>
-  tab === 'all' ? true : tab === 'needs' ? needsYou(c) : tab === 'ai' ? c.state === 'ai' : c.state === 'done'
-
-type ContactEdit = Pick<Contact, 'stage' | 'tags' | 'note'>
+/** Đồng hồ cho nhãn "x phút" (cập nhật mỗi 30 giây). */
+function useNow(intervalMs = 30_000): Date {
+  const [now, setNow] = useState(() => new Date())
+  useEffect(() => {
+    const t = window.setInterval(() => setNow(new Date()), intervalMs)
+    return () => window.clearInterval(t)
+  }, [intervalMs])
+  return now
+}
 
 /* ---------- Màn hình ---------- */
 
 export default function Inbox() {
-  const { inScope, notify, openAiKeySet, scopeLabel } = useApp()
+  const { scope, scopeLabel } = useApp()
   const [params, setParams] = useSearchParams()
-  const [convs, setConvs] = useState<Conversation[]>(() => seedConversations.map((c) => ({ ...c, messages: [...c.messages] })))
   const [tab, setTab] = useState<InboxTab>('all')
   const [query, setQuery] = useState('')
-  const [drafts, setDrafts] = useState<Record<string, string>>({})
-  const [attachments, setAttachments] = useState<Record<string, string>>({})
-  const [aiWriting, setAiWriting] = useState<string | null>(null)
-  const [aiTyping, setAiTyping] = useState<string | null>(null)
-  const [contactEdits, setContactEdits] = useState<Record<string, ContactEdit>>({})
   const [panelOpen, setPanelOpen] = useState(false)
-
-  const writeTimer = useRef<number | null>(null)
-  const typingTimer = useRef<number | null>(null)
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const fileRef = useRef<HTMLInputElement>(null)
+  const now = useNow()
   const rowRefs = useRef<Record<string, HTMLButtonElement | null>>({})
-  const endRef = useRef<HTMLDivElement>(null)
 
-  useEffect(
-    () => () => {
-      if (writeTimer.current) window.clearTimeout(writeTimer.current)
-      if (typingTimer.current) window.clearTimeout(typingTimer.current)
-    },
-    [],
-  )
-
-  const scoped = useMemo(() => convs.filter((c) => inScope([c.pageId])), [convs, inScope])
+  const convs = useConversations(scope)
+  const all = useMemo(() => convs.data?.pages.flatMap((p) => p.items) ?? [], [convs.data])
   const searched = useMemo(() => {
     const q = query.trim().toLowerCase()
-    if (!q) return scoped
-    return scoped.filter((c) => {
-      const contact = contactById(c.customerId)
-      return [contact.name, contact.phone, pageById(c.pageId).name, c.lastMessage].some((s) => s.toLowerCase().includes(q))
+    if (!q) return all
+    return all.filter((c) => {
+      const page = findPage(c.pageId)
+      return [contactLabel(c.contact, page?.platform), page?.name ?? '', previewText(c.preview)].some((s) => s.toLowerCase().includes(q))
     })
-  }, [scoped, query])
+  }, [all, query])
   const list = useMemo(() => searched.filter((c) => matchesTab(c, tab)), [searched, tab])
-  const needsCount = scoped.filter(needsYou).length
+  const needsCount = countNeedsAttention(all)
 
   const paramId = params.get('c')
-  const selected = convs.find((c) => c.id === paramId) ?? list[0] ?? null
+  const inList = all.find((c) => c.id === paramId)
+  const detail = useConversation(paramId && !inList ? paramId : null)
+  const selected: ConversationDto | null = inList ?? detail.data ?? list[0] ?? null
 
-  const select = useCallback(
-    (id: string) => {
-      setParams({ c: id }, { replace: true })
-      setConvs((cs) => cs.map((c) => (c.id === id && c.unread ? { ...c, unread: false } : c)))
-    },
-    [setParams],
-  )
-
-  // Mở bằng ?c= thì đánh dấu đã đọc.
-  useEffect(() => {
-    if (!selected?.unread) return
-    setConvs((cs) => cs.map((c) => (c.id === selected.id ? { ...c, unread: false } : c)))
-  }, [selected?.id, selected?.unread])
-
-  useEffect(() => {
-    endRef.current?.scrollIntoView({ block: 'end' })
-  }, [selected?.id, selected?.messages.length, aiTyping])
+  const select = useCallback((id: string) => setParams({ c: id }, { replace: true }), [setParams])
 
   useEffect(() => {
     if (selected) rowRefs.current[selected.id]?.scrollIntoView({ block: 'nearest' })
   }, [selected])
 
-  const update = useCallback((id: string, patch: (c: Conversation) => Partial<Conversation>) => {
-    setConvs((cs) => cs.map((c) => (c.id === id ? { ...c, ...patch(c) } : c)))
-  }, [])
-
-  const takeOver = useCallback(
-    (conv: Conversation) => {
-      if (!conv.aiEnabled && conv.state === 'human') return
-      if (aiTyping === conv.id && typingTimer.current) {
-        window.clearTimeout(typingTimer.current)
-        setAiTyping(null)
-      }
-      update(conv.id, () => ({ aiEnabled: false, state: 'human', waiting: undefined }))
-      notify(`Bạn đã tiếp quản hội thoại với ${contactById(conv.customerId).name}. AI tạm dừng ở hội thoại này.`)
-      setTimeout(() => textareaRef.current?.focus(), 0)
-    },
-    [aiTyping, notify, update],
-  )
-
-  const setAi = (conv: Conversation, on: boolean) => {
-    if (!on) return takeOver(conv)
-    if (!openAiKeySet) {
-      notify('Thêm khoá OpenAI ở Cài đặt để bật AI trả lời.')
-      return
-    }
-    update(conv.id, () => ({ aiEnabled: true, state: 'ai', waiting: undefined, handoffReason: undefined }))
-    notify('Đã bật lại AI cho hội thoại này.')
-    // Khách đang chờ → AI trả lời sau vài giây (chấm "đang gõ").
-    if (lastRealMessage(conv)?.from === 'customer') {
-      setAiTyping(conv.id)
-      typingTimer.current = window.setTimeout(() => {
-        const text = AI_SUGGESTIONS[conv.id] ?? FALLBACK_SUGGESTION
-        update(conv.id, (c) => ({
-          messages: [...c.messages, { id: `ai-${Date.now()}`, from: 'ai', text, time: nowTime() }],
-          lastMessage: text,
-          time: 'Vừa xong',
-        }))
-        setAiTyping(null)
-      }, 1800)
-    }
-  }
-
-  const markDone = (conv: Conversation) => {
-    update(conv.id, () => ({ state: 'done', waiting: undefined }))
-    notify('Đã chuyển hội thoại sang "Đã xong".')
-  }
-
-  const suggest = (conv: Conversation) => {
-    setAiWriting(conv.id)
-    writeTimer.current = window.setTimeout(() => {
-      setDrafts((d) => ({ ...d, [conv.id]: AI_SUGGESTIONS[conv.id] ?? FALLBACK_SUGGESTION }))
-      setAiWriting(null)
-    }, 1400)
-  }
-  const stopSuggest = () => {
-    if (writeTimer.current) window.clearTimeout(writeTimer.current)
-    setAiWriting(null)
-  }
-
-  const send = (conv: Conversation) => {
-    const text = (drafts[conv.id] ?? '').trim()
-    const file = attachments[conv.id]
-    if (!text && !file) return
-    const msgs: Message[] = []
-    if (file) msgs.push({ id: `img-${Date.now()}`, from: 'human', text: `📷 Ảnh: ${file}`, time: nowTime() })
-    if (text) msgs.push({ id: `h-${Date.now()}`, from: 'human', text, time: nowTime() })
-    update(conv.id, (c) => ({
-      messages: [...c.messages, ...msgs],
-      lastMessage: text || `Ảnh: ${file}`,
-      time: 'Vừa xong',
-      state: c.state === 'handoff' ? 'human' : c.state === 'done' ? 'human' : c.state,
-      waiting: undefined,
-    }))
-    setDrafts((d) => ({ ...d, [conv.id]: '' }))
-    setAttachments((a) => {
-      const next = { ...a }
-      delete next[conv.id]
-      return next
-    })
-  }
-
-  // Phím tắt: ↑/↓ chuyển hội thoại, T tiếp quản (khi không gõ trong ô nhập).
+  // Phím tắt: ↑/↓ chuyển hội thoại (khi không gõ trong ô nhập).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null
       if (el && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' || el.tagName === 'SELECT' || el.isContentEditable)) return
       if (e.metaKey || e.ctrlKey || e.altKey) return
       if (document.querySelector('[role="dialog"]')) return
-      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-        if (!list.length) return
-        e.preventDefault()
-        const idx = selected ? list.findIndex((c) => c.id === selected.id) : -1
-        const next = e.key === 'ArrowDown' ? Math.min(list.length - 1, idx + 1) : Math.max(0, idx === -1 ? 0 : idx - 1)
-        select(list[next].id)
-        rowRefs.current[list[next].id]?.focus()
-      } else if ((e.key === 't' || e.key === 'T') && selected) {
-        e.preventDefault()
-        takeOver(selected)
-      }
+      if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
+      if (!list.length) return
+      e.preventDefault()
+      const idx = selected ? list.findIndex((c) => c.id === selected.id) : -1
+      const next = e.key === 'ArrowDown' ? Math.min(list.length - 1, idx + 1) : Math.max(0, idx === -1 ? 0 : idx - 1)
+      select(list[next]!.id)
+      rowRefs.current[list[next]!.id]?.focus()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [list, selected, select, takeOver])
+  }, [list, selected, select])
 
-  const contact = selected ? contactById(selected.customerId) : null
-  const edit: ContactEdit | null = contact ? (contactEdits[contact.id] ?? { stage: contact.stage, tags: contact.tags, note: contact.note }) : null
-  const setEdit = (patch: Partial<ContactEdit>) => {
-    if (!contact || !edit) return
-    setContactEdits((m) => ({ ...m, [contact.id]: { ...edit, ...patch } }))
-  }
-
-  const panel =
-    selected && contact && edit ? (
-      <CustomerPanel
-        conv={selected}
-        contact={contact}
-        edit={edit}
-        onEdit={setEdit}
-        allConvs={convs}
-        onOpenConv={(id) => {
-          select(id)
-          setPanelOpen(false)
-        }}
-      />
-    ) : null
+  const page = selected ? findPage(selected.pageId) : undefined
+  const name = selected ? contactLabel(selected.contact, page?.platform) : ''
+  const panel = selected ? <CustomerPanel conv={selected} name={name} onOpenConv={(id) => (select(id), setPanelOpen(false))} all={all} /> : null
 
   return (
     <div className="flex h-[calc(100vh-56px)] min-h-0 bg-surface">
@@ -273,7 +137,7 @@ export default function Inbox() {
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Tìm khách, số điện thoại, trang…"
+              placeholder="Tìm khách, trang, nội dung…"
               aria-label="Tìm hội thoại"
               className="h-9 w-full rounded-sm border border-border bg-background pr-3 pl-9 text-sm focus:border-primary focus:ring-2 focus:ring-primary/15 focus:outline-none"
             />
@@ -292,95 +156,57 @@ export default function Inbox() {
         />
         <WebhookStalledBanner />
         <div className="scrollbar-thin flex-1 overflow-y-auto" role="listbox" aria-label="Hội thoại">
-          {list.length === 0 ? (
-            <EmptyState
-              icon={<CheckCheck size={22} />}
-              title={query ? 'Không có hội thoại khớp từ khoá' : tab === 'done' ? 'Chưa có hội thoại nào xong' : tab === 'ai' ? 'AI chưa trả lời hội thoại nào' : 'Không còn tin nhắn cần xử lý. AI đang trông giúp bạn.'}
-            >
+          {convs.isPending ? (
+            <ListSkeleton />
+          ) : convs.isError && all.length === 0 ? (
+            <EmptyState icon={<TriangleAlert size={22} />} title="Chưa tải được hội thoại" action={<Button size="sm" onClick={() => void convs.refetch()}>Thử lại</Button>}>
+              {errorMessageOf(convs.error)}
+            </EmptyState>
+          ) : list.length === 0 ? (
+            <EmptyState icon={<CheckCheck size={22} />} title={emptyTitle(tab, query, all.length)}>
               {query ? 'Thử từ khoá khác hoặc đổi tab.' : `Phạm vi: ${scopeLabel}`}
             </EmptyState>
           ) : (
-            list.map((c) => (
-              <ConversationRow
-                key={c.id}
-                conv={c}
-                active={selected?.id === c.id}
-                onClick={() => select(c.id)}
-                buttonRef={(el) => {
-                  rowRefs.current[c.id] = el
-                }}
-              />
-            ))
+            <>
+              {list.map((c) => (
+                <ConversationRow
+                  key={c.id}
+                  conv={c}
+                  now={now}
+                  active={selected?.id === c.id}
+                  onClick={() => select(c.id)}
+                  buttonRef={(el) => {
+                    rowRefs.current[c.id] = el
+                  }}
+                />
+              ))}
+              {convs.hasNextPage && (
+                <div className="p-3 text-center">
+                  <Button size="sm" variant="ghost" onClick={() => void convs.fetchNextPage()} disabled={convs.isFetchingNextPage}>
+                    {convs.isFetchingNextPage ? 'Đang tải…' : 'Xem thêm hội thoại'}
+                  </Button>
+                </div>
+              )}
+            </>
           )}
         </div>
         <div className="border-t border-border px-4 py-2 text-[11px] text-muted-foreground">
-          <Kbd>↑</Kbd> <Kbd>↓</Kbd> chuyển hội thoại · <Kbd>T</Kbd> tiếp quản · <Kbd>⌘↵</Kbd> gửi
+          <Kbd>↑</Kbd> <Kbd>↓</Kbd> chuyển hội thoại
         </div>
       </section>
 
       {/* ---- Khung chat ---- */}
       <section className="flex min-w-[480px] flex-1 flex-col bg-background" aria-label="Khung chat">
-        {selected && contact ? (
+        {selected ? (
           <>
-            <ChatHeader
-              conv={selected}
-              contactName={contact.name}
-              onToggleAi={(v) => setAi(selected, v)}
-              onTakeOver={() => takeOver(selected)}
-              onDone={() => markDone(selected)}
-              onOpenPanel={() => setPanelOpen(true)}
-              aiLocked={!openAiKeySet}
-            />
-            <div className="scrollbar-thin flex-1 overflow-y-auto px-6 py-5">
-              <div className="mx-auto max-w-3xl space-y-3">
-                {pageById(selected.pageId).platform === 'threads' && (
-                  <p className="text-center text-xs text-muted-foreground">
-                    Trang Threads chỉ nhận trả lời dưới bài đăng. Tin bạn gửi sẽ hiện công khai.
-                  </p>
-                )}
-                {selected.messages.map((m) => (
-                  <Bubble key={m.id} msg={m} contactName={contact.name} />
-                ))}
-                {aiTyping === selected.id && <TypingDots />}
-                <div ref={endRef} />
-              </div>
-            </div>
-            <Composer
-              value={drafts[selected.id] ?? ''}
-              onChange={(v) => setDrafts((d) => ({ ...d, [selected.id]: v }))}
-              onSend={() => send(selected)}
-              onSuggest={() => suggest(selected)}
-              onStop={stopSuggest}
-              writing={aiWriting === selected.id}
-              aiLocked={!openAiKeySet}
-              aiOn={selected.aiEnabled}
-              textareaRef={textareaRef}
-              attachment={attachments[selected.id]}
-              onAttach={() => fileRef.current?.click()}
-              onRemoveAttachment={() =>
-                setAttachments((a) => {
-                  const next = { ...a }
-                  delete next[selected.id]
-                  return next
-                })
-              }
-            />
-            <input
-              ref={fileRef}
-              type="file"
-              accept="image/*"
-              className="hidden"
-              onChange={(e) => {
-                const f = e.target.files?.[0]
-                if (f) setAttachments((a) => ({ ...a, [selected.id]: f.name }))
-                e.target.value = ''
-              }}
-            />
+            <ChatHeader conv={selected} name={name} page={page} now={now} onOpenPanel={() => setPanelOpen(true)} />
+            <ChatBody conv={selected} name={name} now={now} />
+            <ComposerSoon />
           </>
         ) : (
           <div className="flex flex-1 items-center justify-center">
             <EmptyState icon={<MessageSquareText size={22} />} title="Chọn một hội thoại để bắt đầu">
-              Tin nhắn từ mọi trang trong phạm vi đang chọn hiện ở cột bên trái.
+              Tin nhắn Messenger và Instagram của mọi trang trong phạm vi đang chọn hiện ở cột bên trái.
             </EmptyState>
           </div>
         )}
@@ -399,114 +225,129 @@ export default function Inbox() {
   )
 }
 
+function emptyTitle(tab: InboxTab, query: string, total: number): string {
+  if (query) return 'Không có hội thoại khớp từ khoá'
+  if (tab === 'needs') return 'Không còn tin nhắn cần xử lý. AI đang trông giúp bạn.'
+  if (tab === 'done') return 'Chưa có hội thoại nào xong'
+  if (tab === 'ai') return 'AI chưa trả lời hội thoại nào'
+  return total === 0 ? 'Chưa có tin nhắn nào' : 'Không có hội thoại'
+}
+
 /* ---------- Thành phần con ---------- */
 
 function Kbd({ children }: { children: ReactNode }) {
   return <kbd className="rounded border border-border bg-surface px-1 font-sans text-[10px]">{children}</kbd>
 }
 
-function CustomerAvatar({ name, color, pageId, size = 40 }: { name: string; color: string; pageId: string; size?: number }) {
+function ListSkeleton() {
+  return (
+    <div aria-busy="true" role="status">
+      <span className="sr-only">Đang tải hội thoại…</span>
+      {Array.from({ length: 6 }, (_, i) => (
+        <div key={i} className="flex gap-3 border-b border-border px-4 py-3">
+          <Skeleton className="size-10 rounded-full" />
+          <div className="flex-1 space-y-2">
+            <Skeleton className="h-3.5 w-32" />
+            <Skeleton className="h-3 w-24" />
+            <Skeleton className="h-3 w-48" />
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function CustomerAvatar({ name, id, platform, size = 40 }: { name: string; id: string; platform: Platform | undefined; size?: number }) {
   return (
     <span className="relative inline-flex shrink-0">
-      <Avatar name={name} color={color} size={size} />
-      <span className="absolute -right-0.5 -bottom-0.5 rounded-full bg-white p-px">
-        <PlatformIcon platform={pageById(pageId).platform} size={Math.max(12, Math.round(size * 0.38))} />
-      </span>
+      <Avatar name={name} color={avatarColor(id)} size={size} />
+      {platform && (
+        <span className="absolute -right-0.5 -bottom-0.5 rounded-full bg-white p-px">
+          <PlatformIcon platform={platform} size={Math.max(12, Math.round(size * 0.38))} />
+        </span>
+      )}
     </span>
   )
 }
 
-function StateChip({ conv }: { conv: Conversation }) {
-  if (conv.state === 'ai')
-    return (
-      <Chip tone="ai" icon={<Sparkles size={11} />}>
-        AI đang trả lời
-      </Chip>
-    )
-  if (conv.state === 'handoff')
-    return (
-      <Chip tone="warning" icon={<Hand size={11} />}>
-        Chuyển cho bạn{conv.waiting ? ` · chờ ${conv.waiting}` : ''}
-      </Chip>
-    )
-  if (conv.state === 'human') return <Chip tone="primary">Bạn đang trả lời</Chip>
-  return <Chip tone="success">✓ Đã xong</Chip>
+function StateChip({ conv, now }: { conv: ConversationDto; now: Date }) {
+  const waiting = conv.waitingSince ? ` · chờ ${durationLabel(conv.waitingSince, now)}` : ''
+  switch (conv.state) {
+    case 'ai':
+      return (
+        <Chip tone="ai" icon={<Sparkles size={11} />}>
+          AI đang trả lời
+        </Chip>
+      )
+    case 'handoff':
+      return (
+        <Chip tone="warning" icon={<Hand size={11} />}>
+          Chuyển cho bạn{waiting}
+        </Chip>
+      )
+    case 'human':
+      return <Chip tone={conv.needsAttention ? 'warning' : 'primary'}>{conv.needsAttention ? `Khách đang chờ${waiting}` : 'Bạn đang trả lời'}</Chip>
+    case 'triage':
+      return <Chip tone="neutral">Đang phân loại</Chip>
+    case 'done':
+      return <Chip tone="success">✓ Đã xong</Chip>
+  }
 }
 
-function ConversationRow({ conv, active, onClick, buttonRef }: { conv: Conversation; active: boolean; onClick: () => void; buttonRef: (el: HTMLButtonElement | null) => void }) {
-  const contact = contactById(conv.customerId)
-  const page = pageById(conv.pageId)
+function ConversationRow({ conv, now, active, onClick, buttonRef }: { conv: ConversationDto; now: Date; active: boolean; onClick: () => void; buttonRef: (el: HTMLButtonElement | null) => void }) {
+  const page = findPage(conv.pageId)
+  const name = contactLabel(conv.contact, page?.platform)
   return (
     <button
       ref={buttonRef}
       role="option"
       aria-selected={active}
       onClick={onClick}
-      className={cn(
-        'relative flex w-full gap-3 border-b border-border px-4 py-3 text-left transition-colors',
-        active ? 'bg-primary-soft/50' : 'hover:bg-slate-50',
-      )}
+      className={cn('relative flex w-full gap-3 border-b border-border px-4 py-3 text-left transition-colors', active ? 'bg-primary-soft/50' : 'hover:bg-slate-50')}
     >
       {active && <span className="absolute top-0 bottom-0 left-0 w-[3px] bg-primary" />}
-      <CustomerAvatar name={contact.name} color={contact.avatarColor} pageId={conv.pageId} />
+      <CustomerAvatar name={name} id={conv.contact.id} platform={page?.platform} />
       <span className="min-w-0 flex-1">
         <span className="flex items-center gap-2">
-          <span className={cn('truncate text-sm', conv.unread ? 'font-semibold' : 'font-medium')}>{contact.name}</span>
-          <span className="ml-auto shrink-0 text-xs text-muted-foreground">{conv.time}</span>
+          <span className={cn('truncate text-sm', conv.needsAttention ? 'font-semibold' : 'font-medium')}>{name}</span>
+          <span className="ml-auto shrink-0 text-xs text-muted-foreground">{listTimeLabel(conv.lastMessageAt, now)}</span>
         </span>
-        <span className="block truncate text-xs text-muted-foreground">qua {page.name}</span>
-        <span className="mt-0.5 flex items-center gap-2">
-          <span className={cn('truncate text-[13px]', conv.unread ? 'text-foreground' : 'text-muted-foreground')}>{conv.lastMessage}</span>
-          {conv.unread && <span className="ml-auto size-2 shrink-0 rounded-full bg-primary" aria-label="Chưa đọc" />}
+        <span className="block truncate text-xs text-muted-foreground">
+          {page ? `qua ${page.name} · ${CHANNEL_LABEL[page.platform]}` : 'Đang tải trang…'}
         </span>
+        <span className={cn('mt-0.5 block truncate text-[13px]', conv.needsAttention ? 'text-foreground' : 'text-muted-foreground')}>{previewText(conv.preview)}</span>
         <span className="mt-1.5 block">
-          <StateChip conv={conv} />
+          <StateChip conv={conv} now={now} />
         </span>
       </span>
     </button>
   )
 }
 
-function ChatHeader({
-  conv,
-  contactName,
-  onToggleAi,
-  onTakeOver,
-  onDone,
-  onOpenPanel,
-  aiLocked,
-}: {
-  conv: Conversation
-  contactName: string
-  onToggleAi: (v: boolean) => void
-  onTakeOver: () => void
-  onDone: () => void
-  onOpenPanel: () => void
-  aiLocked: boolean
-}) {
-  const page = pageById(conv.pageId)
+function ChatHeader({ conv, name, page, now, onOpenPanel }: { conv: ConversationDto; name: string; page: Page | undefined; now: Date; onOpenPanel: () => void }) {
   return (
     <div className="border-b border-border bg-surface">
       <div className="flex items-center gap-4 px-5 py-3">
         <div className="min-w-0 flex-1">
-          <h2 className="truncate text-base font-semibold">{contactName}</h2>
+          <h2 className="truncate text-base font-semibold">{name}</h2>
           <div className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
-            qua <PageAvatar page={page} size={18} /> <span className="truncate font-medium text-foreground">{page.name}</span>
+            {page ? (
+              <>
+                qua <PageAvatar page={page} size={18} /> <span className="truncate font-medium text-foreground">{page.name}</span>
+              </>
+            ) : (
+              'Đang tải trang…'
+            )}
           </div>
         </div>
-        <AiLockHint locked={aiLocked} placement="bottom">
-          <label className={cn('flex items-center gap-2 text-[13px] font-medium', aiLocked && 'opacity-60')}>
-            <span className={conv.aiEnabled ? 'text-ai' : 'text-muted-foreground'}>AI tự trả lời</span>
-            <Switch checked={conv.aiEnabled} onChange={onToggleAi} ai label="AI tự trả lời" />
-          </label>
-        </AiLockHint>
-        {conv.aiEnabled || conv.state === 'handoff' ? (
-          <Button variant="primary" size="sm" icon={<Hand size={15} />} onClick={onTakeOver} title="Tiếp quản (T)">
+        <StateChip conv={conv} now={now} />
+        {conv.state === 'ai' || conv.state === 'handoff' ? (
+          <Button variant="primary" size="sm" icon={<Hand size={15} />} disabled title={SOON}>
             Tiếp quản
           </Button>
         ) : (
           conv.state !== 'done' && (
-            <Button size="sm" icon={<CheckCheck size={15} />} onClick={onDone}>
+            <Button size="sm" icon={<CheckCheck size={15} />} disabled title={SOON}>
               Đánh dấu xong
             </Button>
           )
@@ -515,15 +356,59 @@ function ChatHeader({
           Hồ sơ khách
         </Button>
       </div>
-      {conv.state === 'handoff' && conv.handoffReason && (
+      {conv.state === 'handoff' && conv.stateReason && (
         <div className="flex items-center gap-2 border-t border-amber-200 bg-warning-soft px-5 py-2 text-[13px] text-amber-900">
           <TriangleAlert size={15} className="shrink-0 text-warning" />
           <span>
-            <b>AI chuyển cho bạn:</b> {conv.handoffReason.charAt(0).toLowerCase() + conv.handoffReason.slice(1)}
-            {conv.waiting && <> · khách chờ {conv.waiting}</>}
+            <b>AI chuyển cho bạn:</b> {REASON_TEXT[conv.stateReason]}
+            {conv.waitingSince && <> · khách chờ {durationLabel(conv.waitingSince, now)}</>}
           </span>
         </div>
       )}
+    </div>
+  )
+}
+
+function ChatBody({ conv, name, now }: { conv: ConversationDto; name: string; now: Date }) {
+  const messages = useMessages(conv.id)
+  const items = useMemo(() => flattenMessages(messages.data?.pages), [messages.data])
+  const endRef = useRef<HTMLDivElement>(null)
+  const lastId = items.at(-1)?.id
+  // Tin mới nhất đổi (mở hội thoại / tin mới tới) → cuộn xuống cuối; tải tin cũ hơn thì không.
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ block: 'end' })
+  }, [conv.id, lastId])
+
+  return (
+    <div className="scrollbar-thin flex-1 overflow-y-auto px-6 py-5">
+      <div className="mx-auto max-w-3xl space-y-3">
+        {messages.isPending ? (
+          <div aria-busy="true" role="status" className="space-y-3">
+            <span className="sr-only">Đang tải tin nhắn…</span>
+            <Skeleton className="h-10 w-2/5" />
+            <Skeleton className="ml-auto h-10 w-1/3" />
+            <Skeleton className="h-14 w-1/2" />
+          </div>
+        ) : messages.isError && items.length === 0 ? (
+          <EmptyState icon={<TriangleAlert size={22} />} title="Chưa tải được tin nhắn" action={<Button size="sm" onClick={() => void messages.refetch()}>Thử lại</Button>}>
+            {errorMessageOf(messages.error)}
+          </EmptyState>
+        ) : (
+          <>
+            {messages.hasNextPage && (
+              <div className="text-center">
+                <Button size="sm" variant="ghost" onClick={() => void messages.fetchNextPage()} disabled={messages.isFetchingNextPage}>
+                  {messages.isFetchingNextPage ? 'Đang tải…' : 'Tải tin cũ hơn'}
+                </Button>
+              </div>
+            )}
+            {items.map((m) => (
+              <Bubble key={m.id} msg={m} contactName={name} now={now} />
+            ))}
+          </>
+        )}
+        <div ref={endRef} />
+      </div>
     </div>
   )
 }
@@ -549,39 +434,47 @@ function WebhookStalledBanner() {
   )
 }
 
-function Bubble({ msg, contactName }: { msg: Message; contactName: string }) {
-  if (msg.from === 'system')
+function Bubble({ msg, contactName, now }: { msg: MessageDto; contactName: string; now: Date }) {
+  const time = messageTimeLabel(msg.platformTimestamp, now)
+  const kind = bubbleKind(msg.origin)
+  if (kind === 'system')
     return (
       <div className="flex justify-center py-1">
         <span className="inline-flex max-w-[80%] items-center gap-1.5 rounded-full border border-amber-200 bg-warning-soft px-3 py-1 text-xs text-amber-900">
           <Hand size={12} className="shrink-0" />
-          {msg.text} · {msg.time}
+          {msg.reasonCode ? REASON_TEXT[msg.reasonCode] : 'Hội thoại đổi trạng thái'} · {time}
         </span>
       </div>
     )
-  if (msg.from === 'customer')
+  const content = (
+    <>
+      {msg.attachments.length > 0 && (
+        <div className="space-y-1.5">
+          {msg.attachments.map((a) => (
+            <Attachment key={a.id} att={a} />
+          ))}
+        </div>
+      )}
+      {msg.text && <div className={cn('whitespace-pre-wrap', msg.attachments.length > 0 && 'mt-1.5')}>{msg.text}</div>}
+      {!msg.text && msg.attachments.length === 0 && <div className="italic opacity-80">Tin nhắn không hiển thị được trong app</div>}
+    </>
+  )
+  if (kind === 'customer')
     return (
       <div className="flex justify-start">
         <div className="max-w-[70%]">
-          <div className="rounded-lg rounded-bl-sm bg-slate-100 px-3.5 py-2 text-sm whitespace-pre-wrap">{msg.text}</div>
+          <div className="rounded-lg rounded-bl-sm bg-slate-100 px-3.5 py-2 text-sm">{content}</div>
           <div className="mt-1 text-[11px] text-muted-foreground">
-            {contactName} · {msg.time}
+            {contactName} · {time}
           </div>
         </div>
       </div>
     )
-  const ai = msg.from === 'ai'
+  const ai = kind === 'ai'
   return (
     <div className="flex justify-end">
       <div className="max-w-[70%]">
-        <div
-          className={cn(
-            'rounded-lg rounded-br-sm px-3.5 py-2 text-sm whitespace-pre-wrap',
-            ai ? 'border border-violet-200 bg-ai-soft text-foreground' : 'bg-primary text-primary-foreground',
-          )}
-        >
-          {msg.text}
-        </div>
+        <div className={cn('rounded-lg rounded-br-sm px-3.5 py-2 text-sm', ai ? 'border border-violet-200 bg-ai-soft text-foreground' : 'bg-primary text-primary-foreground')}>{content}</div>
         <div className="mt-1 flex items-center justify-end gap-1 text-[11px] text-muted-foreground">
           {ai ? (
             <span className="inline-flex items-center gap-1 font-medium text-ai">
@@ -590,218 +483,71 @@ function Bubble({ msg, contactName }: { msg: Message; contactName: string }) {
           ) : (
             <span className="font-medium">Bạn</span>
           )}
-          · {msg.time}
+          · {time}
         </div>
       </div>
     </div>
   )
 }
 
-function TypingDots() {
+/** Đính kèm của khách: ảnh/voice/video hiện tại chỗ, file khác là link tải; đang tải / lỗi có câu rõ ràng. */
+function Attachment({ att }: { att: AttachmentDto }) {
+  if (att.status === 'pending')
+    return (
+      <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+        <Paperclip size={13} /> Đang tải tệp đính kèm…
+      </span>
+    )
+  if (att.status === 'failed')
+    return (
+      <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+        <TriangleAlert size={13} className="text-warning" /> {att.errorCode ? ATTACHMENT_ERROR_TEXT[att.errorCode] : 'Không tải được tệp đính kèm'}
+      </span>
+    )
+  const src = attachmentUrl(att.id)
+  // MIME do server lưu quyết định cách hiển thị (voice IG có thể là `video/mp4`).
+  const mime = att.mime ?? ''
+  if (mime.startsWith('image/'))
+    return (
+      <a href={src} target="_blank" rel="noreferrer">
+        <img src={src} alt="Ảnh khách gửi" loading="lazy" className="max-h-64 max-w-full rounded-md" />
+      </a>
+    )
+  if (att.kind === 'audio' || mime.startsWith('audio/')) return <audio controls preload="none" src={src} className="w-64 max-w-full" aria-label="Tin nhắn thoại" />
+  if (mime.startsWith('video/')) return <video controls preload="metadata" src={src} className="max-h-64 max-w-full rounded-md" aria-label="Video khách gửi" />
   return (
-    <div className="flex justify-end">
-      <div className="inline-flex items-center gap-2 rounded-lg rounded-br-sm border border-violet-200 bg-ai-soft px-3.5 py-2.5" aria-live="polite">
-        <span className="text-xs font-medium text-ai">AI đang gõ</span>
-        <span className="flex gap-1">
-          {[0, 150, 300].map((d) => (
-            <span key={d} className="size-1.5 animate-bounce rounded-full bg-ai" style={{ animationDelay: `${d}ms` }} />
-          ))}
-        </span>
+    <a href={src} className="inline-flex items-center gap-1.5 text-sm underline" download>
+      <FileText size={14} /> Tệp đính kèm
+    </a>
+  )
+}
+
+/** Ô soạn tin (Story 4.7) — tạm thay bằng ghi chú. */
+function ComposerSoon() {
+  return (
+    <div className="border-t border-border bg-surface px-5 py-3">
+      <div className="flex items-center gap-3 rounded-md border border-dashed border-border px-3 py-3 text-[13px] text-muted-foreground">
+        <MessageSquareText size={16} className="shrink-0" />
+        <span className="flex-1">Gửi tin và “Gợi ý bằng AI” từ Hộp thư sắp có. Tạm thời trả lời khách trên Messenger/Instagram.</span>
       </div>
     </div>
   )
 }
 
-function Composer({
-  value,
-  onChange,
-  onSend,
-  onSuggest,
-  onStop,
-  writing,
-  aiLocked,
-  aiOn,
-  textareaRef,
-  attachment,
-  onAttach,
-  onRemoveAttachment,
-}: {
-  value: string
-  onChange: (v: string) => void
-  onSend: () => void
-  onSuggest: () => void
-  onStop: () => void
-  writing: boolean
-  aiLocked: boolean
-  aiOn: boolean
-  textareaRef: RefObject<HTMLTextAreaElement | null>
-  attachment?: string
-  onAttach: () => void
-  onRemoveAttachment: () => void
-}) {
-  // Ô soạn bị thay bằng "AI đang viết…" trong lúc gợi ý; khi gợi ý xong thì đưa con trỏ về lại để ⌘↵ gửi được ngay.
-  const wasWriting = useRef(writing)
-  useEffect(() => {
-    if (wasWriting.current && !writing) textareaRef.current?.focus()
-    wasWriting.current = writing
-  }, [writing, textareaRef])
-
-  const onKeyDown = (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-      e.preventDefault()
-      onSend()
-    }
-  }
-  const canSend = !!value.trim() || !!attachment
-  return (
-    <div className="border-t border-border bg-surface px-5 pt-3 pb-4">
-      <div className="mb-2 flex flex-wrap gap-1.5">
-        {QUICK_REPLIES.map((q) => (
-          <button
-            key={q}
-            onClick={() => {
-              onChange(value ? `${value.trimEnd()} ${q}` : q)
-              textareaRef.current?.focus()
-            }}
-            className="rounded-full border border-border px-2.5 py-1 text-xs text-muted-foreground hover:border-primary/40 hover:bg-primary-soft/40 hover:text-foreground"
-          >
-            {q}
-          </button>
-        ))}
-      </div>
-      <div className={cn('rounded-md border bg-surface focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/15', writing ? 'border-violet-300' : 'border-border')}>
-        {writing ? (
-          <div className="flex h-[84px] items-center gap-3 px-3 text-sm text-ai">
-            <Sparkles size={16} className="animate-pulse" />
-            AI đang viết…
-            <Button variant="ghost" size="sm" icon={<Square size={13} />} onClick={onStop} className="ml-auto">
-              Dừng
-            </Button>
-          </div>
-        ) : (
-          <textarea
-            ref={textareaRef}
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-            onKeyDown={onKeyDown}
-            rows={3}
-            placeholder="Nhập tin nhắn… (⌘↵ để gửi)"
-            aria-label="Nội dung tin nhắn"
-            className="block w-full resize-none rounded-md bg-transparent px-3 py-2 text-sm placeholder:text-slate-400 focus:outline-none"
-          />
-        )}
-        {attachment && (
-          <div className="px-3 pb-2">
-            <span className="inline-flex items-center gap-1.5 rounded-sm bg-slate-100 px-2 py-1 text-xs">
-              <ImagePlus size={13} /> {attachment}
-              <button onClick={onRemoveAttachment} aria-label="Bỏ ảnh" className="text-muted-foreground hover:text-foreground">
-                <X size={12} />
-              </button>
-            </span>
-          </div>
-        )}
-        <div className="flex items-center gap-2 border-t border-border px-2 py-1.5">
-          <button onClick={onAttach} className="rounded-md p-1.5 text-muted-foreground hover:bg-slate-100 hover:text-foreground" aria-label="Đính kèm ảnh" title="Đính kèm ảnh">
-            <ImagePlus size={18} />
-          </button>
-          <AiLockHint locked={aiLocked} align="start">
-            <Button variant="ai" size="sm" onClick={onSuggest} disabled={writing || aiLocked}>
-              Gợi ý bằng AI
-            </Button>
-          </AiLockHint>
-          {aiOn && !aiLocked && <span className="truncate text-xs text-muted-foreground">AI vẫn đang tự trả lời — bấm “Tiếp quản” để tự xử lý.</span>}
-          <Button variant="primary" size="sm" icon={<Send size={14} />} onClick={onSend} disabled={!canSend || writing} className="ml-auto">
-            Gửi
-          </Button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function CustomerPanel({
-  conv,
-  contact,
-  edit,
-  onEdit,
-  allConvs,
-  onOpenConv,
-}: {
-  conv: Conversation
-  contact: Contact
-  edit: ContactEdit
-  onEdit: (p: Partial<ContactEdit>) => void
-  allConvs: Conversation[]
-  onOpenConv: (id: string) => void
-}) {
-  const [tagInput, setTagInput] = useState('')
-  const [adding, setAdding] = useState(false)
-  const otherPages = contact.pageIds.filter((id) => id !== conv.pageId)
-
-  const addTag = () => {
-    const t = tagInput.trim()
-    if (t && !edit.tags.includes(t)) onEdit({ tags: [...edit.tags, t] })
-    setTagInput('')
-    setAdding(false)
-  }
-
+function CustomerPanel({ conv, name, all, onOpenConv }: { conv: ConversationDto; name: string; all: readonly ConversationDto[]; onOpenConv: (id: string) => void }) {
+  const page = findPage(conv.pageId)
+  const otherPages = conv.contact.pageIds.filter((id) => id !== conv.pageId)
   return (
     <div className="space-y-5 p-5">
       <div className="flex flex-col items-center text-center">
-        <Avatar name={contact.name} color={contact.avatarColor} size={64} />
-        <div className="mt-2 text-base font-semibold">{contact.name}</div>
-        <a href={`tel:${contact.phone.replace(/\s/g, '')}`} className="mt-0.5 inline-flex items-center gap-1.5 text-[13px] text-muted-foreground hover:text-primary">
-          <Phone size={13} /> {contact.phone}
-        </a>
+        <CustomerAvatar name={name} id={conv.contact.id} platform={page?.platform} size={64} />
+        <div className="mt-2 text-base font-semibold">{name}</div>
+        {page && <div className="mt-0.5 text-[13px] text-muted-foreground">Khách {CHANNEL_LABEL[page.platform]} của {page.name}</div>}
       </div>
-
-      <label className="block">
-        <span className="mb-1.5 block text-[13px] font-medium">Giai đoạn</span>
-        <Select options={STAGES} value={edit.stage} onChange={(e) => onEdit({ stage: e.target.value as Stage })} />
-      </label>
 
       <div>
-        <div className="mb-1.5 text-[13px] font-medium">Thẻ</div>
-        <div className="flex flex-wrap items-center gap-1.5">
-          {edit.tags.map((t) => (
-            <span key={t} className="inline-flex items-center gap-1 rounded-full bg-slate-100 py-0.5 pr-1 pl-2 text-xs font-medium text-slate-700">
-              {t}
-              <button onClick={() => onEdit({ tags: edit.tags.filter((x) => x !== t) })} aria-label={`Bỏ thẻ ${t}`} className="rounded-full p-0.5 hover:bg-slate-200">
-                <X size={11} />
-              </button>
-            </span>
-          ))}
-          {adding ? (
-            <input
-              autoFocus
-              value={tagInput}
-              onChange={(e) => setTagInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') addTag()
-                if (e.key === 'Escape') setAdding(false)
-              }}
-              onBlur={addTag}
-              placeholder="Tên thẻ…"
-              className="h-6 w-28 rounded-full border border-primary px-2 text-xs focus:outline-none"
-            />
-          ) : (
-            <button onClick={() => setAdding(true)} className="inline-flex items-center gap-0.5 rounded-full border border-dashed border-slate-300 px-2 py-0.5 text-xs text-muted-foreground hover:border-primary hover:text-primary">
-              <Plus size={11} /> Thêm thẻ
-            </button>
-          )}
-        </div>
-      </div>
-
-      <label className="block">
-        <span className="mb-1.5 block text-[13px] font-medium">Ghi chú</span>
-        <Textarea rows={3} value={edit.note} onChange={(e) => onEdit({ note: e.target.value })} placeholder="Thêm ghi chú về khách…" />
-      </label>
-
-      <div className="rounded-md border border-violet-200 bg-ai-soft/60 p-3">
-        <div className="mb-1 flex items-center gap-1.5 text-[13px] font-semibold text-ai">
-          <Sparkles size={14} /> Tóm tắt bằng AI
-        </div>
-        <p className="text-[13px] leading-relaxed text-slate-700">{contact.aiSummary}</p>
+        <div className="mb-1.5 text-[13px] font-medium">Giai đoạn</div>
+        <Chip tone="neutral">{STAGE_LABEL[conv.contact.stage]}</Chip>
       </div>
 
       <div>
@@ -811,22 +557,21 @@ function CustomerPanel({
         ) : (
           <ul className="space-y-1">
             {otherPages.map((pid) => {
-              const page = pageById(pid)
-              const other = allConvs.find((c) => c.customerId === contact.id && c.pageId === pid)
-              const sub = other ? other.lastMessage : (OTHER_PAGE_HISTORY[`${contact.id}:${pid}`] ?? 'Đã từng nhắn trang này')
+              const other = findPage(pid)
+              const otherConv = all.find((c) => c.contact.id === conv.contact.id && c.pageId === pid)
               const body = (
                 <>
-                  <PageAvatar page={page} size={24} />
+                  {other ? <PageAvatar page={other} size={24} /> : <span className="size-6 rounded-full bg-slate-200" />}
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[13px] font-medium">{page.name}</span>
-                    <span className="block truncate text-xs text-muted-foreground">{sub}</span>
+                    <span className="block truncate text-[13px] font-medium">{other?.name ?? 'Trang đã gỡ'}</span>
+                    {otherConv && <span className="block truncate text-xs text-muted-foreground">{previewText(otherConv.preview)}</span>}
                   </span>
                 </>
               )
               return (
                 <li key={pid}>
-                  {other ? (
-                    <button onClick={() => onOpenConv(other.id)} className="flex w-full items-center gap-2.5 rounded-md p-1.5 text-left hover:bg-slate-50">
+                  {otherConv ? (
+                    <button onClick={() => onOpenConv(otherConv.id)} className="flex w-full items-center gap-2.5 rounded-md p-1.5 text-left hover:bg-slate-50">
                       {body}
                     </button>
                   ) : (
@@ -839,9 +584,7 @@ function CustomerPanel({
         )}
       </div>
 
-      <Link to={`/khach-hang?id=${contact.id}`} className="block text-center text-[13px] font-medium text-primary hover:underline">
-        Xem hồ sơ khách hàng →
-      </Link>
+      <p className="rounded-md bg-slate-50 p-3 text-xs text-muted-foreground">Thẻ, ghi chú, số điện thoại và tóm tắt bằng AI sắp có ở hồ sơ khách.</p>
     </div>
   )
 }

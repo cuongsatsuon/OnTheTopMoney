@@ -64,7 +64,7 @@ development_status:
   epic-4: in-progress
   4-1-cổng-nhận-webhook-meta-và-threads: review
   4-2-tự-đăng-ký-webhook-trang-và-theo-dõi-sức-khoẻ-webhook: review
-  4-3-tin-messenger-và-instagram-direct-vào-hộp-thư: backlog
+  4-3-tin-messenger-và-instagram-direct-vào-hộp-thư: review
   4-4-bình-luận-facebook-instagram-và-trả-lời-threads-vào-hộp-thư: backlog
   4-5-nhận-diện-tin-của-chính-trang-echo: backlog
   4-6-tab-hộp-thư-tiếp-quản-và-đánh-dấu-xong: backlog

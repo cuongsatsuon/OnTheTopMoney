@@ -11,8 +11,8 @@
   summary: Ghi bản web đang chạy trên Hostinger (marker commit) và cảnh báo khi rollback BE lệch phiên bản web.
   evidence: Chế độ external không có tương đương `IMAGE_TAG`/`WEB_ROOT/current`; runbook 8.4 bảo checkout commit cũ nhưng không biết commit nào đang chạy.
 - source_spec: `spec-1-3c-fe-hostinger-be-vps.md`
-  summary: Helper dựng URL `/media/...` (và `/privacy`) theo `API_ORIGIN` phía web.
-  evidence: Chưa xác minh — chưa màn nào hiển thị media; khi có (Epic 3+), đường tương đối trên Hostinger sẽ rơi vào SPA fallback và trả index.html 200.
+  summary: Dùng `apiUrl()` (web/src/lib/api.ts, có từ Story 4.3 cho đính kèm Hộp thư) cho link `/privacy/*` khi màn quyền riêng tư có (Epic 9).
+  evidence: Story 4.3 đã thêm `apiUrl()` theo `API_ORIGIN` và CSP `media-src` cho origin api; `/media/...` không còn dùng (ảnh công khai đi URL Cloudinary). Còn `/privacy/*` chưa có màn nào.
 - source_spec: `spec-1-3c-fe-hostinger-be-vps.md`
   summary: Header CORS cho lỗi do nginx-api tự sinh (413/502/503/504) để web đọc được JSON lỗi.
   evidence: Hiện trình duyệt chặn phản hồi đó (không có Allow-Origin) và web báo lỗi mạng; quan trọng khi có upload media (413). Cần map `$http_origin` theo ALLOWED_ORIGINS trong nginx.
@@ -58,3 +58,12 @@
 - source_spec: `spec-4-2-dang-ky-webhook-va-suc-khoe.md`
   summary: Gỡ trang thì huỷ đăng ký `DELETE /{page}/subscribed_apps` ở Meta.
   evidence: `removePage` xoá credential nhưng Meta vẫn gửi sự kiện của trang đã gỡ, và chúng được tính là sự kiện thật trong health.
+- source_spec: `spec-4-3-tin-dm-vao-hop-thu.md`
+  summary: Badge "Cần xử lý" ở sidebar/tab đếm trên các hội thoại đã tải (trang đầu 50) — cần đếm phía server + sắp theo `waiting_since`.
+  evidence: `useNeedsAttentionCount` đếm `needsAttention` của trang danh sách đã tải; Story 4.6 làm tab/badge đúng AD-9 (lọc + đếm ở server).
+- source_spec: `spec-4-3-tin-dm-vao-hop-thu.md`
+  summary: `inbox.fetch_profile` gặp `TOKEN_INVALID` chỉ bỏ qua — chưa `connections.markDisconnected` như AD-10 yêu cầu cho đường gửi tin.
+  evidence: Lấy tên khách là việc phụ; cron `connections.token_check` vẫn phát hiện token hỏng. Làm cùng `inbox.send` (Story 4.7) để mọi lời gọi Meta của `inbox` ánh xạ lỗi token một chỗ.
+- source_spec: `spec-4-3-tin-dm-vao-hop-thu.md`
+  summary: Dọn file đính kèm trên Cloudinary khi xoá khách/hội thoại (Epic 9) và khi đính kèm tải lên xong nhưng transaction ghi `stored` thất bại.
+  evidence: `message_attachments` xoá theo cascade nhưng file `authenticated` ở Cloudinary không bị xoá; `privacy` (Epic 9) cần gọi `PrivateFileStore.delete` theo ref.

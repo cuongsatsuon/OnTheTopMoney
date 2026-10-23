@@ -47,3 +47,17 @@ export {
   publishedRefFromThreads,
   type PublishedRef,
 } from './normalize.ts'
+export {
+  ATTACHMENT_HOST_SUFFIXES,
+  ATTACHMENT_MAX_BYTES,
+  downloadWebhookAttachment,
+  isAllowedAttachmentUrl,
+  normalizeMessagingItem,
+  type AttachmentDownloadFailure,
+  type AttachmentDownloadResult,
+  type DmAttachment,
+  type DmMessage,
+  type DmSkipReason,
+  type DownloadOptions,
+  type NormalizedDm,
+} from './webhook-message.ts'

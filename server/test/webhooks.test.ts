@@ -9,6 +9,7 @@ import { buildApp } from '../src/app/app.ts'
 import { SESSION_COOKIE } from '../src/app/auth/index.ts'
 import { WEBHOOK_SIGNATURE_PREFIX } from '../src/adapters/meta/index.ts'
 import { createDb, type DbHandle } from '../src/platform/db/index.ts'
+import { createEventPublisher } from '../src/platform/events/index.ts'
 import { createBoss, createJobSender, ensureQueues, type JobSender } from '../src/platform/jobs/index.ts'
 import { createLogger } from '../src/platform/log/index.ts'
 import { upsertFromPlatform } from '../src/modules/pages/index.ts'
@@ -152,6 +153,8 @@ describe('GET /webhooks/{meta,threads} — xác minh', () => {
 })
 
 describe('routeWebhookEvent (job webhook.route)', () => {
+  // Story 4.3: route cần `events` + `jobs` (ingest DM). Mục `messages` thật được phủ ở inbox.test.ts.
+  const routeDeps = () => ({ db: handle.db, events: createEventPublisher(boss), jobs })
   async function insertEvent(values: { platformPageId?: string | null; field?: string; test?: boolean }) {
     const [row] = await handle.db
       .insert(webhookEventsTable)
@@ -174,17 +177,17 @@ describe('routeWebhookEvent (job webhook.route)', () => {
 
   it('trang không có trong DB → ignored (lưu, không route)', async () => {
     const id = await insertEvent({ platformPageId: 'KHONG_CO' })
-    expect(await routeWebhookEvent({ db: handle.db }, { eventId: id })).toBe('ignored_no_page')
+    expect(await routeWebhookEvent(routeDeps(), { eventId: id })).toBe('ignored_no_page')
     expect((await statusOf(id)).status).toBe('ignored')
   })
 
   it('sự kiện thử → ignored (chỉ nhật ký)', async () => {
     const id = await insertEvent({ test: true, field: 'test' })
-    expect(await routeWebhookEvent({ db: handle.db }, { eventId: id })).toBe('ignored_test')
+    expect(await routeWebhookEvent(routeDeps(), { eventId: id })).toBe('ignored_test')
     expect((await statusOf(id)).status).toBe('ignored')
   })
 
-  it('trang có + loại nhận diện được → routed, gắn page_id nội bộ', async () => {
+  it('trang có + loại nhận diện được (chưa ingest — Story 4.4) → routed, gắn page_id nội bộ', async () => {
     const { page } = await upsertFromPlatform(handle.db, {
       platform: 'facebook',
       platformAccountId: 'PAGE_R',
@@ -192,30 +195,30 @@ describe('routeWebhookEvent (job webhook.route)', () => {
       handle: null,
       avatarUrl: null,
     })
-    const id = await insertEvent({ platformPageId: 'PAGE_R', field: 'messages' })
-    expect(await routeWebhookEvent({ db: handle.db }, { eventId: id })).toBe('routed')
+    const id = await insertEvent({ platformPageId: 'PAGE_R', field: 'comments' })
+    expect(await routeWebhookEvent(routeDeps(), { eventId: id })).toBe('routed')
     expect(await statusOf(id)).toMatchObject({ status: 'routed', page_id: page.id })
   })
 
   it('trùng platform_account_id khác nền tảng → chọn đúng trang theo sản phẩm (không route chéo)', async () => {
     const fb = await upsertFromPlatform(handle.db, { platform: 'facebook', platformAccountId: 'SAME_ID', name: 'FB', handle: null, avatarUrl: null })
     const th = await upsertFromPlatform(handle.db, { platform: 'threads', platformAccountId: 'SAME_ID', name: 'TH', handle: null, avatarUrl: null })
-    const metaId = await insertEvent({ platformPageId: 'SAME_ID', field: 'messages' })
-    expect(await routeWebhookEvent({ db: handle.db }, { eventId: metaId })).toBe('routed')
+    const metaId = await insertEvent({ platformPageId: 'SAME_ID', field: 'comments' })
+    expect(await routeWebhookEvent(routeDeps(), { eventId: metaId })).toBe('routed')
     expect((await statusOf(metaId)).page_id).toBe(fb.page.id)
     // Mục Threads cùng id → khớp trang Threads, không phải trang Facebook.
     const [thRow] = await handle.db
       .insert(webhookEventsTable)
       .values({ product: 'threads', platformPageId: 'SAME_ID', field: 'replies', dedupeKey: `k_${Math.random().toString(36).slice(2)}`, payload: {} })
       .returning({ id: webhookEventsTable.id })
-    expect(await routeWebhookEvent({ db: handle.db }, { eventId: thRow!.id })).toBe('routed')
+    expect(await routeWebhookEvent(routeDeps(), { eventId: thRow!.id })).toBe('routed')
     expect((await statusOf(thRow!.id)).page_id).toBe(th.page.id)
   })
 
   it('trang có nhưng loại không route (reaction) → ignored', async () => {
     await upsertFromPlatform(handle.db, { platform: 'facebook', platformAccountId: 'PAGE_X', name: 'X', handle: null, avatarUrl: null })
     const id = await insertEvent({ platformPageId: 'PAGE_X', field: 'message_reactions' })
-    expect(await routeWebhookEvent({ db: handle.db }, { eventId: id })).toBe('ignored')
+    expect(await routeWebhookEvent(routeDeps(), { eventId: id })).toBe('ignored')
   })
 
   it('markEventFailed → status failed + error_code', async () => {

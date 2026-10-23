@@ -29,7 +29,8 @@ hv() { grep -i "^$1:" "$HEADERS" | head -n1 | cut -d: -f2- | tr -d '\r' | sed 's
 security() {
   local csp
   csp="$(hv Content-Security-Policy)"
-  [[ "$csp" == *"connect-src 'self' $API"* && "$csp" == *"img-src 'self' data: blob: $API"* && "$csp" == *"frame-ancestors 'none'"* ]] \
+  [[ "$csp" == *"connect-src 'self' $API"* && "$csp" == *"img-src 'self' data: blob: $API"* && "$csp" == *"media-src 'self' blob: $API"* \
+    && "$csp" == *"frame-ancestors 'none'"* ]] \
     && pass "$1: CSP có origin api, frame-ancestors" || fail "$1: CSP '$csp'"
   [[ -n "$(hv Strict-Transport-Security)" && "$(hv X-Content-Type-Options)" == nosniff && -n "$(hv Referrer-Policy)" \
     && "$(hv X-Frame-Options)" == DENY && -n "$(hv Permissions-Policy)" ]] \

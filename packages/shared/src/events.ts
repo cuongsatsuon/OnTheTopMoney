@@ -40,6 +40,10 @@ export const EVENTS = {
   'message.received': event(true, { pageId: Id, conversationId: Id }),
   'message.sent': event(true, { pageId: Id, conversationId: Id }),
   'message.failed': event(true, { pageId: Id, conversationId: Id, errorCode: ErrorCode }),
+  // Story 4.3: tin đã có đổi phần hiển thị (đính kèm tải xong/lỗi; sau này sửa nội dung, trạng thái gửi).
+  'message.updated': event(true, { pageId: Id, conversationId: Id }),
+  // Story 4.3: thông tin khách đổi (tên lấy từ Meta). `id` = contactId.
+  'contact.updated': event(true, {}),
   'post_target.published': event(true, { pageId: Id, campaignId: Id.nullable() }),
   'post_target.failed': event(true, { pageId: Id, campaignId: Id.nullable(), errorCode: ErrorCode }),
   'post_target.cancelled': event(true, { pageId: Id, campaignId: Id.nullable() }),

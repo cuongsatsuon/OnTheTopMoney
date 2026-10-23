@@ -91,6 +91,27 @@ describe('hintInvalidates', () => {
   })
 })
 
+describe('createRealtimeClient — Hộp thư (Story 4.3)', () => {
+  it('message.received → làm cũ cả khung chat [messages, id] và danh sách [conversations, …]; contact.updated → danh sách', async () => {
+    const { client, queryClient } = setup()
+    const list = queryClient.getQueryCache().build(queryClient, { queryKey: ['conversations', 'list', 'all'], queryFn: async () => 'l' })
+    const chat = queryClient.getQueryCache().build(queryClient, { queryKey: ['messages', 'c1'], queryFn: async () => 'm' })
+    const pagesQ = queryClient.getQueryCache().build(queryClient, { queryKey: ['pages'], queryFn: async () => 'p' })
+    await Promise.all([list.fetch(), chat.fetch(), pagesQ.fetch()])
+    client.start()
+    FakeEventSource.last.emit('ready')
+    FakeEventSource.last.emit('message.received', { type: 'message.received', entity: 'message', id: 'm1', pageId: 'p1' })
+    expect(queryClient.getQueryState(['conversations', 'list', 'all'])?.isInvalidated).toBe(true)
+    expect(queryClient.getQueryState(['messages', 'c1'])?.isInvalidated).toBe(true)
+    expect(queryClient.getQueryState(['pages'])?.isInvalidated).toBe(false)
+    client.stop()
+    expect(hintInvalidates('conversations', 'contact')).toBe(true)
+    expect(hintInvalidates('conversations', 'conversation')).toBe(true)
+    // conversation.state_changed ghi kèm tin `system` (lý do chuyển) → khung chat cũng phải tải lại.
+    expect(hintInvalidates('messages', 'conversation')).toBe(true)
+  })
+})
+
 describe('createRealtimeClient', () => {
   it('openai_key.invalidated → vô hiệu hoá query [settings, …]', async () => {
     const { client, queryClient } = setup()

@@ -1,5 +1,6 @@
 // Module `webhooks` (AD-1, AD-4): cổng nhận webhook Meta/Threads. Public API chỉ export từ file này.
-// Được gọi: `pages` (base), `connections`, `inbox` (story sau), `adapters/meta` — theo bảng mũi tên AD-1.
+// Gọi: `pages` (base), `connections`, `inbox` (Story 4.3: `webhook.route` → `inbox.ingest`), `adapters/meta` — theo
+// bảng mũi tên AD-1.
 export const MODULE = 'webhooks'
 
 export {

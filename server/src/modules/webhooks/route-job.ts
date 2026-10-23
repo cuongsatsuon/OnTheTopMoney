@@ -1,13 +1,19 @@
 // Handler job `webhook.route` (AD-4, AD-24). Chuẩn hoá + ĐẶT TRẠNG THÁI mục, KHÔNG xử lý nghiệp vụ trong
-// request (đã trả 200 ở POST). Story 4.1: inbox CHƯA có (Story 4.3/4.4) nên chỉ đặt `status`:
+// request (đã trả 200 ở POST):
 // - sự kiện thử (`test`) → `ignored` (chỉ nhật ký);
-// - trang không có trong DB / đã gỡ → `ignored` (lưu, không route);
-// - mục nhận diện được loại sẽ ingest ở story sau → `routed` (ghi chú; KHÔNG gọi inbox vì chưa có);
+// - trang không có trong DB / đã gỡ → `ignored` (lưu, không route, không tạo gì trong `inbox`);
+// - Story 4.3: mục `messages` của Fanpage/IG → chuẩn hoá qua `adapters/meta` → `inbox.ingest` → `routed`. Echo
+//   (Story 4.5), tin thu hồi, mục thiếu id, tin do chính trang gửi → `ignored`;
+// - loại sẽ ingest ở story sau (comment/feed/replies — 4.4; echo/postback) → tạm `routed` như 4.1, chưa gọi inbox;
 // - loại khác (reaction, delivery, read, không rõ) → `ignored`.
-// Idempotent theo khoá mục: tính lại trạng thái xác định nên chạy lại cho cùng kết quả.
+// Idempotent theo khoá mục: ingest chống trùng theo `(page_id, mid)`, trạng thái tính lại xác định.
 import type { Platform, WebhookProduct } from '@ottm/shared'
 import { eq } from 'drizzle-orm'
-import type { DbExecutor } from '../../platform/db/index.ts'
+import { normalizeMessagingItem } from '../../adapters/meta/index.ts'
+import type { Db } from '../../platform/db/index.ts'
+import type { EventPublisher } from '../../platform/events/index.ts'
+import type { JobSender } from '../../platform/jobs/index.ts'
+import { ingestDm } from '../inbox/index.ts'
 import { findPageByPlatformAccountId } from '../pages/index.ts'
 import { webhookEvents } from './schema.ts'
 
@@ -25,11 +31,10 @@ export function parseRouteJobData(data: unknown): RouteJobData {
 export const WEBHOOK_ROUTE_FAILED = 'WEBHOOK_ROUTE_FAILED'
 
 /**
- * Loại mục sẽ được ingest vào Hộp thư ở story sau (nay tạm `routed`, KHÔNG gọi inbox). Loại ngoài danh sách
- * này (reaction, delivery, read, loại không rõ) chỉ lưu (`ignored`).
+ * Loại mục sẽ được ingest vào Hộp thư ở story sau (nay tạm `routed`, KHÔNG gọi inbox). `messages` đi nhánh ingest
+ * riêng (Story 4.3). Loại ngoài danh sách (reaction, delivery, read, loại không rõ) chỉ lưu (`ignored`).
  */
 const ROUTABLE_FIELDS: ReadonlySet<string> = new Set([
-  'messages',
   'message_echoes',
   'messaging_postbacks',
   'comments',
@@ -41,7 +46,12 @@ const ROUTABLE_FIELDS: ReadonlySet<string> = new Set([
 export type RouteResult = 'missing' | 'ignored_test' | 'ignored_no_page' | 'ignored' | 'routed'
 
 export interface RouteDeps {
-  db: DbExecutor
+  db: Db
+  /** Phát `message.received` trong transaction ingest. */
+  events: EventPublisher
+  /** Enqueue job đính kèm / hồ sơ khách trong transaction ingest. */
+  jobs: JobSender
+  now?: () => Date
 }
 
 /** Nền tảng khả dĩ của một mục theo sản phẩm webhook — để không route chéo (meta ≠ threads). */
@@ -70,12 +80,26 @@ export async function routeWebhookEvent(deps: RouteDeps, data: RouteJobData): Pr
     return 'ignored_no_page'
   }
 
+  // Story 4.3: tin nhắn Messenger / IG Direct → `inbox.ingest`. Threads không có DM.
+  if (event.field === 'messages') {
+    let status: RouteResult = 'ignored'
+    if (page.platform !== 'threads' && event.platformPageId) {
+      const dm = normalizeMessagingItem(event.payload, event.platformPageId, deps.now?.() ?? new Date())
+      if (dm.kind === 'dm') {
+        await ingestDm({ db: deps.db, events: deps.events, jobs: deps.jobs }, { pageId: page.id, message: dm })
+        status = 'routed'
+      }
+    }
+    await setStatus(deps.db, event.id, status, page.id)
+    return status
+  }
+
   const status: RouteResult = ROUTABLE_FIELDS.has(event.field) ? 'routed' : 'ignored'
   await setStatus(deps.db, event.id, status, page.id)
   return status
 }
 
-async function setStatus(db: DbExecutor, id: string, status: 'routed' | 'ignored', pageId: string | null): Promise<void> {
+async function setStatus(db: Db, id: string, status: 'routed' | 'ignored', pageId: string | null): Promise<void> {
   await db
     .update(webhookEvents)
     .set({ status, pageId, errorCode: null, routedAt: new Date() })

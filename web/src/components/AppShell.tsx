@@ -19,23 +19,23 @@ import {
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom'
-import { conversations, groups, pages, pagesInGroup } from '../data/mock'
+import { groups, pages, pagesInGroup } from '../data/mock'
 import { BUDGET_BANNER_ACTION, BUDGET_BANNER_TEXT, budgetView, useAiBudget, useAiBudgetToasts } from '../lib/ai-budget'
 import { useApp, type Scope } from '../lib/app-context'
 import { matchesQuery } from '../lib/scope'
 import { usePages } from '../lib/connections'
 import { useLogout } from '../lib/session'
 import { errorMessageOf } from '../lib/error-messages'
+import { useNeedsAttentionCount } from '../lib/inbox'
 import { useNotificationToasts, useNotifications } from '../lib/notifications'
 import { useRealtimeStatus } from '../lib/realtime'
 import { NotificationsDrawer } from './NotificationsDrawer'
 import { Avatar, Button, PageAvatar, cn } from './ui'
 
-const needsYou = conversations.filter((c) => c.state === 'handoff' || (c.state === 'human' && c.unread)).length
-
 const nav = [
   { to: '/', label: 'Tổng quan', icon: LayoutDashboard, end: true },
-  { to: '/hop-thu', label: 'Hộp thư', icon: Inbox, badge: needsYou },
+  // Badge "Cần xử lý" (AD-9) tính từ hội thoại thật trong phạm vi — gắn trong `Sidebar`.
+  { to: '/hop-thu', label: 'Hộp thư', icon: Inbox, needsBadge: true },
   { to: '/khach-hang', label: 'Khách hàng', icon: Users },
   { to: '/soan-bai', label: 'Soạn bài AI', icon: PenSquare },
   { to: '/lich', label: 'Lịch nội dung', icon: CalendarDays },
@@ -63,6 +63,8 @@ function LogoutButton() {
 }
 
 function Sidebar() {
+  const { scope } = useApp()
+  const needsYou = useNeedsAttentionCount(scope)
   return (
     <aside className="flex w-60 shrink-0 flex-col bg-sidebar text-sidebar-foreground">
       <div className="flex h-14 items-center gap-2.5 px-5">
@@ -70,7 +72,9 @@ function Sidebar() {
         <span className="text-[15px] font-bold tracking-tight text-white">OnTheTopMoney</span>
       </div>
       <nav className="flex-1 space-y-0.5 overflow-y-auto px-3 py-3" aria-label="Điều hướng chính">
-        {nav.map(({ to, label, icon: Icon, end, badge }) => (
+        {nav.map(({ to, label, icon: Icon, end, needsBadge }) => {
+          const badge = needsBadge ? needsYou : 0
+          return (
           <NavLink
             key={to}
             to={to}
@@ -91,7 +95,8 @@ function Sidebar() {
               </>
             )}
           </NavLink>
-        ))}
+          )
+        })}
       </nav>
       <AiBudgetChip />
       <LogoutButton />

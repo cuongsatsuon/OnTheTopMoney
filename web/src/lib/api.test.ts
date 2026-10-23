@@ -121,6 +121,14 @@ describe('apiFetch — origin api lúc build (VITE_API_ORIGIN) và cookie phiên
     expect(url).toBe('https://api.example.com/api/v1/auth/logout')
   })
 
+  it('apiUrl (src của ảnh/voice đính kèm) theo origin api; trống → tương đối', async () => {
+    const { mod } = await lastCall('https://api.example.com')
+    expect(mod.apiUrl('/attachments/a1')).toBe('https://api.example.com/api/v1/attachments/a1')
+    expect(mod.apiUrl('attachments/a1')).toBe('https://api.example.com/api/v1/attachments/a1')
+    const local = await lastCall(undefined)
+    expect(local.mod.apiUrl('/attachments/a1')).toBe('/api/v1/attachments/a1')
+  })
+
   it('STREAM_URL của realtime theo cùng origin', async () => {
     vi.stubEnv('VITE_API_ORIGIN', 'https://api.example.com')
     vi.resetModules()

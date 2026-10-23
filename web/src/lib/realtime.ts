@@ -33,11 +33,18 @@ export function entityMatches(root: unknown, entity: string): boolean {
 /**
  * Thực thể mà sự kiện của một thực thể khác cũng làm cũ:
  * - `openai_key` (`openai_key.invalidated`: OpenAI trả 401 lúc chạy) → trạng thái khoá ở `['settings', …]`;
- * - `settings` (đổi hạn mức / tỉ giá / cảnh báo 80%) → tổng chi phí AI `['ai_budget']`.
+ * - `settings` (đổi hạn mức / tỉ giá / cảnh báo 80%) → tổng chi phí AI `['ai_budget']`;
+ * - `message` (tin mới / đính kèm tải xong) và `contact` (tên khách) → danh sách hội thoại `['conversations', …]`
+ *   (xem trước, thứ tự, tên hiển thị) — Story 4.3;
+ * - `conversation` (`conversation.state_changed`) → tin của hội thoại `['messages', …]` (tin `system` nêu lý do
+ *   chuyển trạng thái được ghi cùng lúc).
  */
 export const ENTITY_ALSO_INVALIDATES: Readonly<Record<string, readonly string[]>> = {
   openai_key: ['settings'],
   settings: ['ai_budget'],
+  message: ['conversation'],
+  contact: ['conversation'],
+  conversation: ['message'],
 }
 
 /** Query có khoá gốc `root` bị gợi ý của `entity` làm cũ? (chính thực thể đó hoặc thực thể kèm theo). */

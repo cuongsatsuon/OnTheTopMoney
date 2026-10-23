@@ -16,6 +16,7 @@
     "db:generate": "drizzle-kit generate",
     "set-password": "node --env-file-if-exists=.env scripts/set-password.ts",
     "emit-event": "node --env-file-if-exists=.env scripts/emit-event.ts",
+    "simulate-dm": "node --env-file-if-exists=.env scripts/simulate-dm.ts",
     "ai-simulate": "node --env-file-if-exists=.env scripts/ai-simulate.ts",
     "media:check": "node --env-file-if-exists=.env scripts/media-check.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",

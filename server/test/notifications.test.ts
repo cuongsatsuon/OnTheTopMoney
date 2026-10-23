@@ -353,6 +353,9 @@ describe('worker thật: publish → events.notifications → thông báo; job h
         'webhook.route': async () => {},
         'connections.subscribe_page': async () => {},
         'webhooks.health': async () => {},
+        'autoreply.triage': async () => {},
+        'inbox.fetch_attachment': async () => {},
+        'inbox.fetch_profile': async () => {},
         'events.notifications': async (job) => {
           await handleEvent(workerDeps, parseEventEnvelope(job.data))
         },

@@ -36,8 +36,9 @@ DirectoryIndex index.html
 
 <IfModule mod_headers.c>
     # Header bảo mật (AD-19) — `always`: có cả trên trang lỗi.
-    # connect-src gồm origin api (REST + SSE); img-src gồm origin api và res.cloudinary.com (ảnh bài đăng / logo, AD-14).
-    Header always set Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:{{API_SRC}} https://res.cloudinary.com https://picsum.photos https://fastly.picsum.photos https://*.fbcdn.net https://*.cdninstagram.com; connect-src 'self'{{API_SRC}}; media-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+    # connect-src gồm origin api (REST + SSE); img-src gồm origin api và res.cloudinary.com (ảnh bài đăng / logo, AD-14);
+    # media-src gồm origin api (voice/video khách gửi trong Hộp thư, đọc qua /api/v1/attachments — Story 4.3).
+    Header always set Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:{{API_SRC}} https://res.cloudinary.com https://picsum.photos https://fastly.picsum.photos https://*.fbcdn.net https://*.cdninstagram.com; connect-src 'self'{{API_SRC}}; media-src 'self' blob:{{API_SRC}}; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
     Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains"
     Header always set X-Content-Type-Options "nosniff"
     Header always set Referrer-Policy "strict-origin-when-cross-origin"

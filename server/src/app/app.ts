@@ -19,6 +19,7 @@ import { registerConnections } from './connections.ts'
 import { registerCors } from './cors.ts'
 import { registerGroups } from './groups.ts'
 import { registerHealthz, type HealthOptions } from './healthz.ts'
+import { registerInbox } from './inbox.ts'
 import { registerNotifications } from './notifications.ts'
 import { registerOAuth } from './oauth.ts'
 import { registerOpenAiSettings } from './openai-settings.ts'
@@ -68,8 +69,8 @@ export interface AppDeps {
    */
   connections?: Omit<ConnectionsDeps, 'db' | 'events' | 'log'>
   /**
-   * Kho ảnh/file Cloudinary (AD-14) cho logo hồ sơ thương hiệu (Story 3.1). Không truyền → kho "chưa cấu hình":
-   * lưu logo trả `MEDIA_NOT_CONFIGURED`, phần chữ của hồ sơ vẫn lưu được.
+   * Kho ảnh/file Cloudinary (AD-14) cho logo hồ sơ thương hiệu (Story 3.1) và đính kèm của khách (Story 4.3). Không
+   * truyền → kho "chưa cấu hình": lưu logo trả `MEDIA_NOT_CONFIGURED`, phần chữ của hồ sơ vẫn lưu được.
    */
   media?: MediaStores
   /**
@@ -130,7 +131,10 @@ export function buildApp({ sql, db, logger, http = {}, loginLimiter, health, eve
   registerPages(app, { db })
   if (events) registerGroups(app, { db, events })
   // Hồ sơ thương hiệu (Story 3.1): không cần `events`; `media` thiếu → kho chưa cấu hình (logo trả MEDIA_NOT_CONFIGURED).
-  registerBrandProfiles(app, { db, media: media ?? createMediaStores({ CLOUDINARY_FOLDER: 'ottm' }) })
+  const mediaStores = media ?? createMediaStores({ CLOUDINARY_FOLDER: 'ottm' })
+  registerBrandProfiles(app, { db, media: mediaStores })
+  // Hộp thư (Story 4.3): hội thoại, tin, đính kèm (đọc từ kho riêng tư).
+  registerInbox(app, { db, media: mediaStores })
   // Viết thử bằng AI (Story 3.4): cần `events` (reserve/settle hạn mức của AI gateway, AD-7).
   if (events) {
     registerBrandSample(app, {
