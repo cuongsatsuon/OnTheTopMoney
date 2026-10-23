@@ -115,3 +115,6 @@
 - source_spec: `spec-4-10-tim-nhanh.md`
   summary: Kiểm bằng trình duyệt bảng lệnh ⌘K/Ctrl+K (mở/đóng, ↑/↓/↵/Esc, Esc không đóng ngăn kéo bên dưới, "Đổi phạm vi" mở bộ chọn, mở khách vào ngăn kéo Khách hàng) với trang/khách thật.
   evidence: Chỉ có test API (Postgres thật) và test helper web (`web/src/lib/search.test.ts`); chưa chạy UI với phiên chủ shop + dữ liệu thật.
+- source_spec: `spec-5-1-cau-hinh-ai-tra-loi.md`
+  summary: Kiểm bằng trình duyệt màn `/ai-tra-loi` với nhóm/trang thật: cây "Bật"/"Theo nhóm"/"Riêng · …", lưu nhóm/trang, "Dùng cấu hình AI riêng" (bật sao chép, tắt hỏi lại), "Lấy từ Hồ sơ thương hiệu"/"Mẫu theo ngành", lỗi dưới ô; Bật/Tắt AI hàng loạt có xác nhận ở Trang & Nhóm.
+  evidence: Chỉ có test API (Postgres thật) và test helper web (`web/src/lib/autoreply.test.ts`); chưa chạy UI với phiên chủ shop + trang đã kết nối.

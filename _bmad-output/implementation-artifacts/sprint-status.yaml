@@ -74,9 +74,9 @@ development_status:
   4-10-tìm-nhanh-bằng-k: review
   epic-4-retrospective: optional
 
-  epic-5: backlog
-  5-1-cấu-hình-ai-trả-lời-theo-nhóm-và-trang: backlog
-  5-2-kho-kiến-thức: backlog
+  epic-5: in-progress
+  5-1-cấu-hình-ai-trả-lời-theo-nhóm-và-trang: review
+  5-2-kho-kiến-thức: in-progress
   5-3-thử-ai-trước-khi-bật: backlog
   5-4-ai-tự-trả-lời-tin-nhắn-và-chuyển-cho-bạn: backlog
   5-5-ai-trả-lời-bình-luận-công-khai-và-nhắn-riêng: backlog

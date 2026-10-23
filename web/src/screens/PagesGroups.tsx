@@ -25,12 +25,12 @@ import {
 } from '../components/ui'
 import { groupById, type Group, type Page, type Platform } from '../data/mock'
 import { useApp } from '../lib/app-context'
+import { bulkConfirmText, bulkResultMessage, useAutoreplyOverview, useBulkSetAutoreply } from '../lib/autoreply'
 import {
   CONNECT_ERROR_PARAM,
   CONNECT_PROVIDER_PARAM,
   CONNECT_RESULT_PARAM,
   PROVIDER_LABEL,
-  patchMockPages,
   providerFromParam,
   providerOfPlatform,
   reconnectInput,
@@ -56,12 +56,6 @@ import { errorMessage, errorMessageOf } from '../lib/error-messages'
 
 const PLATFORM_NAMES: Record<Platform, string> = { facebook: 'Facebook Fanpage', instagram: 'Instagram Business', threads: 'Threads' }
 
-/**
- * Trang thật từ `GET /api/v1/pages` (Story 2.2), được `usePages` chép vào kho mẫu `mock.pages`. Nhóm, AI trả
- * lời, hồ sơ vẫn là dữ liệu mẫu tới Story 2.5 và epic sau: thay đổi ghi ngược vào kho mẫu (không ghi server) để
- * Chi tiết trang, Chi tiết nhóm và bộ chọn phạm vi thấy cùng dữ liệu.
- */
-type PageOverlay = Partial<Pick<Page, 'groupId' | 'autoReply' | 'brandSource'>>
 
 /* ---------- Menu thả xuống nhỏ ---------- */
 
@@ -138,11 +132,12 @@ type Dialog =
   | { kind: 'edit'; group: Group }
   | { kind: 'delete'; group: Group }
   | { kind: 'addTo'; pageIds: string[] }
+  | { kind: 'ai'; pageIds: string[]; on: boolean }
   | { kind: 'move'; groupId: string; groupName: string; pageIds: string[]; impact: GroupMoveImpact }
   | null
 
 export default function PagesGroups() {
-  const { notify } = useApp()
+  const { notify, openAiKeySet } = useApp()
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const pagesQuery = usePages()
@@ -154,8 +149,9 @@ export default function PagesGroups() {
   const assignM = useAssignGroup()
   const unassignM = useUnassignGroup()
   const moveImpactM = useGroupMoveImpact()
-  // Kho mẫu (AI trả lời) đổi ngoài React → tăng số này sau mỗi lần ghi để vẽ lại.
-  const [, setStoreVersion] = useState(0)
+  // AI trả lời (Story 5.1): trạng thái dẫn xuất từ server (`Page.autoReply`), đổi qua Bật/Tắt hàng loạt.
+  const overviewQuery = useAutoreplyOverview()
+  const bulkAiM = useBulkSetAutoreply()
   const [tab, setTab] = useState<'groups' | 'pages'>(() => (searchParams.has(CONNECT_RESULT_PARAM) ? 'pages' : 'groups'))
   const [selected, setSelected] = useState<string[]>([])
   const [query, setQuery] = useState('')
@@ -163,9 +159,12 @@ export default function PagesGroups() {
   const [connectOpen, setConnectOpen] = useState(false)
   const connectRef = useOutside(connectOpen, () => setConnectOpen(false))
 
-  // Nhóm thật từ `GET /api/v1/groups`. `groupId` của trang lấy thẳng từ server (Story 2.5), overlay AI giữ nguyên.
-  const groupList: Group[] = (groupsQuery.data ?? []).map(toUiGroup)
-  const pageList: Page[] = (pagesQuery.data ?? []).map((dto) => ({ ...uiPageOf(dto), groupId: dto.groupId }))
+  // Nhóm thật từ `GET /api/v1/groups`. `groupId` của trang lấy thẳng từ server (Story 2.5); AI trả lời dẫn xuất từ
+  // tổng quan cấu hình AI (Story 5.1).
+  const aiPages = new Map((overviewQuery.data?.pages ?? []).map((s) => [s.pageId, s]))
+  const aiGroups = new Map((overviewQuery.data?.groups ?? []).map((s) => [s.groupId, s.enabled]))
+  const groupList: Group[] = (groupsQuery.data ?? []).map((dto) => ({ ...toUiGroup(dto), autoReply: aiGroups.get(dto.id) ?? false }))
+  const pageList: Page[] = (pagesQuery.data ?? []).map((dto) => ({ ...uiPageOf(dto), groupId: dto.groupId, autoReply: aiPages.get(dto.id)?.enabled ?? false }))
   const resultId = searchParams.get(CONNECT_RESULT_PARAM)
   const resultProvider = providerFromParam(searchParams.get(CONNECT_PROVIDER_PARAM))
   const connectError = searchParams.get(CONNECT_ERROR_PARAM)
@@ -201,12 +200,6 @@ export default function PagesGroups() {
     startConnect.mutate({ provider, from: 'pages' }, { onError: (err) => notify(errorMessageOf(err, provider)) })
   }
   const opening = startConnect.isPending ? PROVIDER_LABEL[startConnect.variables.provider] : null
-
-  /* AI trả lời vẫn là overlay giao diện (Epic 5): ghi vào kho mẫu rồi vẽ lại. Nhóm đi qua API thật. */
-  const updatePages = (ids: string[], patch: (p: Page) => PageOverlay) => {
-    patchMockPages(ids, patch)
-    setStoreVersion((v) => v + 1)
-  }
 
   const inGroup = (gid: string) => pageList.filter((p) => p.groupId === gid)
   const groupName = (gid: string | null) => groupList.find((g) => g.id === gid)?.name ?? ''
@@ -287,9 +280,29 @@ export default function PagesGroups() {
     })
   }
 
+  /* ----- AI trả lời (Story 5.1, AD-8): luôn hỏi xác nhận rồi server đổi từng trang (theo nhóm → chuyển riêng) ----- */
+
   const setAi = (ids: string[], on: boolean) => {
-    updatePages(ids, () => ({ autoReply: on }))
-    notify(`${on ? 'Đã bật' : 'Đã tắt'} AI trả lời cho ${ids.length} trang`)
+    if (on && !openAiKeySet) return
+    setDialog({ kind: 'ai', pageIds: ids, on })
+  }
+  const aiConfirm = (ids: string[], on: boolean) =>
+    bulkConfirmText(
+      ids.map((id) => ({ name: pageList.find((p) => p.id === id)?.name ?? '', status: aiPages.get(id) })),
+      on,
+    )
+  const doSetAi = (ids: string[], on: boolean) => {
+    bulkAiM.mutate(
+      { pageIds: ids, enabled: on },
+      {
+        onSuccess: (res) => {
+          setDialog(null)
+          if (ids.length > 1) setSelected([])
+          notify(bulkResultMessage(res, on))
+        },
+        onError: (err) => notify(errorMessageOf(err)),
+      },
+    )
   }
 
   /* Kết nối lại một trang (Story 2.4): OAuth với `intent=reconnect:<pageId>` → server cập nhật đúng dòng trang cũ. */
@@ -507,7 +520,7 @@ export default function PagesGroups() {
                 <Button size="sm" variant="primary" icon={<FolderPlus size={15} />} onClick={() => setDialog({ kind: 'addTo', pageIds: selected })}>
                   Thêm vào nhóm
                 </Button>
-                <Button size="sm" onClick={() => setAi(selected, true)}>
+                <Button size="sm" onClick={() => setAi(selected, true)} disabled={!openAiKeySet} title={openAiKeySet ? undefined : 'Thêm khoá OpenAI ở Cài đặt'}>
                   Bật AI trả lời
                 </Button>
                 <Button size="sm" onClick={() => setAi(selected, false)}>
@@ -578,10 +591,8 @@ export default function PagesGroups() {
                           ai
                           checked={p.autoReply}
                           label={`AI trả lời cho ${p.name}`}
-                          onChange={(v) => {
-                            updatePages([p.id], () => ({ autoReply: v }))
-                            notify(`${v ? 'Đã bật' : 'Đã tắt'} AI trả lời cho ${p.name}`)
-                          }}
+                          disabled={!p.autoReply && !openAiKeySet}
+                          onChange={(v) => setAi([p.id], v)}
                         />
                       </td>
                       <td className="px-3 py-2.5">{p.groupId && p.brandSource === 'group' ? <Chip tone="primary">Theo nhóm</Chip> : <Chip>Riêng</Chip>}</td>
@@ -664,6 +675,24 @@ export default function PagesGroups() {
             {inGroup(dialog.group.id).length} trang trong nhóm sẽ thành “Chưa có nhóm”. Mỗi trang giữ một bản sao hồ sơ thương hiệu và cấu hình AI trả lời của nhóm làm cấu hình riêng.
           </p>
           {dialog.group.activeCampaigns > 0 && <p className="mt-2 text-sm text-amber-800">Nhóm có {dialog.group.activeCampaigns} chiến dịch đang chạy. Chiến dịch vẫn tiếp tục trên từng trang.</p>}
+        </Modal>
+      )}
+      {dialog?.kind === 'ai' && (
+        <Modal
+          open
+          onClose={() => setDialog(null)}
+          title={aiConfirm(dialog.pageIds, dialog.on).title}
+          width={460}
+          footer={
+            <>
+              <Button onClick={() => setDialog(null)}>Huỷ</Button>
+              <Button variant="primary" disabled={bulkAiM.isPending} onClick={() => doSetAi(dialog.pageIds, dialog.on)}>
+                {aiConfirm(dialog.pageIds, dialog.on).confirmLabel}
+              </Button>
+            </>
+          }
+        >
+          <p className="text-sm">{aiConfirm(dialog.pageIds, dialog.on).body}</p>
         </Modal>
       )}
       {dialog?.kind === 'addTo' && (

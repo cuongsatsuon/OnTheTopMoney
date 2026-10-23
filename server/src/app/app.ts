@@ -14,6 +14,7 @@ import type { RealtimeHub } from '../platform/realtime/index.ts'
 import { createMediaStores, type MediaStores } from '../adapters/media/index.ts'
 import { authPlugin, type LoginLimiter } from './auth/index.ts'
 import { registerAiBudget } from './ai-budget.ts'
+import { registerAutoreplyConfigs } from './autoreply-configs.ts'
 import { registerBrandProfiles } from './brand-profiles.ts'
 import { registerBrandSample } from './brand-sample.ts'
 import { registerConnections } from './connections.ts'
@@ -140,6 +141,8 @@ export function buildApp({ sql, db, logger, http = {}, loginLimiter, health, eve
   // Hồ sơ thương hiệu (Story 3.1): không cần `events`; `media` thiếu → kho chưa cấu hình (logo trả MEDIA_NOT_CONFIGURED).
   const mediaStores = media ?? createMediaStores({ CLOUDINARY_FOLDER: 'ottm' })
   registerBrandProfiles(app, { db, media: mediaStores })
+  // Cấu hình AI trả lời tự động (Story 5.1): kế thừa Nhóm→Trang qua `profiles`, không cần `events`.
+  registerAutoreplyConfigs(app, { db })
   // Hộp thư (Story 4.3): hội thoại, tin, đính kèm (đọc từ kho riêng tư); Story 4.7: gửi tin (cần `events` + `jobs`).
   registerInbox(app, { db, media: mediaStores, events, jobs })
   // Khách hàng (Story 4.9): danh sách, hồ sơ, lịch sử, gộp (cần `events`), tóm tắt AI (cần `events` + `jobs`).

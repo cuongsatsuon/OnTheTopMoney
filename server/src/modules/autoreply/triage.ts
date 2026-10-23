@@ -3,8 +3,8 @@
 // `inbox.applyTriageDecision` (khoá lạc quan theo `state_version`). Story 4.6: hội thoại `ai` (chủ shop bật lại AI)
 // có tin khách mới cũng qua cổng — cổng đóng thì `ai → human` (AD-9 "cổng không áp dụng"), khách vào "Cần xử lý".
 // Trạng thái khác (`human`, `handoff`, `done`) → bỏ qua, không ghi gì.
-// Trước Epic 5 chưa có cấu hình AI trả lời (`CONFIG_KINDS` chỉ có `brand`) → cổng "cấu hình hiệu lực bật" đóng với
-// lý do không áp dụng `AI_OFF` → `human`. Epic 5 thay `decideTriage` bằng chuỗi cổng đầy đủ của AD-16.
+// Story 5.1 đã lưu cấu hình AI (`profiles.resolveEffective(pageId, 'autoreply')`) nhưng AI chưa tự trả lời: tới khi
+// Story 5.4 thay `decideTriage` bằng chuỗi cổng đầy đủ của AD-16, cổng vẫn đóng với lý do không áp dụng `AI_OFF` → `human`.
 import { applyTriageDecision, getTriageState, type TriageDecision, type TriageState } from '../inbox/index.ts'
 import type { Db } from '../../platform/db/index.ts'
 import { isEventEnvelope, type EventPublisher } from '../../platform/events/index.ts'
@@ -16,7 +16,7 @@ export interface TriageDeps {
 
 export type TriageOutcome = 'ignored' | 'skipped' | 'applied' | 'stale'
 
-/** Quyết định đích của một hội thoại `triage` / `ai`. Trước Epic 5: luôn `human` vì AI chưa bật (`AI_OFF`). */
+/** Quyết định đích của một hội thoại `triage` / `ai`. Tới Story 5.4: luôn `human` (`AI_OFF`). */
 export function decideTriage(_state: TriageState): TriageDecision {
   return { to: 'human', reasonCode: 'AI_OFF' }
 }

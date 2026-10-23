@@ -155,6 +155,13 @@
       "when": 1792776229802,
       "tag": "0021_daffy_sunspot",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1792777532553,
+      "tag": "0022_sad_miss_america",
+      "breakpoints": true
     }
   ]
 }

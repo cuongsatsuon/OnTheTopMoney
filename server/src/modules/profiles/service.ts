@@ -19,7 +19,7 @@ export type { ProfileOwner } from './row.ts'
  * Owner (nhóm/trang) phải tồn tại và chưa gỡ, nếu không 404. Dùng `pages.getGroup` / `pages.getPage` (AD-1:
  * `profiles` → `pages`). `getPage` đã loại trang đã gỡ (`removed_at`).
  */
-async function assertOwnerExists(db: DbExecutor, owner: ProfileOwner): Promise<void> {
+export async function assertOwnerExists(db: DbExecutor, owner: ProfileOwner): Promise<void> {
   const exists = owner.ownerType === 'group' ? !!(await getGroup(db, owner.ownerId)) : !!(await getPage(db, owner.ownerId))
   if (!exists) {
     const what = owner.ownerType === 'group' ? 'Nhóm' : 'Trang'

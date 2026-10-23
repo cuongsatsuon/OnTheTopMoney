@@ -1,8 +1,9 @@
-// Bảng của module `profiles` (AD-1): `brand_profiles` (Story 3.1) + `page_config_state` (Story 3.2/3.3).
+// Bảng của module `profiles` (AD-1): `brand_profiles` (Story 3.1) + `page_config_state` (Story 3.2/3.3)
+// + `autoreply_configs` (Story 5.1).
 // Một hồ sơ cho mỗi chủ `(owner_type, owner_id)` — group hoặc page (UNIQUE). Không FK đa hình: owner tồn tại
 // được kiểm ở service (gọi `pages.getGroup` / `pages.getPage`). Logo công khai nằm trên Cloudinary → `logo_path`
 // là URL (KHÔNG vào `media_assets` — đó là ảnh bài).
-import { BRAND_EMOJI_LEVELS, CONFIG_KINDS, CONFIG_OWNER_TYPES } from '@ottm/shared'
+import { AUTOREPLY_CHANNELS, AUTOREPLY_SCHEDULES, BRAND_EMOJI_LEVELS, CONFIG_KINDS, CONFIG_OWNER_TYPES } from '@ottm/shared'
 import { sql } from 'drizzle-orm'
 import { boolean, check, integer, jsonb, pgTable, text, timestamp, unique, uuid } from 'drizzle-orm/pg-core'
 import { pagesTable } from '../pages/index.ts'
@@ -10,6 +11,8 @@ import { pagesTable } from '../pages/index.ts'
 const OWNER_TYPE_LIST = sql.raw(CONFIG_OWNER_TYPES.map((s) => `'${s}'`).join(', '))
 const EMOJI_LIST = sql.raw(BRAND_EMOJI_LEVELS.map((s) => `'${s}'`).join(', '))
 const KIND_LIST = sql.raw(CONFIG_KINDS.map((s) => `'${s}'`).join(', '))
+const SCHEDULE_LIST = sql.raw(AUTOREPLY_SCHEDULES.map((s) => `'${s}'`).join(', '))
+const CHANNEL_ARRAY = sql.raw(`array[${AUTOREPLY_CHANNELS.map((s) => `'${s}'`).join(', ')}]::text[]`)
 
 export const brandProfiles = pgTable(
   'brand_profiles',
@@ -61,7 +64,7 @@ export const pageConfigState = pgTable(
     pageId: uuid('page_id')
       .notNull()
       .references(() => pagesTable.id, { onDelete: 'cascade' }),
-    /** Loại cấu hình (`CONFIG_KINDS`: nay `brand`; `autoreply` ở Epic 5). */
+    /** Loại cấu hình (`CONFIG_KINDS`: `brand`, `autoreply`). */
     kind: text('kind').notNull(),
     /** Trang dùng hồ sơ riêng loại này (`true`) hay theo nhóm (`false`). */
     useOwn: boolean('use_own').notNull().default(false),
@@ -73,5 +76,42 @@ export const pageConfigState = pgTable(
   (t) => [
     unique('page_config_state_page_kind_unique').on(t.pageId, t.kind),
     check('page_config_state_kind_check', sql`${t.kind} in (${KIND_LIST})`),
+  ],
+)
+
+/**
+ * Cấu hình AI trả lời tự động (Story 5.1, AD-8, AD-16): một dòng cho mỗi chủ `(owner_type, owner_id)` như
+ * `brand_profiles`, kế thừa Nhóm→Trang qua registry của `inheritance.ts` (kind `autoreply`). Luật hợp lệ (bật cần
+ * kịch bản + kênh…) nằm ở schema zod `SaveAutoreplyConfigRequest` của shared; DB chỉ chặn giá trị enum.
+ */
+export const autoreplyConfigs = pgTable(
+  'autoreply_configs',
+  {
+    id: uuid('id').primaryKey().default(sql`uuidv7()`),
+    /** `group` | `page` (CONFIG_OWNER_TYPES). */
+    ownerType: text('owner_type').notNull(),
+    /** id nhóm hoặc trang — không FK (đa hình), service kiểm tồn tại. */
+    ownerId: uuid('owner_id').notNull(),
+    enabled: boolean('enabled').notNull().default(false),
+    /** `always` | `offhours` | `custom` (AUTOREPLY_SCHEDULES). */
+    schedule: text('schedule').notNull().default('always'),
+    /** 7 phần tử `{on, from, to}` (T2→CN, giờ `HH:MM` theo Asia/Ho_Chi_Minh) — parse bằng zod khi đọc. */
+    hours: jsonb('hours').notNull(),
+    /** Kịch bản (system prompt) — không log. */
+    script: text('script').notNull().default(''),
+    handoffKeywords: text('handoff_keywords').array().notNull().default(sql`'{}'::text[]`),
+    handoffOnCustomerAsk: boolean('handoff_on_customer_ask').notNull().default(true),
+    handoffOnUncertain: boolean('handoff_on_uncertain').notNull().default(true),
+    handoffMessage: text('handoff_message').notNull(),
+    /** Kênh áp dụng (`AutoreplyChannel[]`). */
+    channels: text('channels').array().notNull().default(sql`'{}'::text[]`),
+    createdAt: timestamp('created_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
+  },
+  (t) => [
+    unique('autoreply_configs_owner_unique').on(t.ownerType, t.ownerId),
+    check('autoreply_configs_owner_type_check', sql`${t.ownerType} in (${OWNER_TYPE_LIST})`),
+    check('autoreply_configs_schedule_check', sql`${t.schedule} in (${SCHEDULE_LIST})`),
+    check('autoreply_configs_channels_check', sql`${t.channels} <@ ${CHANNEL_ARRAY}`),
   ],
 )

@@ -1,6 +1,6 @@
 // Kế thừa cấu hình Nhóm→Trang giải ở MỘT chỗ (AD-8, Story 3.2 + 3.3).
 // - `resolveEffective` là hàm DUY NHẤT giải "trang dùng cấu hình nào" → `{config, source}` hoặc `CONFIG_MISSING`.
-// - "Registry loại cấu hình" (`REGISTRY`): mỗi loại (nay `brand`; AI đăng ký ở Epic 5) khai các thao tác
+// - "Registry loại cấu hình" (`REGISTRY`): mỗi loại (`brand`; `autoreply` từ Story 5.1) khai các thao tác
 //   `exists/get/copy/remove`, nhờ đó mọi luật kế thừa + xử lý đổi nhóm viết MỘT lần, chạy cho mọi loại.
 // - `applyGroupChange`/`onGroupProfileSaved`: các chuyển đổi 3.3, idempotent (sự kiện có thể tới hai lần).
 // Không nhân bản luật kế thừa ở nơi khác. Mọi hàm nhận executor (tx) để chạy trong transaction của bên gọi (AD-3).
@@ -10,6 +10,7 @@ import { and, eq, isNull, sql } from 'drizzle-orm'
 import type { DbExecutor } from '../../platform/db/index.ts'
 import { AppError } from '../../platform/errors/index.ts'
 import { getGroup, getPage, pagesTable } from '../pages/index.ts'
+import { autoreplyOps } from './autoreply-row.ts'
 import { brandOwnerWhere, toBrandDto, type ProfileOwner } from './row.ts'
 import { brandProfiles, pageConfigState } from './schema.ts'
 
@@ -71,9 +72,10 @@ const brandOps: ConfigKindOps = {
   },
 }
 
-/** Registry: brand đăng ký ở Story 3.2/3.3; `autoreply` (AI) sẽ thêm ở Epic 5 mà không đổi luật kế thừa. */
+/** Registry: brand đăng ký ở Story 3.2/3.3; `autoreply` (cấu hình AI) ở Story 5.1 — cùng luật kế thừa, không sửa gì thêm. */
 export const REGISTRY: Record<ConfigKind, ConfigKindOps> = {
   brand: brandOps,
+  autoreply: autoreplyOps,
 }
 
 const pageOwner = (pageId: string): ProfileOwner => ({ ownerType: 'page', ownerId: pageId })

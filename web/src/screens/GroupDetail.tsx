@@ -9,13 +9,15 @@ import { compact, engagement30d, formatNumber, groups, pages, posts, type Group,
 import { useApp } from '../lib/app-context'
 import { uiPageOf, usePages } from '../lib/connections'
 import { colorCodeOf, useAssignGroup, useGroups, useUnassignGroup, useUpdateGroup } from '../lib/groups'
+import { useAutoreplyOverview } from '../lib/autoreply'
 import { errorMessageOf } from '../lib/error-messages'
+import { isRealOwner } from '../lib/profiles'
 import { AutoReplyForm } from './AutoReply'
 import { PageChecklist } from './PagesGroups'
 
 type TabId = 'brand' | 'ai' | 'members' | 'perf'
 
-/** Dữ liệu mẫu: trang đang dùng cấu hình AI trả lời riêng. */
+/** Dữ liệu mẫu: trang mẫu đang dùng cấu hình AI trả lời riêng (trang thật lấy từ tổng quan cấu hình AI, Story 5.1). */
 const AI_OWN = new Set(['p6'])
 /** Dữ liệu mẫu: số tin nhắn AI đã trả lời 30 ngày theo trang. */
 const AI_REPLIES: Record<string, number> = { p1: 412, p2: 288, p3: 64, p4: 530, p5: 97, p6: 0, p7: 0, p8: 0 }
@@ -279,6 +281,10 @@ function SourceCell({ own, pageId, tab }: { own: boolean; pageId: string; tab: '
 }
 
 function MembersTable({ members, groupName, onAdd }: { members: Page[]; groupName: string; onAdd: () => void }) {
+  const overview = useAutoreplyOverview()
+  const aiStatus = (pageId: string) => overview.data?.pages.find((s) => s.pageId === pageId)
+  const aiOwn = (pageId: string) => (isRealOwner(pageId) ? aiStatus(pageId)?.mode === 'own' : AI_OWN.has(pageId))
+  const aiOn = (p: Page) => (isRealOwner(p.id) ? !!aiStatus(p.id)?.enabled : p.autoReply)
   if (!members.length)
     return (
       <Card>
@@ -296,7 +302,7 @@ function MembersTable({ members, groupName, onAdd }: { members: Page[]; groupNam
       </Card>
     )
   const ownBrand = members.filter((p) => p.brandSource === 'own').length
-  const ownAi = members.filter((p) => AI_OWN.has(p.id)).length
+  const ownAi = members.filter((p) => aiOwn(p.id)).length
   return (
     <Card>
       <CardHeader
@@ -328,9 +334,9 @@ function MembersTable({ members, groupName, onAdd }: { members: Page[]; groupNam
                 <SourceCell own={p.brandSource === 'own'} pageId={p.id} tab="brand" />
               </td>
               <td className="px-3 py-2.5">
-                <SourceCell own={AI_OWN.has(p.id)} pageId={p.id} tab="ai" />
+                <SourceCell own={aiOwn(p.id)} pageId={p.id} tab="ai" />
               </td>
-              <td className="px-3 py-2.5">{p.autoReply ? <Chip tone="ai">Đang bật</Chip> : <Chip>Đang tắt</Chip>}</td>
+              <td className="px-3 py-2.5">{aiOn(p) ? <Chip tone="ai">Đang bật</Chip> : <Chip>Đang tắt</Chip>}</td>
             </tr>
           ))}
         </tbody>
