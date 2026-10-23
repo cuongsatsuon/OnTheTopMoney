@@ -7,6 +7,8 @@
 // - Story 4.6: lọc + đếm theo tab ở server (AD-9) bằng MỘT điều kiện `tabCondition` dùng chung cho danh sách, số đếm
 //   và badge. "Cần xử lý" sắp chờ lâu nhất trước theo `coalesce(waiting_since, last_customer_message_at,
 //   last_message_at)` — phòng hờ hội thoại `human` chưa có mốc chờ (dữ liệu trước 4.6) vẫn có chỗ đứng.
+// - Story 4.7: tin outbound `failed` không tính là "đã trả lời" — điều kiện "Cần xử lý" và xem trước bỏ qua nó; tin kèm
+//   `delivery`, `errorCode`; `getMessage` cho route gửi.
 // Trang đã gỡ → hội thoại không còn hiện (danh sách lọc theo trang chưa gỡ; `getConversation` kiểm `getPage`).
 import type {
   AttachmentDto,
@@ -21,17 +23,20 @@ import type {
   MessageRemoval,
   MessageSender,
   MessageStatus,
+  MessageDelivery,
+  SendErrorCode,
   StateChangeReason,
   AttachmentError,
   AttachmentKind,
   AttachmentStatus,
   InboxTab,
 } from '@ottm/shared'
-import { and, asc, count, desc, eq, inArray, lt, ne, or, sql, type SQL } from 'drizzle-orm'
+import { and, asc, count, desc, eq, inArray, lt, or, sql, type SQL } from 'drizzle-orm'
 import type { DbExecutor } from '../../platform/db/index.ts'
 import { AppError } from '../../platform/errors/index.ts'
 import { getPage } from '../pages/index.ts'
 import { contactIdentities, contacts, conversations, messageAttachments, messages } from './schema.ts'
+import { effectiveMessage } from './state.ts'
 
 export interface PageQuery {
   cursor?: string | undefined
@@ -85,12 +90,13 @@ const conversationColumns = {
 }
 
 /**
- * Gốc của tin không phải `system` mới nhất trong hội thoại (subquery tương quan, chạy trên index
- * `(conversation_id, platform_timestamp, id)`) — cùng định nghĩa với `preview` của DTO.
+ * Gốc của tin hiệu lực mới nhất trong hội thoại (không phải `system`, không phải tin outbound `failed` — Story 4.7;
+ * subquery tương quan, chạy trên index `(conversation_id, platform_timestamp, id)`) — cùng định nghĩa với `preview`
+ * của DTO (`effectiveMessage`).
  */
 const lastNonSystemOrigin = sql`(
   select m.origin from ${messages} m
-  where m.conversation_id = ${conversations.id} and m.origin <> 'system'
+  where m.conversation_id = ${conversations.id} and m.origin <> 'system' and m.status is distinct from 'failed'
   order by m.platform_timestamp desc, m.id desc
   limit 1
 )`
@@ -170,7 +176,7 @@ export async function getConversation(db: DbExecutor, id: string): Promise<Conve
 async function toConversationDtos(db: DbExecutor, rows: ConversationRow[]): Promise<ConversationDto[]> {
   if (rows.length === 0) return []
   const ids = rows.map((r) => r.id)
-  // Tin mới nhất không phải `system` của từng hội thoại (DISTINCT ON theo index (conversation_id, ts, id)).
+  // Tin hiệu lực mới nhất của từng hội thoại (DISTINCT ON theo index (conversation_id, ts, id)).
   const previews = await db
     .selectDistinctOn([messages.conversationId], {
       conversationId: messages.conversationId,
@@ -180,7 +186,7 @@ async function toConversationDtos(db: DbExecutor, rows: ConversationRow[]): Prom
       at: messages.platformTimestamp,
     })
     .from(messages)
-    .where(and(inArray(messages.conversationId, ids), ne(messages.origin, 'system')))
+    .where(and(inArray(messages.conversationId, ids), effectiveMessage))
     .orderBy(messages.conversationId, desc(messages.platformTimestamp), desc(messages.id))
   const previewIds = previews.map((p) => p.id)
   const attachmentCounts = previewIds.length
@@ -263,7 +269,15 @@ export async function listMessages(db: DbExecutor, conversationId: string, query
     .limit(query.limit + 1)
   const page = rows.slice(0, query.limit)
   const oldest = page.at(-1)
-  const ids = page.map((m) => m.id)
+  const items = await toMessageDtos(db, conversationId, page.reverse())
+  return { items, nextCursor: rows.length > query.limit && oldest ? encodeCursor(oldest.platformTimestamp, oldest.id) : null }
+}
+
+type MessageRow = typeof messages.$inferSelect
+
+/** Dòng tin (cùng hội thoại, đúng thứ tự hiển thị) → DTO kèm đính kèm và người viết. */
+async function toMessageDtos(db: DbExecutor, conversationId: string, rows: MessageRow[]): Promise<MessageDto[]> {
+  const ids = rows.map((m) => m.id)
   const attachments = ids.length
     ? await db
         .select()
@@ -289,8 +303,8 @@ export async function listMessages(db: DbExecutor, conversationId: string, query
     .select({ identityId: conversations.contactIdentityId })
     .from(conversations)
     .where(eq(conversations.id, conversationId))
-  const senderIdOf = (m: (typeof page)[number]) => (m.direction === 'inbound' ? (m.senderIdentityId ?? conv?.identityId ?? null) : null)
-  const identityIds = [...new Set(page.map(senderIdOf).filter((id): id is string => id !== null))]
+  const senderIdOf = (m: MessageRow) => (m.direction === 'inbound' ? (m.senderIdentityId ?? conv?.identityId ?? null) : null)
+  const identityIds = [...new Set(rows.map(senderIdOf).filter((id): id is string => id !== null))]
   const senders = identityIds.length
     ? await db
         .select({ identityId: contactIdentities.id, contactId: contacts.id, name: contacts.name })
@@ -300,7 +314,7 @@ export async function listMessages(db: DbExecutor, conversationId: string, query
     : []
   const senderOf = new Map<string, MessageSender>(senders.map((x) => [x.identityId, { contactId: x.contactId, name: x.name }]))
 
-  const items: MessageDto[] = page.reverse().map((m) => ({
+  const items: MessageDto[] = rows.map((m) => ({
     id: m.id,
     conversationId: m.conversationId,
     direction: (m.direction as MessageDirection | null) ?? null,
@@ -308,11 +322,22 @@ export async function listMessages(db: DbExecutor, conversationId: string, query
     text: m.text,
     reasonCode: (m.reasonCode as StateChangeReason | null) ?? null,
     status: (m.status as MessageStatus | null) ?? null,
+    delivery: (m.delivery as MessageDelivery | null) ?? null,
+    errorCode: (m.errorCode as SendErrorCode | null) ?? null,
     platformTimestamp: m.platformTimestamp.toISOString(),
     attachments: attachmentsOf.get(m.id) ?? [],
     editedAt: m.editedAt?.toISOString() ?? null,
     removal: (m.removal as MessageRemoval | null) ?? null,
     sender: senderOf.get(senderIdOf(m) ?? '') ?? null,
   }))
-  return { items, nextCursor: rows.length > query.limit && oldest ? encodeCursor(oldest.platformTimestamp, oldest.id) : null }
+  return items
+}
+
+/** Một tin theo id (route gửi / gửi lại); `null` khi không có. Bên gọi đã kiểm hội thoại + trang. */
+export async function getMessage(db: DbExecutor, id: string): Promise<MessageDto | null> {
+  if (!UUID_RE.test(id)) return null
+  const [row] = await db.select().from(messages).where(eq(messages.id, id))
+  if (!row) return null
+  const [dto] = await toMessageDtos(db, row.conversationId, [row])
+  return dto ?? null
 }

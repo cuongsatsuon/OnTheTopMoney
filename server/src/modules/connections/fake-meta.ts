@@ -8,6 +8,8 @@
 // Threads (Story 2.3): client riêng (`createFakeThreads`), trang đồng ý giả `/oauth/threads/fake-consent` gửi
 // `FAKE_THREADS_CODE.full` hoặc `.noReplies` (bỏ `threads_read_replies` + `threads_manage_replies`), kèm hậu tố
 // `#_` như Threads thật; dữ liệu: 1 tài khoản Threads.
+// Story 4.7 (gửi tin từ Hộp thư, dev): Send API `POST /me/messages` trả `message_id` giả (nhắn riêng: kèm `recipient_id`
+// giả), trả lời bình luận `POST /{comment}/comments|replies` trả id giả; Threads tạo + publish container trả id giả.
 import { randomBytes } from 'node:crypto'
 import { META_LOGIN_SCOPES, THREADS_LOGIN_SCOPES } from '@ottm/shared'
 import type { MetaResult } from '../../adapters/meta/index.ts'
@@ -124,6 +126,22 @@ export function program(graph: FakeMetaClient, now: () => Date = () => new Date(
     variantOfToken(call.options.token, 'LONG') ? { ok: true, data: { data: fakeAccounts(), paging: { cursors: {} } } } : rejected(),
   )
 
+  // Story 4.7: đường gửi tin. Token phải là token Page giả.
+  const pageToken = (call: FakeMetaCall) => typeof call.options.token === 'string' && call.options.token.startsWith('FAKE_PAGE_')
+  graph.on('POST', '/me/messages', (call: FakeMetaCall) => {
+    if (!pageToken(call)) return rejected()
+    const recipient = (call.options.body as { recipient?: { id?: unknown; comment_id?: unknown } } | undefined)?.recipient
+    const recipientId = typeof recipient?.id === 'string' ? recipient.id : `FAKE_PSID_${rand()}`
+    return { ok: true, data: { recipient_id: recipientId, message_id: `m_fake_${rand()}` } }
+  })
+  // Trả lời bình luận (`/{comment}/comments` FB, `/{comment}/replies` IG): path theo id → bắt ở fallback.
+  graph.setFallback((call: FakeMetaCall) => {
+    if (call.method === 'POST' && /\/(comments|replies)$/.test(call.path)) {
+      return pageToken(call) ? { ok: true, data: { id: `fake_reply_${rand()}` } } : rejected()
+    }
+    return { ok: true, data: {} }
+  })
+
   for (const page of [FAKE_PAGES.beauty, FAKE_PAGES.home]) {
     graph.on('POST', `/${page.id}/subscribed_apps`, (call: FakeMetaCall) => {
       const token = call.options.token
@@ -216,6 +234,14 @@ export function programThreads(threads: FakeMetaClient, now: () => Date = () => 
 
   threads.on('GET', '/me', (call: FakeMetaCall) =>
     threadsVariantOf(call.options.token, 'LONG') ? { ok: true, data: { ...FAKE_THREADS_USER } } : rejected(),
+  )
+
+  // Story 4.7: trả lời công khai trên Threads — tạo container rồi publish.
+  threads.on('POST', '/me/threads', (call: FakeMetaCall) =>
+    threadsVariantOf(call.options.token, 'LONG') ? { ok: true, data: { id: `fake_container_${rand()}` } } : rejected(),
+  )
+  threads.on('POST', '/me/threads_publish', (call: FakeMetaCall) =>
+    threadsVariantOf(call.options.token, 'LONG') ? { ok: true, data: { id: `fake_threads_reply_${rand()}` } } : rejected(),
   )
 
   // Story 2.4: làm mới token dài hạn (`th_refresh_token`). Token không phải token dài hạn hợp lệ → 190 TOKEN_INVALID.

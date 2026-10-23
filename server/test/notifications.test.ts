@@ -357,6 +357,8 @@ describe('worker thật: publish → events.notifications → thông báo; job h
         'inbox.fetch_attachment': async () => {},
         'inbox.fetch_profile': async () => {},
         'inbox.fetch_post_text': async () => {},
+        'inbox.send': async () => {},
+        'inbox.send_sweep': async () => {},
         'events.notifications': async (job) => {
           await handleEvent(workerDeps, parseEventEnvelope(job.data))
         },

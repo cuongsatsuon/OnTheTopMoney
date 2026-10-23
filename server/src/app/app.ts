@@ -9,6 +9,7 @@ import type { Db, Sql } from '../platform/db/index.ts'
 import { DEV_ALLOWED_ORIGINS } from '../platform/config/index.ts'
 import { AppError } from '../platform/errors/index.ts'
 import type { EventPublisher } from '../platform/events/index.ts'
+import type { JobSender } from '../platform/jobs/index.ts'
 import type { RealtimeHub } from '../platform/realtime/index.ts'
 import { createMediaStores, type MediaStores } from '../adapters/media/index.ts'
 import { authPlugin, type LoginLimiter } from './auth/index.ts'
@@ -78,12 +79,14 @@ export interface AppDeps {
    * khai để dựng URL callback. Không truyền → không đăng ký route webhook (vd test chỉ kiểm phần khác).
    */
   webhooks?: Omit<WebhooksDeps, 'db' | 'log'>
+  /** Enqueue job (Story 4.7: gửi tin từ Hộp thư enqueue `inbox.send` cùng transaction). Thiếu → không có route gửi tin. */
+  jobs?: JobSender
 }
 
 /** Như `trustProxy: 1` của proxy-addr (kiểu Fastify không nhận số): chỉ tin hop đầu tiên. */
 const trustOneHop = (_address: string, hop: number): boolean => hop < 1
 
-export function buildApp({ sql, db, logger, http = {}, loginLimiter, health, events, realtime, ai, clock, connections, media, webhooks }: AppDeps): FastifyInstance {
+export function buildApp({ sql, db, logger, http = {}, loginLimiter, health, events, realtime, ai, clock, connections, media, webhooks, jobs }: AppDeps): FastifyInstance {
   // Sau một hop reverse proxy (nginx): chỉ tin địa chỉ cuối của X-Forwarded-For, không tin cả chuỗi client gửi.
   const app = Fastify({ loggerInstance: logger as FastifyBaseLogger, trustProxy: http.trustProxy ? trustOneHop : false })
 
@@ -133,8 +136,8 @@ export function buildApp({ sql, db, logger, http = {}, loginLimiter, health, eve
   // Hồ sơ thương hiệu (Story 3.1): không cần `events`; `media` thiếu → kho chưa cấu hình (logo trả MEDIA_NOT_CONFIGURED).
   const mediaStores = media ?? createMediaStores({ CLOUDINARY_FOLDER: 'ottm' })
   registerBrandProfiles(app, { db, media: mediaStores })
-  // Hộp thư (Story 4.3): hội thoại, tin, đính kèm (đọc từ kho riêng tư).
-  registerInbox(app, { db, media: mediaStores, events })
+  // Hộp thư (Story 4.3): hội thoại, tin, đính kèm (đọc từ kho riêng tư); Story 4.7: gửi tin (cần `events` + `jobs`).
+  registerInbox(app, { db, media: mediaStores, events, jobs })
   // Viết thử bằng AI (Story 3.4): cần `events` (reserve/settle hạn mức của AI gateway, AD-7).
   if (events) {
     registerBrandSample(app, {

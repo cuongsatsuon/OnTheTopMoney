@@ -6,6 +6,9 @@
 // - Story 4.6: `tab=all|needs_human|ai|done` lọc ở server; `GET …/count` cho badge "Cần xử lý"; lệnh
 //   `POST …/:id/takeover|enable-ai|done` (rate-limit + kiểm Origin của route ghi do auth plugin áp). Trạng thái nguồn
 //   không hợp lệ → 409 VERSION_CONFLICT; đã ở đích → 200 không đổi.
+// - Story 4.7: `POST …/:id/messages` gửi tin (201 `MessageDto` `pending`), `POST /api/v1/messages/:id/resend` gửi lại
+//   tin `failed` (200). `canSend` từ chối → 409 với mã gửi tin + `details.messageId` (tin vẫn lưu `failed`). Không gọi
+//   Meta trong request: job `inbox.send` gửi.
 import {
   CONVERSATION_ACTIONS,
   ConversationCountQuery,
@@ -14,8 +17,11 @@ import {
   ConversationsQuery,
   ListConversationsResponse,
   ListMessagesResponse,
+  MessageDto,
   MessagesQuery,
   ScopeParam,
+  SendMessageBody,
+  type SendErrorCode,
 } from '@ottm/shared'
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
@@ -25,23 +31,30 @@ import {
   countConversations,
   getAttachmentFile,
   getConversation,
+  getMessage,
   listConversations,
   listMessages,
+  resendMessage,
+  sendMessage,
 } from '../modules/inbox/index.ts'
 import { resolveScope } from '../modules/pages/index.ts'
 import type { Db } from '../platform/db/index.ts'
 import { AppError } from '../platform/errors/index.ts'
 import type { EventPublisher } from '../platform/events/index.ts'
+import type { JobSender } from '../platform/jobs/index.ts'
 
 const ListQuery = ConversationsQuery.extend({ scope: ScopeParam.optional() })
 const CountQuery = ConversationCountQuery.extend({ scope: ScopeParam.optional() })
 const IdParam = z.object({ id: z.uuid() })
 
 const notFound = (message: string) => new AppError('NOT_FOUND', 404, { message })
+/** `canSend` từ chối: tin đã lưu `failed` — FE làm cũ khung chat để hiện bong bóng lỗi. */
+const refused = (code: SendErrorCode, messageId: string) =>
+  new AppError(code, 409, { message: `Không gửi được tin (${code})`, details: { messageId } })
 
 export function registerInbox(
   app: FastifyInstance,
-  deps: { db: Db; media: Pick<MediaStores, 'privateStore'>; events?: EventPublisher | undefined },
+  deps: { db: Db; media: Pick<MediaStores, 'privateStore'>; events?: EventPublisher | undefined; jobs?: JobSender | undefined },
 ): void {
   app.get('/api/v1/conversations', async (req): Promise<ListConversationsResponse> => {
     const { scope, tab, cursor, limit } = ListQuery.parse(req.query ?? {})
@@ -72,6 +85,37 @@ export function registerInbox(
         return ConversationDto.parse(conv)
       })
     }
+  }
+
+  // Gửi tin (Story 4.7): enqueue `inbox.send` cùng transaction → cần cả `events` và `jobs`.
+  const { jobs } = deps
+  if (events && jobs) {
+    const sendDeps = { db: deps.db, events, jobs }
+    app.post('/api/v1/conversations/:id/messages', async (req, reply): Promise<MessageDto> => {
+      const { id } = IdParam.parse(req.params)
+      const body = SendMessageBody.parse(req.body ?? {})
+      if (!(await getConversation(deps.db, id))) throw notFound('Hội thoại không tồn tại')
+      const result = await sendMessage(sendDeps, id, body)
+      if (result.status === 'missing') throw notFound('Hội thoại không tồn tại')
+      if (result.status === 'refused') throw refused(result.code, result.messageId)
+      const msg = await getMessage(deps.db, result.messageId)
+      if (!msg) throw notFound('Tin không tồn tại')
+      return reply.code(201).send(MessageDto.parse(msg))
+    })
+
+    app.post('/api/v1/messages/:id/resend', async (req): Promise<MessageDto> => {
+      const { id } = IdParam.parse(req.params)
+      const current = await getMessage(deps.db, id)
+      // Tin của hội thoại thuộc trang đã gỡ cũng coi như không có.
+      if (!current || !(await getConversation(deps.db, current.conversationId))) throw notFound('Tin không tồn tại')
+      const result = await resendMessage(sendDeps, id)
+      if (result.status === 'missing') throw notFound('Tin không tồn tại')
+      if (result.status === 'conflict') throw new AppError('VERSION_CONFLICT', 409, { message: 'Chỉ gửi lại được tin của bạn đang lỗi' })
+      if (result.status === 'refused') throw refused(result.code, result.messageId)
+      const msg = await getMessage(deps.db, id)
+      if (!msg) throw notFound('Tin không tồn tại')
+      return MessageDto.parse(msg)
+    })
   }
 
   app.get('/api/v1/conversations/:id', async (req): Promise<ConversationDto> => {

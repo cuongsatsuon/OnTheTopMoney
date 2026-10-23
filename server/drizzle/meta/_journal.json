@@ -127,6 +127,13 @@
       "when": 1792767894983,
       "tag": "0017_wakeful_magik",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1792770170198,
+      "tag": "0018_tearful_the_leader",
+      "breakpoints": true
     }
   ]
 }

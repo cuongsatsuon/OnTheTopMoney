@@ -7,6 +7,8 @@ export const META_ERROR_KINDS = [
   'RATE_LIMITED',
   'OUTSIDE_WINDOW',
   'RECIPIENT_UNAVAILABLE',
+  // Bình luận không nhắn riêng được (đã xoá, quá hạn, loại bình luận không hỗ trợ).
+  'PRIVATE_REPLY_INVALID',
   'PERMISSION_DENIED',
   'TRANSIENT',
   'REJECTED',
@@ -42,7 +44,7 @@ const BY_SUBCODE: ReadonlyMap<string, MetaErrorKind> = new Map([
   ['10/2018108', 'RECIPIENT_UNAVAILABLE'],
   ['100/2018001', 'RECIPIENT_UNAVAILABLE'],
   // Bình luận không nhắn riêng được.
-  ['100/2534025', 'REJECTED'],
+  ['100/2534025', 'PRIVATE_REPLY_INVALID'],
 ])
 
 const BY_CODE: ReadonlyMap<number, MetaErrorKind> = new Map([

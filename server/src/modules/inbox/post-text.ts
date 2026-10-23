@@ -6,6 +6,7 @@
 // - Chỉ điền khi còn trống, cắt `POST_TEXT_MAX` ký tự → phát `conversation.updated` (web hiện dòng bài).
 // - `RATE_LIMITED`/`TRANSIENT` → ném để retry; lần thử cuối và lỗi khác (bài đã xoá, thiếu quyền…) → bỏ qua, chỉ ghi
 //   `post_text_fetched_at`. Trang đã gỡ/mất kết nối, thiếu client Threads → bỏ qua. Không log caption hay token.
+// - Story 4.7: `TOKEN_INVALID` → `markDisconnected` trang giữ token (`meta-token.ts`, chung với `inbox.send`), rồi bỏ qua.
 import { and, eq, isNull } from 'drizzle-orm'
 import type { SecretCipher } from '../../adapters/crypto/index.ts'
 import type { MetaClient } from '../../adapters/meta/index.ts'
@@ -14,6 +15,7 @@ import { AppError } from '../../platform/errors/index.ts'
 import type { EventPublisher } from '../../platform/events/index.ts'
 import { getAccessToken } from '../connections/index.ts'
 import { getPage, getPlatformAccountId } from '../pages/index.ts'
+import { reportTokenInvalid } from './meta-token.ts'
 import { conversations } from './schema.ts'
 
 export interface FetchPostTextDeps {
@@ -81,6 +83,7 @@ export async function fetchPostText(deps: FetchPostTextDeps, conversationId: str
   const res = await client.get<PostPayload>(`/${conv.platformPostId}`, { token, tier: 'background', scope, params: { fields: field } })
   if (!res.ok) {
     if ((res.kind === 'RATE_LIMITED' || res.kind === 'TRANSIENT') && !opts.finalAttempt) throw new PostTextRetryableError(res.kind)
+    if (res.kind === 'TOKEN_INVALID') await reportTokenInvalid(deps, page.id)
     deps.log?.warn({ conversationId, pageId: page.id, kind: res.kind }, 'inbox: không lấy được caption bài từ Meta')
     await markFetched()
     return 'skipped'

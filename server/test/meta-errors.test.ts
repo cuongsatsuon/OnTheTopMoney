@@ -50,7 +50,7 @@ describe('classifyMetaError', () => {
     // 613/2018338, 368, 100/2534025, còn lại
     ['613/2018338 quấy rầy', 613, 2018338, 'REJECTED'],
     ['368 tạm khoá', 368, undefined, 'REJECTED'],
-    ['100/2534025 private reply', 100, 2534025, 'REJECTED'],
+    ['100/2534025 private reply', 100, 2534025, 'PRIVATE_REPLY_INVALID'],
     ['100 tham số sai', 100, undefined, 'REJECTED'],
     ['mã lạ', 987654, undefined, 'REJECTED'],
     ['300 (ngoài 200–299)', 300, undefined, 'REJECTED'],

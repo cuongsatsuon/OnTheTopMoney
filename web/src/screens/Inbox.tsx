@@ -4,10 +4,22 @@
 // lại…" của AppShell, nối lại thì tải bù (lib/realtime.ts).
 // Story 4.6: tab lọc + số "Cần xử lý" từ server; Tiếp quản (nút, công tắc "AI tự trả lời", phím `T`), bật lại AI,
 // Đánh dấu xong; ghi chú "AI chuyển cho bạn" nêu lý do + thời gian khách chờ (UX-DR5).
-// Thao tác của story sau (gửi tin — 4.7; Gợi ý bằng AI — 4.8; sửa panel khách — 4.9) hiện nhưng khoá, có gợi ý
-// "Sắp có": không giả lập thao tác trên khách thật.
-import { INBOX_TABS, type AttachmentDto, type ConversationAction, type ConversationDto, type InboxTab, type MessageDto, type Platform } from '@ottm/shared'
-import { CheckCheck, FileText, Hand, MessageSquareText, Newspaper, Paperclip, Search, Sparkles, TriangleAlert, UserRound } from 'lucide-react'
+// Story 4.7: ô soạn gửi tin thật (`⌘↵`; bình luận FB/IG chọn "Trả lời công khai" / "Nhắn riêng", Threads chỉ trả lời
+// công khai), bong bóng hiện "Đang gửi…" / lỗi (icon đỏ + lý do theo mã + gợi ý) + "Gửi lại" — tin lỗi không mất.
+// Thao tác của story sau (Gợi ý bằng AI — 4.8; sửa panel khách — 4.9) hiện nhưng khoá, có gợi ý "Sắp có": không giả
+// lập thao tác trên khách thật.
+import {
+  INBOX_TABS,
+  type AttachmentDto,
+  type ConversationAction,
+  type ConversationChannel,
+  type ConversationDto,
+  type InboxTab,
+  type MessageDelivery,
+  type MessageDto,
+  type Platform,
+} from '@ottm/shared'
+import { CheckCheck, CircleAlert, FileText, Hand, Lock, MessageSquareText, Newspaper, Paperclip, RotateCw, Search, SendHorizontal, Sparkles, TriangleAlert, UserRound } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { Skeleton } from '../components/Skeleton'
@@ -21,26 +33,37 @@ import {
   INBOX_TAB_LABEL,
   REASON_TEXT,
   REMOVAL_TEXT,
+  SEND_ERROR_TEXT,
+  SEND_MODE_LABEL,
   aiSwitchAction,
   attachmentUrl,
   bubbleKind,
+  canResend,
   channelLabel,
-  composerNote,
+  composerLimit,
+  composerModes,
+  composerPlaceholder,
   contactLabel,
   conversationControls,
   durationLabel,
   flattenMessages,
   handoffNote,
+  isSendRefusal,
+  isSendShortcut,
   listTimeLabel,
   messageTimeLabel,
+  outboundStatusLabel,
   postLine,
   previewText,
+  sendErrorHint,
   senderLabel,
   useConversation,
   useConversationAction,
   useConversations,
   useMessages,
   useNeedsHumanCount,
+  useResendMessage,
+  useSendMessage,
 } from '../lib/inbox'
 import { WEBHOOK_PRODUCT_LABEL, WEBHOOK_SETTINGS_PATH, stalledProducts, useWebhookHealth } from '../lib/webhooks'
 
@@ -229,7 +252,7 @@ export default function Inbox() {
               onOpenPanel={() => setPanelOpen(true)}
             />
             <ChatBody conv={selected} platform={page?.platform} now={now} />
-            <ComposerSoon note={composerNote(page?.platform, selected.channel)} />
+            <Composer key={selected.id} conv={selected} platform={page?.platform} />
           </>
         ) : (
           <div className="flex flex-1 items-center justify-center">
@@ -433,7 +456,18 @@ function ChatHeader({
 }
 
 function ChatBody({ conv, platform, now }: { conv: ConversationDto; platform: Platform | undefined; now: Date }) {
+  const { notify } = useApp()
   const messages = useMessages(conv.id)
+  const resend = useResendMessage()
+  const onResend = useCallback(
+    (messageId: string) =>
+      resend.mutate(
+        { messageId, conversationId: conv.id },
+        // Bị từ chối lại → bong bóng đổi lý do (đã làm cũ tin); lỗi khác → toast.
+        { onError: (err) => (isSendRefusal(err) ? undefined : notify(errorMessageOf(err))) },
+      ),
+    [resend, conv.id, notify],
+  )
   const items = useMemo(() => flattenMessages(messages.data?.pages), [messages.data])
   const endRef = useRef<HTMLDivElement>(null)
   const lastId = items.at(-1)?.id
@@ -466,7 +500,15 @@ function ChatBody({ conv, platform, now }: { conv: ConversationDto; platform: Pl
               </div>
             )}
             {items.map((m) => (
-              <Bubble key={m.id} msg={m} senderName={senderLabel(m, conv, platform)} now={now} />
+              <Bubble
+                key={m.id}
+                msg={m}
+                senderName={senderLabel(m, conv, platform)}
+                now={now}
+                channel={conv.channel}
+                resending={resend.isPending && resend.variables?.messageId === m.id}
+                onResend={onResend}
+              />
             ))}
           </>
         )}
@@ -497,7 +539,21 @@ function WebhookStalledBanner() {
   )
 }
 
-function Bubble({ msg, senderName, now }: { msg: MessageDto; senderName: string; now: Date }) {
+function Bubble({
+  msg,
+  senderName,
+  now,
+  channel,
+  resending,
+  onResend,
+}: {
+  msg: MessageDto
+  senderName: string
+  now: Date
+  channel: ConversationChannel
+  resending: boolean
+  onResend: (messageId: string) => void
+}) {
   const time = messageTimeLabel(msg.platformTimestamp, now)
   const kind = bubbleKind(msg.origin)
   if (kind === 'system')
@@ -536,11 +592,22 @@ function Bubble({ msg, senderName, now }: { msg: MessageDto; senderName: string;
       </div>
     )
   const ai = kind === 'ai'
+  const failed = msg.status === 'failed'
+  const status = outboundStatusLabel(msg.status)
   return (
     <div className="flex justify-end">
       <div className="max-w-[70%]">
-        <div className={cn('rounded-lg rounded-br-sm px-3.5 py-2 text-sm', ai ? 'border border-violet-200 bg-ai-soft text-foreground' : 'bg-primary text-primary-foreground')}>{content}</div>
+        <div
+          className={cn(
+            'rounded-lg rounded-br-sm px-3.5 py-2 text-sm',
+            ai ? 'border border-violet-200 bg-ai-soft text-foreground' : 'bg-primary text-primary-foreground',
+            (failed || msg.status === 'pending' || msg.status === 'sending') && 'opacity-70',
+          )}
+        >
+          {content}
+        </div>
         <div className="mt-1 flex items-center justify-end gap-1 text-[11px] text-muted-foreground">
+          {failed && <CircleAlert size={13} className="text-danger" aria-label="Gửi lỗi" />}
           {ai ? (
             <span className="inline-flex items-center gap-1 font-medium text-ai">
               <Sparkles size={11} /> AI trả lời
@@ -548,8 +615,37 @@ function Bubble({ msg, senderName, now }: { msg: MessageDto; senderName: string;
           ) : (
             <span className="font-medium">Bạn</span>
           )}
+          {msg.delivery === 'private_reply' && (
+            <span className="inline-flex items-center gap-0.5">
+              · <Lock size={10} /> Nhắn riêng
+            </span>
+          )}
           · {time}
+          {status && ` · ${status}`}
         </div>
+        {failed && <SendFailure msg={msg} channel={channel} resending={resending} onResend={onResend} />}
+      </div>
+    </div>
+  )
+}
+
+/** "Gửi tin lỗi" (EXPERIENCE.md › State Patterns): icon đỏ + lý do theo mã + gợi ý + "Gửi lại". Tin không mất. */
+function SendFailure({ msg, channel, resending, onResend }: { msg: MessageDto; channel: ConversationChannel; resending: boolean; onResend: (messageId: string) => void }) {
+  const code = msg.errorCode ?? 'SEND_FAILED'
+  const hint = sendErrorHint(code, channel)
+  return (
+    <div role="alert" className="mt-1.5 rounded-md border border-red-200 bg-danger-soft px-3 py-2 text-xs text-danger-foreground">
+      <div className="flex items-start gap-1.5">
+        <CircleAlert size={14} className="mt-px shrink-0 text-danger" />
+        <div className="min-w-0 flex-1">
+          <div className="font-medium">{SEND_ERROR_TEXT[code]}</div>
+          {hint && <div className="mt-0.5 text-red-900/80">{hint}</div>}
+        </div>
+        {canResend(msg) && (
+          <Button size="sm" variant="ghost" className="-my-1 h-7 px-2 text-danger-foreground" icon={<RotateCw size={13} />} disabled={resending} onClick={() => onResend(msg.id)}>
+            {resending ? 'Đang gửi…' : 'Gửi lại'}
+          </Button>
+        )}
       </div>
     </div>
   )
@@ -587,13 +683,81 @@ function Attachment({ att }: { att: AttachmentDto }) {
   )
 }
 
-/** Ô soạn tin (Story 4.7) — tạm thay bằng ghi chú theo kênh. */
-function ComposerSoon({ note }: { note: string }) {
+/**
+ * Ô soạn tin (Story 4.7): DM gửi tin thường; bình luận FB/IG chọn "Trả lời công khai" / "Nhắn riêng"; Threads chỉ trả
+ * lời công khai. `⌘↵`/`Ctrl+↵` gửi. Server từ chối (quá 24 giờ, đã nhắn riêng…) → tin hiện thành bong bóng lỗi, ô soạn
+ * xoá chữ như gửi thường; lỗi khác (mạng, phiên…) → toast, giữ chữ để gửi lại.
+ */
+function Composer({ conv, platform }: { conv: ConversationDto; platform: Platform | undefined }) {
+  const { notify } = useApp()
+  const modes = composerModes(platform, conv.channel)
+  const [picked, setPicked] = useState<MessageDelivery>(modes[0]!)
+  const mode = modes.includes(picked) ? picked : modes[0]!
+  const [text, setText] = useState('')
+  const send = useSendMessage()
+  const limit = composerLimit(platform, mode)
+  const trimmed = text.trim()
+  const tooLong = trimmed.length > limit
+  const canSubmit = trimmed !== '' && !tooLong && !send.isPending
+
+  const submit = () => {
+    if (!canSubmit) return
+    send.mutate(
+      { conversationId: conv.id, text: trimmed, mode },
+      {
+        onSuccess: () => setText(''),
+        onError: (err) => {
+          if (isSendRefusal(err)) setText('')
+          else notify(errorMessageOf(err))
+        },
+      },
+    )
+  }
+
   return (
     <div className="border-t border-border bg-surface px-5 py-3">
-      <div className="flex items-center gap-3 rounded-md border border-dashed border-border px-3 py-3 text-[13px] text-muted-foreground">
-        <MessageSquareText size={16} className="shrink-0" />
-        <span className="flex-1">{note}</span>
+      {modes.length > 1 && (
+        <div role="radiogroup" aria-label="Cách trả lời" className="mb-2 inline-flex rounded-md border border-border bg-background p-0.5 text-[13px]">
+          {modes.map((m) => (
+            <button
+              key={m}
+              role="radio"
+              aria-checked={mode === m}
+              onClick={() => setPicked(m)}
+              className={cn('inline-flex items-center gap-1 rounded px-2.5 py-1 font-medium transition-colors', mode === m ? 'bg-primary-soft text-primary' : 'text-muted-foreground hover:text-foreground')}
+            >
+              {m === 'private_reply' && <Lock size={12} />}
+              {SEND_MODE_LABEL[m]}
+            </button>
+          ))}
+        </div>
+      )}
+      <div className="rounded-md border border-border bg-background focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/15">
+        <textarea
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (isSendShortcut({ key: e.key, metaKey: e.metaKey, ctrlKey: e.ctrlKey, isComposing: e.nativeEvent.isComposing })) {
+              e.preventDefault()
+              submit()
+            }
+          }}
+          rows={3}
+          placeholder={composerPlaceholder(mode)}
+          aria-label="Soạn tin nhắn"
+          className="block w-full resize-none bg-transparent px-3 py-2 text-sm focus:outline-none"
+        />
+        <div className="flex items-center gap-2 border-t border-border px-2 py-1.5">
+          <Button size="sm" variant="ghost" icon={<Sparkles size={14} />} disabled title="Sắp có" className="text-ai">
+            Gợi ý bằng AI
+          </Button>
+          <span className={cn('ml-auto text-[11px]', tooLong ? 'font-medium text-danger' : 'text-muted-foreground')}>
+            {trimmed.length > limit * 0.8 ? `${trimmed.length}/${limit}` : <><Kbd>⌘</Kbd> <Kbd>↵</Kbd> gửi</>}
+          </span>
+          <Button size="sm" variant="primary" icon={<SendHorizontal size={14} />} disabled={!canSubmit} onClick={submit}>
+            {send.isPending ? 'Đang gửi…' : mode === 'dm' ? 'Gửi' : SEND_MODE_LABEL[mode]}
+          </Button>
+        </div>
       </div>
     </div>
   )

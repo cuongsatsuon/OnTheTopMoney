@@ -1,8 +1,18 @@
 // Story 4.3 — helper thuần của Hộp thư: phạm vi gửi server, tab, nhãn khách, xem trước, lý do hệ thống, thời gian
 // (giờ VN), gộp trang tin, URL đính kèm. Story 4.4: nhãn kênh bình luận/Threads, dòng bài, nhãn xoá/ẩn, người viết tin,
 // ghi chú ô soạn theo kênh. Story 4.6: thao tác theo trạng thái, công tắc AI, ghi chú handoff (UX-DR5), khoá query tab/
-// badge nằm dưới gốc `conversations` để hint realtime làm cũ.
-import { CONVERSATION_STATES, INBOX_TABS, STATE_CHANGE_REASONS, ATTACHMENT_ERRORS, MESSAGE_REMOVALS, type ConversationPreview } from '@ottm/shared'
+// badge nằm dưới gốc `conversations` để hint realtime làm cũ. Story 4.7: cách gửi + giới hạn chữ theo kênh, phím `⌘↵`,
+// nhãn trạng thái gửi, câu lỗi + gợi ý theo mã gửi tin, "Gửi lại", nhận diện từ chối gửi (409 mã gửi tin).
+import {
+  CONVERSATION_STATES,
+  INBOX_TABS,
+  MESSAGE_STATUSES,
+  SEND_ERROR_CODES,
+  STATE_CHANGE_REASONS,
+  ATTACHMENT_ERRORS,
+  MESSAGE_REMOVALS,
+  type ConversationPreview,
+} from '@ottm/shared'
 import { describe, expect, it } from 'vitest'
 import {
   ATTACHMENT_ERROR_TEXT,
@@ -11,8 +21,17 @@ import {
   attachmentUrl,
   bubbleKind,
   channelLabel,
-  composerNote,
   INBOX_TAB_LABEL,
+  SEND_ERROR_TEXT,
+  SEND_MODE_LABEL,
+  canResend,
+  composerLimit,
+  composerModes,
+  composerPlaceholder,
+  isSendRefusal,
+  isSendShortcut,
+  outboundStatusLabel,
+  sendErrorHint,
   aiSwitchAction,
   contactLabel,
   conversationControls,
@@ -28,6 +47,7 @@ import {
   senderLabel,
   serverScope,
 } from './inbox'
+import { ApiError } from './api'
 
 const UUID = '019a0000-0000-7000-8000-00000000abcd'
 
@@ -177,10 +197,73 @@ describe('Story 4.4: bình luận và trả lời Threads', () => {
     expect(senderLabel({ sender: { contactId: '019a-ffff-abcd', name: null } }, conv, 'threads')).toBe('Khách Threads · ABCD')
   })
 
-  it('composerNote: bình luận FB/IG có Nhắn riêng; Threads chỉ trả lời công khai; DM như cũ', () => {
-    expect(composerNote('facebook', 'comment')).toContain('Nhắn riêng')
-    expect(composerNote('instagram', 'comment')).toContain('Instagram')
-    expect(composerNote('threads', 'comment')).not.toContain('Nhắn riêng')
-    expect(composerNote('facebook', 'dm')).toContain('Messenger/Instagram')
+})
+
+describe('gửi tin (Story 4.7)', () => {
+  it('composerModes: DM chỉ gửi tin; bình luận FB/IG có Trả lời công khai + Nhắn riêng; Threads chỉ trả lời công khai', () => {
+    expect(composerModes('facebook', 'dm')).toEqual(['dm'])
+    expect(composerModes('instagram', 'dm')).toEqual(['dm'])
+    expect(composerModes('facebook', 'comment')).toEqual(['public_reply', 'private_reply'])
+    expect(composerModes('instagram', 'comment')).toEqual(['public_reply', 'private_reply'])
+    expect(composerModes('threads', 'comment')).toEqual(['public_reply'])
+    // Trang chưa tải → như Facebook.
+    expect(composerModes(undefined, 'comment')).toEqual(['public_reply', 'private_reply'])
+    expect(SEND_MODE_LABEL.private_reply).toBe('Nhắn riêng')
+    expect(SEND_MODE_LABEL.public_reply).toBe('Trả lời công khai')
+  })
+
+  it('composerLimit: Threads 500, tin nhắn Instagram 1000, còn lại 2000', () => {
+    expect(composerLimit('threads', 'public_reply')).toBe(500)
+    expect(composerLimit('instagram', 'dm')).toBe(1000)
+    expect(composerLimit('instagram', 'private_reply')).toBe(1000)
+    expect(composerLimit('instagram', 'public_reply')).toBe(2000)
+    expect(composerLimit('facebook', 'dm')).toBe(2000)
+    expect(composerPlaceholder('private_reply')).toContain('Nhắn riêng')
+    expect(composerPlaceholder('dm')).toContain('⌘↵')
+  })
+
+  it('isSendShortcut: ⌘↵ / Ctrl+↵ gửi; Enter thường và lúc đang gõ IME thì không', () => {
+    expect(isSendShortcut({ key: 'Enter', metaKey: true, ctrlKey: false })).toBe(true)
+    expect(isSendShortcut({ key: 'Enter', metaKey: false, ctrlKey: true })).toBe(true)
+    expect(isSendShortcut({ key: 'Enter', metaKey: false, ctrlKey: false })).toBe(false)
+    expect(isSendShortcut({ key: 'Enter', metaKey: true, ctrlKey: false, isComposing: true })).toBe(false)
+    expect(isSendShortcut({ key: 'a', metaKey: true, ctrlKey: false })).toBe(false)
+  })
+
+  it('outboundStatusLabel: pending/sending "Đang gửi…", sent/delivered/read có nhãn, failed/null không', () => {
+    expect(outboundStatusLabel('pending')).toBe('Đang gửi…')
+    expect(outboundStatusLabel('sending')).toBe('Đang gửi…')
+    expect(outboundStatusLabel('sent')).toBe('Đã gửi')
+    expect(outboundStatusLabel('delivered')).toBe('Đã nhận')
+    expect(outboundStatusLabel('read')).toBe('Đã xem')
+    expect(outboundStatusLabel('failed')).toBeNull()
+    expect(outboundStatusLabel(null)).toBeNull()
+    for (const s of MESSAGE_STATUSES) expect(() => outboundStatusLabel(s)).not.toThrow()
+  })
+
+  it('SEND_ERROR_TEXT: đủ mọi mã, câu đúng microcopy UX; gợi ý theo mã', () => {
+    for (const code of SEND_ERROR_CODES) expect(SEND_ERROR_TEXT[code]).toBeTruthy()
+    expect(SEND_ERROR_TEXT.OUTSIDE_24H).toBe('Quá 24 giờ kể từ tin cuối của khách — Meta không cho gửi tin thường')
+    expect(SEND_ERROR_TEXT.PAGE_DISCONNECTED).toBe('Trang mất kết nối')
+    expect(SEND_ERROR_TEXT.RATE_LIMITED).toBe('Gửi quá nhanh, thử lại sau ít phút')
+    expect(sendErrorHint('OUTSIDE_24H', 'dm')).toContain('bình luận')
+    expect(sendErrorHint('OUTSIDE_24H', 'dm')).toContain('gọi điện')
+    expect(sendErrorHint('PRIVATE_REPLY_USED', 'comment')).toContain('Trả lời công khai')
+    expect(sendErrorHint('SEND_FAILED', 'dm')).toBeNull()
+  })
+
+  it('canResend: chỉ tin của chủ shop đang lỗi', () => {
+    expect(canResend({ origin: 'app_human', status: 'failed' })).toBe(true)
+    expect(canResend({ origin: 'app_human', status: 'sent' })).toBe(false)
+    expect(canResend({ origin: 'app_ai', status: 'failed' })).toBe(false)
+  })
+
+  it('isSendRefusal: 409 với mã gửi tin → tin đã lưu failed; lỗi khác → toast', () => {
+    expect(isSendRefusal(new ApiError('OUTSIDE_24H', 409, 'x'))).toBe(true)
+    expect(isSendRefusal(new ApiError('PRIVATE_REPLY_USED', 409, 'x'))).toBe(true)
+    expect(isSendRefusal(new ApiError('VERSION_CONFLICT', 409, 'x'))).toBe(false)
+    expect(isSendRefusal(new ApiError('VALIDATION_FAILED', 400, 'x'))).toBe(false)
+    expect(isSendRefusal(new ApiError('RATE_LIMITED', 429, 'x'))).toBe(false)
+    expect(isSendRefusal(new Error('x'))).toBe(false)
   })
 })

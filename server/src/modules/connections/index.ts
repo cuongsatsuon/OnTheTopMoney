@@ -49,7 +49,7 @@ export {
   type SubscribeOutcome,
   type SubscribePageDeps,
 } from './subscribe.ts'
-export { getAccessToken, removePage } from './credentials.ts'
+export { getAccessToken, removePage, tokenOwnerPageId } from './credentials.ts'
 export { FAKE_CODE, FAKE_THREADS_CODE } from './fake-meta.ts'
 export {
   computeConnectionStatus,

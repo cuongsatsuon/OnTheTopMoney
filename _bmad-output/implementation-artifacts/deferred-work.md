@@ -59,9 +59,6 @@
   summary: Gỡ trang thì huỷ đăng ký `DELETE /{page}/subscribed_apps` ở Meta.
   evidence: `removePage` xoá credential nhưng Meta vẫn gửi sự kiện của trang đã gỡ, và chúng được tính là sự kiện thật trong health.
 - source_spec: `spec-4-3-tin-dm-vao-hop-thu.md`
-  summary: `inbox.fetch_profile` gặp `TOKEN_INVALID` chỉ bỏ qua — chưa `connections.markDisconnected` như AD-10 yêu cầu cho đường gửi tin.
-  evidence: Lấy tên khách là việc phụ; cron `connections.token_check` vẫn phát hiện token hỏng. Làm cùng `inbox.send` (Story 4.7) để mọi lời gọi Meta của `inbox` ánh xạ lỗi token một chỗ.
-- source_spec: `spec-4-3-tin-dm-vao-hop-thu.md`
   summary: Dọn file đính kèm trên Cloudinary khi xoá khách/hội thoại (Epic 9) và khi đính kèm tải lên xong nhưng transaction ghi `stored` thất bại.
   evidence: `message_attachments` xoá theo cascade nhưng file `authenticated` ở Cloudinary không bị xoá; `privacy` (Epic 9) cần gọi `PrivateFileStore.delete` theo ref.
 - source_spec: `spec-4-4-binh-luan-vao-hop-thu.md`
@@ -79,3 +76,18 @@
 - source_spec: `spec-4-6-tab-tiep-quan-danh-dau-xong.md`
   summary: Bật lại AI cho hội thoại mà khách đang chờ (tin không phải `system` mới nhất là `customer`) → cần chạy cổng AI ngay cho tin chờ sẵn (hoặc chặn/cảnh báo), không để hội thoại nằm ở tab "AI đang trả lời" mà không ai trả lời.
   evidence: `applyUserAction('enable-ai')` đặt `waiting_since=null`, hội thoại rời "Cần xử lý"; `autoreply.triage` chỉ chạy khi có `message.received` mới. Trước Epic 5 cổng luôn đóng nên AI không bao giờ trả lời tin đó. Làm cùng chuỗi cổng AD-16 ở Epic 5 (kích hoạt quyết định khi bật lại AI).
+- source_spec: `spec-4-7-gui-tin-24-gio.md`
+  summary: Trạng thái `delivered`/`read` của tin outbound từ webhook (Messenger `message_deliveries`, `message_reads`; IG `messaging_seen`).
+  evidence: `MessageStatus` và nhãn web ("Đã nhận", "Đã xem") đã có nhưng `PAGE_SUBSCRIBED_FIELDS` chưa đăng ký các field này và `webhook.route` chưa có nhánh; tin dừng ở `sent`. Cần thêm field đăng ký (chạy bù đăng ký lại các trang) + chuẩn hoá + cập nhật theo `watermark`.
+- source_spec: `spec-4-7-gui-tin-24-gio.md`
+  summary: Nhắn riêng tạo sẵn hội thoại `dm` với `origin_conversation_id` = hội thoại bình luận (AD-10/AD-11 bản đầy đủ), và gợi ý gộp khi `recipient_id` đã thuộc khách khác.
+  evidence: 4.7 chỉ gắn định danh `(page, recipient_id)` vào cùng khách; khách trả lời qua Messenger thì vào hội thoại `dm` mới của cùng khách nhưng không có liên kết ngược. Định danh đã thuộc khách khác chỉ được log (gộp bằng tay ở Story 4.9).
+- source_spec: `spec-4-7-gui-tin-24-gio.md`
+  summary: Gửi lại / xử lý tin `app_ai` gửi lỗi (Epic 5) — hiện "Gửi lại" chỉ cho tin `app_human`.
+  evidence: `resendMessage` trả `conflict` cho tin AI; khi Epic 5 ghi tin AI qua `inbox.send` cần quyết định: chủ shop gửi lại tin AI (thành `HUMAN_REPLIED`?) hay chỉ handoff.
+- source_spec: `spec-4-7-gui-tin-24-gio.md`
+  summary: Xác nhận bằng Meta thật: Send API `/me/messages` cho IG (token Fanpage nguồn), `metadata` cho IG, Threads publish container trả lời ngay sau khi tạo (tài liệu khuyên chờ), giới hạn ký tự IG 1000.
+  evidence: Đường gửi mới chỉ chạy với Meta giả/fake client. Threads publish lỗi tạm thì retry tạo container mới (container cũ mồ côi, vô hại).
+- source_spec: `spec-4-7-gui-tin-24-gio.md`
+  summary: Gửi tin hết giờ / lỗi mạng (không có phản hồi HTTP) hoặc 5xx có thể đã tới Meta → không retry tự động mà ghi `failed` `SEND_UNKNOWN` (hoặc tra lại trước khi retry); Threads tách retry bước publish khỏi bước tạo container.
+  evidence: `deliverMessage` (server/src/modules/inbox/send.ts) coi mọi `TRANSIENT` là retry được — `transientFailure()` của adapter gộp hết giờ, lỗi kết nối và 5xx — nên tin có thể tới khách 2–6 lần; Threads `threads_publish` hết giờ mà đã đăng thì retry tạo container mới và đăng lại. Cần adapter phân biệt "chưa gửi được" (DNS/kết nối bị từ chối) với "không rõ" (hết giờ sau khi gửi) và quyết định sản phẩm (AD-10 hiện ghi retry lỗi tạm). Khi có echo (Story 4.5) có thể khớp `metadata` để biết tin đã tới.

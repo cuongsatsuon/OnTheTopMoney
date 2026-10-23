@@ -58,6 +58,8 @@ export interface QueuePayloads {
   'inbox.fetch_attachment': { attachmentId: string }
   'inbox.fetch_profile': { identityId: string }
   'inbox.fetch_post_text': { conversationId: string }
+  'inbox.send': { messageId: string }
+  'inbox.send_sweep': Record<string, never>
 }
 
 export const QUEUES = {
@@ -217,6 +219,31 @@ export const QUEUES = {
     retryBackoff: true,
     concurrency: 2,
     expireInSeconds: 60,
+  },
+  // Module `inbox` (Story 4.7, AD-10, AD-24): gửi một tin outbound qua Meta. Chống trùng bằng
+  // `UPDATE … SET status='sending' WHERE status='pending'` (không singletonKey). Chỉ `TRANSIENT` ném để retry (tin trả
+  // về `pending` trước); `RATE_LIMITED` hoãn bằng job mới `startAfter` (không tính lượt); lần thử cuối / lỗi khác ghi
+  // `failed` + mã rồi kết thúc êm. Retry 5 backoff (5/10/20/40/80 giây), concurrency 5. `critical`: handler chỉ ném ở
+  // lần cuối khi lỗi bất ngờ (DB…) → thông báo `system_error`. Hỏi job 0,5 giây để tin đi ngay.
+  'inbox.send': {
+    policy: 'standard',
+    retryLimit: 5,
+    retryDelay: 5,
+    retryBackoff: true,
+    concurrency: 5,
+    // Threads gửi 2 lời gọi (mỗi lời ≤30 giây).
+    expireInSeconds: 120,
+    pollingIntervalSeconds: 0.5,
+    critical: true,
+  },
+  // Module `inbox` (Story 4.7): mỗi 5 phút đưa tin kẹt `sending` quá 15 phút về `failed` `SEND_UNKNOWN` (worker chết giữa
+  // lời gọi Meta — có thể đã tới khách nên không tự gửi lại). Idempotent; cron chạy lại sau 5 phút → retry 1.
+  'inbox.send_sweep': {
+    policy: 'standard',
+    retryLimit: 1,
+    concurrency: 1,
+    expireInSeconds: 60,
+    cron: { expression: '*/5 * * * *', tz: CRON_TZ },
   },
 } as const satisfies { [N in keyof QueuePayloads]: QueueDef }
 

@@ -4,12 +4,18 @@
 // Story 4.4: hội thoại bình luận (FB/IG) và trả lời Threads — nhãn kênh, dòng bài, nhãn sửa/xoá/ẩn, người viết tin.
 // Story 4.6: tab lọc + badge đếm ở server (`tab=`, `/conversations/count`), lệnh Tiếp quản / bật lại AI / Đánh dấu
 // xong (`useConversationAction`), thao tác hiện theo trạng thái và ghi chú "AI chuyển cho bạn" (UX-DR5).
+// Story 4.7: gửi / gửi lại tin (`useSendMessage`, `useResendMessage`), cách gửi theo kênh, nhãn trạng thái gửi, câu lỗi
+// theo mã gửi tin (bong bóng "Gửi tin lỗi"). Server từ chối gửi (409 mã gửi tin) → tin đã lưu `failed`: chỉ làm cũ tin.
 import {
   ListConversationsResponse,
   ConversationCountResponse,
   ConversationDto,
   ListMessagesResponse,
+  MessageDto,
   formatScope,
+  isSendErrorCode,
+  sendModesFor,
+  sendTextLimit,
   type AttachmentError,
   type ConversationAction,
   type ConversationChannel,
@@ -17,15 +23,17 @@ import {
   type InboxTab,
   type ConversationPost,
   type ConversationPreview,
-  type MessageDto,
+  type MessageDelivery,
   type MessageOrigin,
+  type MessageStatus,
   type MessageRemoval,
   type Platform,
   type Scope,
+  type SendErrorCode,
   type StateChangeReason,
 } from '@ottm/shared'
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { apiFetch, apiUrl } from './api'
+import { apiFetch, apiUrl, isApiError } from './api'
 
 export const CONVERSATIONS_KEY = ['conversations'] as const
 export const conversationsListKey = (scope: string | null, tab: InboxTab) => ['conversations', 'list', scope, tab] as const
@@ -125,7 +133,122 @@ export function useConversationAction() {
   })
 }
 
+/**
+ * Server đã từ chối gửi nhưng LƯU tin `failed` (409 với mã gửi tin, AD-10): bong bóng lỗi hiện lý do + "Gửi lại", không
+ * cần toast.
+ */
+export function isSendRefusal(err: unknown): boolean {
+  return isApiError(err) && err.status === 409 && isSendErrorCode(err.code)
+}
+
+/** Sau gửi / gửi lại (thành công hay bị từ chối): tin mới / bong bóng lỗi, danh sách + badge (trạng thái có thể đổi). */
+function invalidateAfterSend(queryClient: ReturnType<typeof useQueryClient>, conversationId: string) {
+  void queryClient.invalidateQueries({ queryKey: messagesKey(conversationId) })
+  void queryClient.invalidateQueries({ queryKey: CONVERSATIONS_KEY })
+}
+
+/** Gửi tin của chủ shop (`POST /conversations/:id/messages`). */
+export function useSendMessage() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ conversationId, text, mode }: { conversationId: string; text: string; mode: MessageDelivery }) =>
+      apiFetch(`/conversations/${conversationId}/messages`, { method: 'POST', body: { text, mode }, schema: MessageDto }),
+    onSettled: (_data, err, vars) => {
+      if (!err || isSendRefusal(err)) invalidateAfterSend(queryClient, vars.conversationId)
+    },
+  })
+}
+
+/** "Gửi lại" tin lỗi (`POST /messages/:id/resend`). */
+export function useResendMessage() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ messageId }: { messageId: string; conversationId: string }) =>
+      apiFetch(`/messages/${messageId}/resend`, { method: 'POST', schema: MessageDto }),
+    onSettled: (_data, err, vars) => {
+      if (!err || isSendRefusal(err)) invalidateAfterSend(queryClient, vars.conversationId)
+    },
+  })
+}
+
 /* ---------- Helper thuần ---------- */
+
+/** Nhãn nút chọn cách gửi ở ô soạn. */
+export const SEND_MODE_LABEL: Record<MessageDelivery, string> = {
+  dm: 'Gửi tin',
+  public_reply: 'Trả lời công khai',
+  private_reply: 'Nhắn riêng',
+}
+
+/** Cách gửi + giới hạn ký tự của ô soạn theo nền tảng/kênh (trang chưa tải → coi như Facebook). */
+export function composerModes(platform: Platform | undefined, channel: ConversationChannel): readonly MessageDelivery[] {
+  return sendModesFor(platform ?? 'facebook', channel)
+}
+
+export function composerLimit(platform: Platform | undefined, mode: MessageDelivery): number {
+  return sendTextLimit(platform ?? 'facebook', mode)
+}
+
+/** Gợi ý trong ô soạn theo cách gửi. */
+export function composerPlaceholder(mode: MessageDelivery): string {
+  if (mode === 'public_reply') return 'Viết trả lời công khai dưới bình luận… (⌘↵ để gửi)'
+  if (mode === 'private_reply') return 'Nhắn riêng cho người bình luận qua Messenger/Instagram… (⌘↵ để gửi)'
+  return 'Nhập tin nhắn… (⌘↵ để gửi)'
+}
+
+/** `⌘↵` (macOS) / `Ctrl+↵` gửi tin. Đang gõ bộ gõ (IME) thì không. */
+export function isSendShortcut(e: { key: string; metaKey: boolean; ctrlKey: boolean; isComposing?: boolean }): boolean {
+  return e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.isComposing
+}
+
+/** Lý do tin không gửi được (bong bóng "Gửi tin lỗi", EXPERIENCE.md › State Patterns). */
+export const SEND_ERROR_TEXT: Record<SendErrorCode, string> = {
+  OUTSIDE_24H: 'Quá 24 giờ kể từ tin cuối của khách — Meta không cho gửi tin thường',
+  PRIVATE_REPLY_USED: 'Bình luận này đã được nhắn riêng một lần — Meta chỉ cho nhắn riêng một lần mỗi bình luận',
+  PRIVATE_REPLY_INVALID: 'Không nhắn riêng được bình luận này (quá 7 ngày, đã bị xoá hoặc không hỗ trợ)',
+  RECIPIENT_UNAVAILABLE: 'Không gửi được tới khách — khách có thể đã chặn trang hoặc không nhận tin',
+  PAGE_DISCONNECTED: 'Trang mất kết nối',
+  PAGE_REMOVED: 'Trang đã bị gỡ khỏi app',
+  RATE_LIMITED: 'Gửi quá nhanh, thử lại sau ít phút',
+  SEND_REJECTED: 'Meta không nhận tin này (bình luận có thể đã bị xoá hoặc nội dung bị chặn)',
+  SEND_FAILED: 'Gửi chưa được do lỗi kết nối tới Meta',
+  SEND_UNKNOWN: 'Chưa rõ tin đã tới khách hay chưa — kiểm tra trên Messenger/Instagram trước khi gửi lại',
+}
+
+/** Gợi ý cách xử lý tiếp theo mã lỗi (dòng phụ dưới lý do); không có → `null`. */
+export function sendErrorHint(code: SendErrorCode, channel: ConversationChannel): string | null {
+  switch (code) {
+    case 'OUTSIDE_24H':
+      return channel === 'dm' ? 'Trả lời khách qua bình luận trên bài của trang hoặc gọi điện.' : null
+    case 'PAGE_DISCONNECTED':
+      return 'Kết nối lại trang ở Trang & Nhóm rồi gửi lại.'
+    case 'PRIVATE_REPLY_USED':
+    case 'PRIVATE_REPLY_INVALID':
+      return 'Trả lời công khai dưới bình luận thay thế.'
+    default:
+      return null
+  }
+}
+
+/** Nhãn trạng thái dưới bong bóng tin của chủ shop / AI; `failed` hiện lý do riêng → `null`. */
+export function outboundStatusLabel(status: MessageStatus | null): string | null {
+  switch (status) {
+    case 'pending':
+    case 'sending':
+      return 'Đang gửi…'
+    case 'sent':
+      return 'Đã gửi'
+    case 'delivered':
+      return 'Đã nhận'
+    case 'read':
+      return 'Đã xem'
+    default:
+      return null
+  }
+}
+
+/** "Gửi lại" chỉ cho tin của chủ shop đang lỗi (server cũng kiểm). */
+export const canResend = (msg: Pick<MessageDto, 'origin' | 'status'>): boolean => msg.origin === 'app_human' && msg.status === 'failed'
 
 export interface ConversationControls {
   /** Nút "Tiếp quản" (và phím `T`). */
@@ -205,17 +328,6 @@ export function senderLabel(
 ): string {
   const sender = msg.sender && msg.sender.contactId !== conv.contact.id ? { id: msg.sender.contactId, name: msg.sender.name } : conv.contact
   return contactLabel(sender, platform)
-}
-
-/** Ghi chú ở chỗ ô soạn tin (gửi tin là Story 4.7). */
-export function composerNote(platform: Platform | undefined, channel: ConversationChannel): string {
-  if (channel === 'comment') {
-    const where = platform === 'threads' ? 'Threads' : platform === 'instagram' ? 'Instagram' : 'Facebook'
-    return platform === 'threads'
-      ? `Trả lời công khai từ Hộp thư sắp có. Tạm thời trả lời khách trên ${where}.`
-      : `Trả lời công khai và Nhắn riêng từ Hộp thư sắp có. Tạm thời trả lời khách trên ${where}.`
-  }
-  return 'Gửi tin và “Gợi ý bằng AI” từ Hộp thư sắp có. Tạm thời trả lời khách trên Messenger/Instagram.'
 }
 
 /** Tên hiển thị của khách; chưa lấy được tên từ Meta → "Khách Messenger · 3F2A" (4 ký tự cuối id, để phân biệt). */

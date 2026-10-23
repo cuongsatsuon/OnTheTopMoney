@@ -7,8 +7,11 @@
 //   → `human` `AI_OFF`, để bật lại AI không làm khách rơi khỏi "Cần xử lý"). Lệnh của chủ shop `applyUserAction`:
 //   Tiếp quản (→ `human`, tắt AI, huỷ tin AI `pending`), bật lại AI (→ `ai`), Đánh dấu xong (→ `done`, bật AI, xoá
 //   mốc chờ). Lệnh tăng `state_version` nên quyết định autoreply đang bay tới sau sẽ `stale`.
+// - Story 4.7: chủ shop gửi tin từ Hộp thư (`applyHumanReply`, trong transaction gửi của `send.ts`) → huỷ tin AI
+//   `pending`, `triage|ai|handoff|done → human` (`HUMAN_REPLIED`), tắt AI, xoá mốc chờ. Tin outbound `failed` không tính là
+//   "đã trả lời" khi xét khách còn chờ.
 import type { ConversationAction, ConversationState, StateChangeReason } from '@ottm/shared'
-import { and, desc, eq, ne } from 'drizzle-orm'
+import { and, desc, eq, isNull, ne, or, sql } from 'drizzle-orm'
 import type { Db, DbExecutor } from '../../platform/db/index.ts'
 import type { EventPublisher } from '../../platform/events/index.ts'
 import { lockThread, threadLockKey } from './ingest.ts'
@@ -50,10 +53,18 @@ export interface StateDeps {
 /** Trạng thái autoreply được quyết định: `triage` (tin đầu / mở lại) và `ai` (tin khách mới khi AI đang trả lời). */
 const DECIDABLE: readonly ConversationState[] = ['triage', 'ai']
 
-type ConversationRow = typeof conversations.$inferSelect
+export type ConversationRow = typeof conversations.$inferSelect
+
+/** Tin "hiệu lực" để xét ai nói sau cùng: không phải `system`, không phải tin outbound gửi lỗi (`failed`). */
+export const effectiveMessage = and(ne(messages.origin, 'system'), or(isNull(messages.status), ne(messages.status, 'failed')))
+
+/** Xoá tin AI chưa gửi (`pending`) của hội thoại (AD-9: người tiếp quản / người trả lời). Tin `sending` không chặn được nữa. */
+async function cancelPendingAi(tx: DbExecutor, conversationId: string): Promise<void> {
+  await tx.delete(messages).where(and(eq(messages.conversationId, conversationId), eq(messages.origin, 'app_ai'), eq(messages.status, 'pending')))
+}
 
 /** Khoá luồng của hội thoại rồi đọc dòng `FOR UPDATE`; `null` khi không còn. */
-async function lockConversation(tx: DbExecutor, conversationId: string): Promise<ConversationRow | null> {
+export async function lockConversation(tx: DbExecutor, conversationId: string): Promise<ConversationRow | null> {
   const [peek] = await tx
     .select({ pageId: conversations.pageId, channel: conversations.channel, threadKey: conversations.threadKey })
     .from(conversations)
@@ -164,16 +175,13 @@ export async function applyUserAction(deps: StateDeps, conversationId: string, a
 
     let waitingSince: Date | null = null
     if (action === 'takeover') {
-      // Huỷ tin AI chưa gửi (AD-9): job `inbox.send` (Story 4.7) chiếm tin bằng `status='pending'` → không còn gì để gửi.
-      // Tin đang `sending` thì không chặn được nữa (có thể đã tới khách).
-      await tx
-        .delete(messages)
-        .where(and(eq(messages.conversationId, conv.id), eq(messages.origin, 'app_ai'), eq(messages.status, 'pending')))
-      // Khách vẫn chờ nếu tin không phải `system` mới nhất là của khách → giữ/đặt mốc chờ (vẫn ở "Cần xử lý").
+      // Huỷ tin AI chưa gửi (AD-9): job `inbox.send` chiếm tin bằng `status='pending'` → không thấy dòng = đã huỷ.
+      await cancelPendingAi(tx, conv.id)
+      // Khách vẫn chờ nếu tin hiệu lực mới nhất là của khách → giữ/đặt mốc chờ (vẫn ở "Cần xử lý").
       const [last] = await tx
         .select({ origin: messages.origin })
         .from(messages)
-        .where(and(eq(messages.conversationId, conv.id), ne(messages.origin, 'system')))
+        .where(and(eq(messages.conversationId, conv.id), effectiveMessage))
         .orderBy(desc(messages.platformTimestamp), desc(messages.id))
         .limit(1)
       if (last?.origin === 'customer') waitingSince = conv.waitingSince ?? conv.lastCustomerMessageAt ?? now
@@ -181,4 +189,35 @@ export async function applyUserAction(deps: StateDeps, conversationId: string, a
     const version = await transition(tx, deps, conv, { to: rule.to, reasonCode: rule.reasonCode, waitingSince, aiEnabled: rule.aiEnabled }, now)
     return { status: 'applied', version }
   })
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Chủ shop gửi tin (Story 4.7)
+// ---------------------------------------------------------------------------------------------------------
+
+/**
+ * Trạng thái chuyển sang `human` khi chủ shop gửi tin (AD-9: người gửi tin → `human`, tắt AI). Gồm cả `done`: chủ shop
+ * chủ động nhắn lại thì tin khách sau đó phải về tay người, không mở lại `triage` cho AI tự trả lời. `human` giữ nguyên.
+ */
+const HUMAN_REPLY_FROM: readonly ConversationState[] = ['triage', 'ai', 'handoff', 'done']
+
+/**
+ * Chủ shop vừa gửi một tin (đã vào hàng gửi) — chạy TRONG transaction gửi, sau `lockConversation`: huỷ tin AI `pending`,
+ * `triage|ai|handoff|done → human` (`HUMAN_REPLIED`), `ai_enabled=false` (cả khi đã ở `human`), xoá mốc chờ, đẩy
+ * `last_message_at` tới `at`.
+ */
+export async function applyHumanReply(tx: DbExecutor, deps: StateDeps, conv: ConversationRow, at: Date, now: Date): Promise<void> {
+  await cancelPendingAi(tx, conv.id)
+  if (HUMAN_REPLY_FROM.includes(conv.state as ConversationState)) {
+    await transition(tx, deps, conv, { to: 'human', reasonCode: 'HUMAN_REPLIED', waitingSince: null, aiEnabled: false }, now)
+  }
+  await tx
+    .update(conversations)
+    .set({
+      waitingSince: null,
+      aiEnabled: false,
+      lastMessageAt: sql`greatest(${conversations.lastMessageAt}, ${at.toISOString()}::timestamptz)`,
+      updatedAt: now,
+    })
+    .where(eq(conversations.id, conv.id))
 }

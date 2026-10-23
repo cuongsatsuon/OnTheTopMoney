@@ -18,7 +18,13 @@ import {
   runTokenCheck,
   subscribePage,
 } from '../modules/connections/index.ts'
-import { handleFetchAttachmentJob, handleFetchPostTextJob, handleFetchProfileJob } from '../modules/inbox/index.ts'
+import {
+  handleFetchAttachmentJob,
+  handleFetchPostTextJob,
+  handleFetchProfileJob,
+  handleSendJob,
+  sweepStuckSending,
+} from '../modules/inbox/index.ts'
 import { handleEvent } from '../modules/notifications/index.ts'
 import { handleProfilesEvent } from '../modules/profiles/index.ts'
 import { handleRouteJob, markEventFailed, routeWebhookEvent, runHealthCheck } from '../modules/webhooks/index.ts'
@@ -37,7 +43,8 @@ const cipher =
     ? createSecretCipher({ keys: config.APP_ENCRYPTION_KEYS, activeKeyId: config.APP_ENCRYPTION_ACTIVE_KEY })
     : null
 // Client Threads (fake khi `META_FAKE=1`; undefined khi chưa cấu hình app Threads) để làm mới token Threads;
-// client Graph để đăng ký webhook trang (`connections.subscribe_page`, Story 4.2); cả hai đọc caption bài (Story 4.4).
+// client Graph để đăng ký webhook trang (`connections.subscribe_page`, Story 4.2); cả hai đọc caption bài (Story 4.4)
+// và gửi tin từ Hộp thư (`inbox.send`, Story 4.7).
 const { graph, threads } = createMetaClients({ config, db: dbHandle.db, log: logger.child({ component: 'meta' }) })
 const jobs = createJobSender(boss)
 // Kho file riêng tư (AD-14) cho đính kèm của khách (Story 4.3); thiếu `CLOUDINARY_URL` → đính kèm `failed`
@@ -155,6 +162,19 @@ try {
           job as JobWithMetadata<unknown>,
         )
         logger.debug({ jobId: job.id, result }, 'inbox.fetch_post_text')
+      },
+      // Story 4.7: gửi một tin outbound qua Meta. Lỗi tạm ném lại (tin đã về `pending`); lần thử cuối ghi `failed`.
+      'inbox.send': async (job) => {
+        const result = await handleSendJob(
+          { db: dbHandle.db, events, jobs, cipher, graph, threads, log: logger.child({ component: 'inbox_send' }) },
+          job as JobWithMetadata<unknown>,
+        )
+        logger.debug({ jobId: job.id, result }, 'inbox.send')
+      },
+      // Story 4.7: tin kẹt `sending` quá 15 phút → `failed` `SEND_UNKNOWN`.
+      'inbox.send_sweep': async () => {
+        const swept = await sweepStuckSending({ db: dbHandle.db, events })
+        if (swept > 0) logger.warn({ swept }, 'inbox: tin kẹt đang gửi → SEND_UNKNOWN')
       },
       // Story 4.2: sức khoẻ webhook mỗi 5 phút; phát `webhook.stalled|recovered` khi đổi trạng thái.
       'webhooks.health': async () => {

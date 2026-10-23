@@ -2,17 +2,21 @@
 // của khách/hội thoại/tin; web chỉ đọc qua các schema này và refetch khi có hint realtime (AD-3).
 // Story 4.3: DM (Messenger, Instagram Direct). Story 4.4: bình luận Facebook/Instagram và trả lời Threads (`channel=comment`,
 // bài được bình luận, tin bị sửa/xoá/ẩn, người trả lời khác trong cùng luồng). Story 4.6: tab lọc/đếm ở server, lệnh
-// Tiếp quản / bật lại AI / Đánh dấu xong.
+// Tiếp quản / bật lại AI / Đánh dấu xong. Story 4.7: gửi tin / gửi lại (mode theo kênh, giới hạn chữ theo nền tảng, mã lỗi
+// gửi tin của tin `failed`).
 import { z } from 'zod'
 import {
   ContactStage,
   ConversationChannel,
   ConversationState,
+  MessageDelivery,
   MessageDirection,
   MessageOrigin,
   MessageStatus,
   StateChangeReason,
+  type Platform,
 } from './enums.ts'
+import type { ErrorCode } from './errors.ts'
 
 const IsoDateTime = z.iso.datetime({ offset: false })
 const Id = z.string().min(1)
@@ -72,6 +76,27 @@ export const MessageSender = z.object({
 })
 export type MessageSender = z.infer<typeof MessageSender>
 
+/**
+ * Mã lỗi của tin outbound `failed` (AD-10) — tập con của `ErrorCode`: `canSend` từ chối sớm, hoặc job `inbox.send`
+ * ánh xạ lỗi Meta. `SEND_UNKNOWN`: kẹt `sending` quá 15 phút (có thể đã tới khách, không tự gửi lại).
+ */
+export const SEND_ERROR_CODES = [
+  'OUTSIDE_24H',
+  'PRIVATE_REPLY_USED',
+  'PRIVATE_REPLY_INVALID',
+  'RECIPIENT_UNAVAILABLE',
+  'PAGE_DISCONNECTED',
+  'PAGE_REMOVED',
+  'RATE_LIMITED',
+  'SEND_REJECTED',
+  'SEND_FAILED',
+  'SEND_UNKNOWN',
+] as const satisfies readonly ErrorCode[]
+export const SendErrorCode = z.enum(SEND_ERROR_CODES)
+export type SendErrorCode = z.infer<typeof SendErrorCode>
+
+export const isSendErrorCode = (code: unknown): code is SendErrorCode => typeof code === 'string' && (SEND_ERROR_CODES as readonly string[]).includes(code)
+
 export const MessageDto = z.object({
   id: Id,
   conversationId: Id,
@@ -84,6 +109,10 @@ export const MessageDto = z.object({
   reasonCode: StateChangeReason.nullable(),
   /** Tin outbound (Story 4.7); `null` với tin khách và tin hệ thống. */
   status: MessageStatus.nullable(),
+  /** Tin outbound: cách gửi (`dm` · `public_reply` · `private_reply` — nhắn riêng người bình luận). */
+  delivery: MessageDelivery.nullable(),
+  /** Tin outbound `failed`: vì sao không gửi được (FE ánh xạ sang câu + gợi ý). */
+  errorCode: SendErrorCode.nullable(),
   /** Thời điểm theo nền tảng — thứ tự hiển thị (AD-11). Tin hệ thống: lúc chuyển trạng thái. */
   platformTimestamp: IsoDateTime,
   attachments: z.array(AttachmentDto),
@@ -207,3 +236,37 @@ export const ListMessagesResponse = z.object({
   nextCursor: z.string().nullable(),
 })
 export type ListMessagesResponse = z.infer<typeof ListMessagesResponse>
+
+// ---------------------------------------------------------------------------------------------------------
+// Gửi tin (Story 4.7, AD-10)
+// ---------------------------------------------------------------------------------------------------------
+
+/**
+ * Cách gửi hợp lệ theo kênh (AD-10): DM → `dm`; bình luận FB/IG → trả lời công khai hoặc nhắn riêng; Threads chỉ trả lời
+ * công khai. Phần tử đầu là mặc định.
+ */
+export function sendModesFor(platform: Platform, channel: ConversationChannel): readonly MessageDelivery[] {
+  if (channel === 'dm') return ['dm']
+  return platform === 'threads' ? ['public_reply'] : ['public_reply', 'private_reply']
+}
+
+/** Giới hạn ký tự lớn nhất của mọi nền tảng (Messenger 2000). */
+export const SEND_TEXT_MAX = 2000
+
+/** Giới hạn ký tự theo nền tảng/cách gửi: Threads 500, tin nhắn Instagram 1000, còn lại 2000. */
+export function sendTextLimit(platform: Platform, delivery: MessageDelivery): number {
+  if (platform === 'threads') return 500
+  if (platform === 'instagram' && delivery !== 'public_reply') return 1000
+  return SEND_TEXT_MAX
+}
+
+/**
+ * `POST /api/v1/conversations/:id/messages` — gửi tin của chủ shop. `mode` bỏ trống → mặc định của kênh. 201 trả
+ * `MessageDto` (`pending`); `canSend` từ chối → 409 với mã gửi tin, tin vẫn lưu `failed` (`details.messageId`).
+ * Gửi lại: `POST /api/v1/messages/:id/resend` (tin `failed`) → 200 `MessageDto` hoặc 409 như trên.
+ */
+export const SendMessageBody = z.object({
+  text: z.string().trim().min(1).max(SEND_TEXT_MAX),
+  mode: MessageDelivery.optional(),
+})
+export type SendMessageBody = z.input<typeof SendMessageBody>

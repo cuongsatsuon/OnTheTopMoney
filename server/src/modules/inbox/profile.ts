@@ -5,6 +5,7 @@
 // - Chỉ điền `contacts.name` khi còn trống (không ghi đè tên chủ shop đã sửa ở Story 4.9) → phát `contact.updated`.
 // - `RATE_LIMITED`/`TRANSIENT` → ném để retry; lần thử cuối và lỗi khác (thiếu quyền, người dùng chặn…) → bỏ qua,
 //   chỉ ghi `profile_fetched_at`. Trang đã gỡ/mất kết nối → bỏ qua. Không log tên hay token.
+// - Story 4.7: `TOKEN_INVALID` → `markDisconnected` trang giữ token (`meta-token.ts`, chung với `inbox.send`), rồi bỏ qua.
 import { and, eq, isNull } from 'drizzle-orm'
 import type { SecretCipher } from '../../adapters/crypto/index.ts'
 import type { MetaClient } from '../../adapters/meta/index.ts'
@@ -13,6 +14,7 @@ import { AppError } from '../../platform/errors/index.ts'
 import type { EventPublisher } from '../../platform/events/index.ts'
 import { getAccessToken } from '../connections/index.ts'
 import { getPage, getPlatformAccountId } from '../pages/index.ts'
+import { reportTokenInvalid } from './meta-token.ts'
 import { contactIdentities, contacts } from './schema.ts'
 
 export interface FetchProfileDeps {
@@ -88,6 +90,7 @@ export async function fetchProfile(deps: FetchProfileDeps, identityId: string, o
   })
   if (!res.ok) {
     if ((res.kind === 'RATE_LIMITED' || res.kind === 'TRANSIENT') && !opts.finalAttempt) throw new ProfileRetryableError(res.kind)
+    if (res.kind === 'TOKEN_INVALID') await reportTokenInvalid(deps, page.id)
     deps.log?.warn({ identityId, pageId: page.id, kind: res.kind }, 'inbox: không lấy được tên khách từ Meta')
     await markFetched()
     return 'skipped'

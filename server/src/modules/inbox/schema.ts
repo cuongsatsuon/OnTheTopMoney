@@ -5,6 +5,8 @@
 // - Hội thoại duy nhất theo `(page_id, channel, thread_key)`; DM: `thread_key` = PSID/IGSID; bình luận (Story 4.4):
 //   id bình luận gốc (Threads: id bài trả lời gốc), kèm `platform_post_id` chuẩn của bài và caption lấy một lần.
 // - Tin: UNIQUE(page_id, platform_message_id) khi id khác null; hiển thị theo `platform_timestamp` rồi `id`.
+// - Tin outbound (Story 4.7, AD-10): `pending → sending → sent` hoặc `failed` + `error_code`; `delivery` cách gửi,
+//   `reply_to_platform_id` bình luận được trả lời / nhắn riêng, `queued_at` lần đưa vào hàng gửi, `sending_at` lúc job chiếm.
 // Khoá ngoại tới `pages` `on delete cascade`: trang chỉ bị soft-delete (`removed_at`), xoá cứng chỉ xảy ra ở test/xoá
 // dữ liệu (Epic 9).
 import {
@@ -14,10 +16,12 @@ import {
   CONTACT_STAGES,
   CONVERSATION_CHANNELS,
   CONVERSATION_STATES,
+  MESSAGE_DELIVERIES,
   MESSAGE_DIRECTIONS,
   MESSAGE_ORIGINS,
   MESSAGE_REMOVALS,
   MESSAGE_STATUSES,
+  SEND_ERROR_CODES,
   STATE_CHANGE_REASONS,
 } from '@ottm/shared'
 import { sql } from 'drizzle-orm'
@@ -128,6 +132,16 @@ export const messages = pgTable(
     origin: text('origin').notNull(),
     /** Chỉ tin outbound (Story 4.7). */
     status: text('status'),
+    /** Tin outbound: `dm` · `public_reply` · `private_reply` (nhắn riêng người bình luận, lưu trong hội thoại `comment`). */
+    delivery: text('delivery'),
+    /** Tin outbound `failed`: mã gửi tin (`SendErrorCode`). */
+    errorCode: text('error_code'),
+    /** Trả lời công khai / nhắn riêng: id bình luận đích — "một lần mỗi bình luận" của nhắn riêng tính theo cột này. */
+    replyToPlatformId: text('reply_to_platform_id'),
+    /** Lần gần nhất tin được đưa vào hàng gửi (tạo / Gửi lại) — mốc chặn hoãn `RATE_LIMITED`. */
+    queuedAt: ts('queued_at'),
+    /** Lúc job `inbox.send` chiếm tin (`sending`) — cron dọn tin kẹt quá 15 phút. */
+    sendingAt: ts('sending_at'),
     text: text('text'),
     /** Tin `system`: lý do chuyển trạng thái. */
     reasonCode: text('reason_code'),
@@ -152,11 +166,16 @@ export const messages = pgTable(
     check('messages_system_direction_check', sql`(${t.origin} = 'system') = (${t.direction} is null)`),
     check('messages_origin_check', sql`${t.origin} in (${list(MESSAGE_ORIGINS)})`),
     check('messages_status_check', sql`${t.status} in (${list(MESSAGE_STATUSES)})`),
+    check('messages_delivery_check', sql`${t.delivery} in (${list(MESSAGE_DELIVERIES)})`),
+    check('messages_error_code_check', sql`${t.errorCode} in (${list(SEND_ERROR_CODES)})`),
+    check('messages_failed_code_check', sql`(${t.status} = 'failed') = (${t.errorCode} is not null)`),
     check('messages_reason_code_check', sql`${t.reasonCode} in (${list(STATE_CHANGE_REASONS)})`),
     check('messages_removal_check', sql`${t.removal} in (${list(MESSAGE_REMOVALS)})`),
     check('messages_removed_at_check', sql`(${t.removal} is null) = (${t.removedAt} is null)`),
     // Khung chat: trang mới nhất trước theo (platform_timestamp, id); xem trước danh sách cũng dùng index này.
     index('messages_conversation_ts_idx').on(t.conversationId, t.platformTimestamp, t.id),
+    // Cron dọn tin kẹt `sending` (Story 4.7).
+    index('messages_sending_idx').on(t.sendingAt).where(sql`${t.status} = 'sending'`),
   ],
 )
 

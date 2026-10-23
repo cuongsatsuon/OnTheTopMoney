@@ -5,6 +5,7 @@
 // Story 4.3: ingest DM (Messenger, IG Direct), giải `triage`, đính kèm vào kho riêng tư, tên khách từ Meta, đọc REST.
 // Story 4.4: ingest bình luận FB/IG + trả lời Threads, sửa/xoá/ẩn tin, caption bài được bình luận.
 // Story 4.6: lọc/đếm theo tab ở server, lệnh Tiếp quản / bật lại AI / Đánh dấu xong.
+// Story 4.7: `canSend` (cửa sổ gửi), gửi / gửi lại từ Hộp thư, job `inbox.send`, cron dọn tin kẹt `sending`.
 export const MODULE = 'inbox'
 
 export {
@@ -28,6 +29,30 @@ export {
   type FetchPostTextOutcome,
 } from './post-text.ts'
 export {
+  DM_WINDOW_MS,
+  PRIVATE_REPLY_WINDOW_MS,
+  RATE_LIMIT_DEFER_MAX_MS,
+  SENDING_STUCK_MS,
+  SendRetryableError,
+  canSend,
+  deliverMessage,
+  handleSendJob,
+  parseSendJobData,
+  resendMessage,
+  sendErrorOf,
+  sendMessage,
+  sweepStuckSending,
+  type CanSendOptions,
+  type DeliverDeps,
+  type DeliverOutcome,
+  type ResendResult,
+  type SendCheck,
+  type SendDeps,
+  type SendInput,
+  type SendResult,
+} from './send.ts'
+export {
+  applyHumanReply,
   applyTriageDecision,
   applyUserAction,
   getTriageState,
@@ -62,6 +87,7 @@ export {
   decodeCursor,
   encodeCursor,
   getConversation,
+  getMessage,
   listConversations,
   listMessages,
   needsAttention,

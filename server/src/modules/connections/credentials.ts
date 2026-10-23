@@ -33,6 +33,18 @@ export async function getAccessToken(deps: { db: DbExecutor; cipher: SecretCiphe
 }
 
 /**
+ * Trang GIỮ token của `pageId` (IG → Fanpage nguồn `token_source_page_id`; trang khác → chính nó). Bên gọi Meta gặp
+ * `TOKEN_INVALID` truyền id này cho `markDisconnected`, để Fanpage nguồn và mọi IG dùng chung token cùng mất kết nối.
+ */
+export async function tokenOwnerPageId(db: DbExecutor, pageId: string): Promise<string> {
+  const [cred] = await db
+    .select({ tokenSourcePageId: pageCredentials.tokenSourcePageId })
+    .from(pageCredentials)
+    .where(eq(pageCredentials.pageId, pageId))
+  return cred?.tokenSourcePageId ?? pageId
+}
+
+/**
  * Gỡ một trang khỏi app (Story 2.7): trong MỘT transaction (AD-3) soft-delete trang (`pages.setRemoved` đặt
  * `removed_at` + phát `page.removed`) rồi xoá token của chính trang đó (`page_credentials`). Giữ toàn bộ lịch sử —
  * chỉ đánh dấu trang đã gỡ. Trả `true` khi vừa gỡ; `false` khi trang không tồn tại hoặc đã gỡ (route → 404,
