@@ -1,6 +1,6 @@
 // Entrypoint api: phụ thuộc dựng từ config thật (main.ts dùng đúng các hàm này).
 import { describe, expect, it } from 'vitest'
-import { aiOptionsFromConfig, cipherFromConfig, connectionsOptionsFromConfig } from '../src/app/deps.ts'
+import { aiOptionsFromConfig, cipherFromConfig, connectionsOptionsFromConfig, privacyOptionsFromConfig, webhooksOptionsFromConfig } from '../src/app/deps.ts'
 import type { Db } from '../src/platform/db/index.ts'
 import { createLogger } from '../src/platform/log/index.ts'
 import { parseEnv } from '../src/platform/config/index.ts'
@@ -85,5 +85,25 @@ describe('app/deps — connections từ config', () => {
     expect('calls' in opts.graph).toBe(true)
     expect(opts.threads && 'calls' in opts.threads).toBe(true)
     expect(opts.cipher).toBeNull()
+  })
+})
+
+describe('app/deps — secret của webhook Threads và callback quyền riêng tư (Story 9.4)', () => {
+  const boss = { send: async () => null }
+  const threads = { THREADS_APP_ID: '456', THREADS_APP_SECRET: 'ts' }
+
+  it('không đặt THREADS_WEBHOOK_SECRET → webhook Threads verify bằng THREADS_APP_SECRET', () => {
+    expect(webhooksOptionsFromConfig(parseEnv({ ...base, ...threads }), boss).threadsAppSecret).toBe('ts')
+    expect(webhooksOptionsFromConfig(parseEnv(base), boss).threadsAppSecret).toBeUndefined()
+  })
+
+  it('đặt THREADS_WEBHOOK_SECRET → webhook Threads dùng nó; callback quyền riêng tư vẫn dùng THREADS_APP_SECRET', () => {
+    const config = parseEnv({ ...base, ...threads, THREADS_WEBHOOK_SECRET: 'basic-secret' })
+    expect(webhooksOptionsFromConfig(config, boss).threadsAppSecret).toBe('basic-secret')
+    expect(privacyOptionsFromConfig(config).threadsAppSecret).toBe('ts')
+  })
+
+  it('callback Threads không có THREADS_APP_SECRET → không có secret (luôn 400)', () => {
+    expect(privacyOptionsFromConfig(parseEnv(base)).threadsAppSecret).toBeUndefined()
   })
 })

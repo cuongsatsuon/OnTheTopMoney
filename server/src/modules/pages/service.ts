@@ -206,6 +206,23 @@ export async function findPageByPlatformAccountId(
 }
 
 /**
+ * Story 9.4 (AD-22): trang của MỘT tài khoản nền tảng, KỂ CẢ đã gỡ (dữ liệu còn tới khi bị dọn) — callback quyền riêng
+ * tư của Threads app tra người dùng theo id nền tảng. `(platform, platform_account_id)` là duy nhất → tối đa một dòng.
+ */
+export async function findPageRefByPlatformAccount(
+  db: DbExecutor,
+  platform: Platform,
+  platformAccountId: string,
+): Promise<{ id: string; removed: boolean } | null> {
+  const [row] = await db
+    .select({ id: pages.id, removedAt: pages.removedAt })
+    .from(pages)
+    .where(and(eq(pages.platform, platform), eq(pages.platformAccountId, platformAccountId)))
+    .limit(1)
+  return row ? { id: row.id, removed: row.removedAt !== null } : null
+}
+
+/**
  * Story 9.2 (AD-22): trang ĐÃ gỡ trước mốc `before` (kèm `removed_at`) — cron `privacy.removed_pages` tạo yêu cầu xoá
  * `scope=page` cho trang gỡ quá 30 ngày. Kết nối lại xoá `removed_at` nên trang đó không còn ở đây.
  */

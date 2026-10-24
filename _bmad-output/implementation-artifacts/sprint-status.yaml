@@ -113,6 +113,6 @@ development_status:
   9-1-trang-chính-sách-và-callback-xoá-dữ-liệu-của-meta: review
   9-2-xoá-khách-và-dữ-liệu-theo-yêu-cầu: review
   9-3-dọn-dữ-liệu-theo-thời-hạn: review
-  9-4-hồ-sơ-app-review-và-chuyển-live: in-progress
-  9-5-diễn-tập-khôi-phục-backup: backlog
+  9-4-hồ-sơ-app-review-và-chuyển-live: review
+  9-5-diễn-tập-khôi-phục-backup: in-progress
   epic-9-retrospective: optional

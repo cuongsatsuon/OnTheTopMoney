@@ -1,0 +1,2 @@
+ALTER TABLE "deletion_requests" DROP CONSTRAINT "deletion_requests_source_check";--> statement-breakpoint
+ALTER TABLE "deletion_requests" ADD CONSTRAINT "deletion_requests_source_check" CHECK ("deletion_requests"."source" in ('meta_deauthorize', 'meta_data_deletion', 'manual', 'page_removed', 'threads_uninstall', 'threads_delete'));

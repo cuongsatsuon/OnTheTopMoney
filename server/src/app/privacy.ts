@@ -9,18 +9,20 @@
 // - GET /api/v1/privacy/config: URL để dán vào Meta App (dưới guard phiên).
 // Story 9.2: callback chặn phát lại `signed_request` (trước khi ngắt trang) và chụp phạm vi `all` (trang FB + IG của đúng
 // tài khoản); `POST /api/v1/contacts/:id/deletion {confirm:true}` — chủ shop xoá khách và toàn bộ hội thoại.
+// Story 9.4: POST /privacy/threads/{uninstall,delete} — cùng đường cho Threads app (app Meta riêng): verify bằng
+// `THREADS_APP_SECRET`, người dùng = trang Threads có `platform_account_id` = `user_id`, uninstall ngắt trang Threads đó.
 // Log chỉ mang id yêu cầu + cờ; không bao giờ `signed_request`, `user_id`, mã xác nhận (AD-12).
 import {
   ContactDeletionBody,
   PRIVACY_PATHS,
+  type CallbackDeletionSource,
   type ContactDeletionResponse,
-  type DeletionSource,
   type MetaDataDeletionResponse,
   type PrivacyConfigResponse,
 } from '@ottm/shared'
 import { z } from 'zod'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
-import { disconnectMetaUserTx, metaUserPurgeScope } from '../modules/connections/index.ts'
+import { disconnectMetaUserTx, disconnectThreadsUserTx, metaUserPurgeScope, threadsUserPurgeScope } from '../modules/connections/index.ts'
 import { markContactForDeletion } from '../modules/inbox/index.ts'
 import {
   findMetaReplay,
@@ -29,6 +31,7 @@ import {
   metaSubjectHash,
   recordMetaRequest,
   requestTargetDeletion,
+  threadsSubjectHash,
   verifySignedRequest,
   type DeletionRequestView,
   type RecordMetaRequestResult,
@@ -51,6 +54,8 @@ export interface PrivacyDeps {
   log: Logger
   /** `META_APP_SECRET`; thiếu → mọi callback 400 + log cảnh báo. */
   metaAppSecret?: string | undefined
+  /** Story 9.4: `THREADS_APP_SECRET` — verify `signed_request` của Threads app; thiếu → callback Threads 400 + log cảnh báo. */
+  threadsAppSecret?: string | undefined
   /** Gốc công khai của api — `url` trả cho Meta và URL ở Cài đặt. */
   publicBaseUrl: string
   operator: PolicyOperator
@@ -86,26 +91,44 @@ export function registerPrivacy(app: FastifyInstance, deps: PrivacyDeps): void {
   const callbackLimit = rateLimit(deps.limits?.callbackPerMinute ?? PRIVACY_CALLBACK_LIMIT_PER_MINUTE)
   const pageLimit = rateLimit(deps.limits?.pagePerMinute ?? PRIVACY_PAGE_LIMIT_PER_MINUTE)
 
+  /**
+   * Mỗi nguồn callback: app nào ký (`secret`), env nào thiếu (log), khoá người dùng, có ngắt trang không, tra phạm vi
+   * xoá ở `connections`. Meta App (9.1): tài khoản Facebook → trang FB + IG. Threads app (9.4): trang Threads.
+   */
+  const SOURCES: Record<
+    CallbackDeletionSource,
+    {
+      secret: string | undefined
+      secretEnv: 'META_APP_SECRET' | 'THREADS_APP_SECRET'
+      subjectHash: (secret: string, userId: string) => string
+      disconnect: typeof disconnectMetaUserTx | null
+      purgeScope: (tx: Parameters<typeof metaUserPurgeScope>[0], userId: string) => Promise<{ pageIds: string[]; metaAccountId: string | null } | null>
+    }
+  > = {
+    meta_deauthorize: { secret: deps.metaAppSecret, secretEnv: 'META_APP_SECRET', subjectHash: metaSubjectHash, disconnect: disconnectMetaUserTx, purgeScope: metaUserPurgeScope },
+    meta_data_deletion: { secret: deps.metaAppSecret, secretEnv: 'META_APP_SECRET', subjectHash: metaSubjectHash, disconnect: null, purgeScope: metaUserPurgeScope },
+    threads_uninstall: { secret: deps.threadsAppSecret, secretEnv: 'THREADS_APP_SECRET', subjectHash: threadsSubjectHash, disconnect: disconnectThreadsUserTx, purgeScope: threadsUserPurgeScope },
+    threads_delete: { secret: deps.threadsAppSecret, secretEnv: 'THREADS_APP_SECRET', subjectHash: threadsSubjectHash, disconnect: null, purgeScope: threadsUserPurgeScope },
+  }
+
   /** Verify rồi ghi trong MỘT transaction; sai → ném 400 trước khi đụng DB. */
-  async function handleCallback(req: FastifyRequest, source: Extract<DeletionSource, 'meta_deauthorize' | 'meta_data_deletion'>) {
-    const verified = verifySignedRequest(signedRequestOf(req.body), deps.metaAppSecret)
+  async function handleCallback(req: FastifyRequest, source: CallbackDeletionSource) {
+    const cfg = SOURCES[source]
+    const verified = verifySignedRequest(signedRequestOf(req.body), cfg.secret)
     if (!verified.ok) {
-      if (verified.reason === 'not_configured') req.log.warn({ source }, 'privacy: thiếu META_APP_SECRET, không verify được signed_request')
+      if (verified.reason === 'not_configured') req.log.warn({ source }, `privacy: thiếu ${cfg.secretEnv}, không verify được signed_request`)
       else req.log.warn({ source, reason: verified.reason }, 'privacy: signed_request không hợp lệ')
       throw new AppError('VALIDATION_FAILED', 400, { message: 'Invalid signed_request' })
     }
-    const subjectHash = metaSubjectHash(deps.metaAppSecret!, verified.userId)
+    const subjectHash = cfg.subjectHash(cfg.secret!, verified.userId)
     const result: RecordMetaRequestResult & { disconnected: number; replay: boolean } = await deps.db.transaction(async (tx) => {
       // Story 9.2: `signed_request` không mới hơn yêu cầu đã xoá xong của cùng người → trả mã cũ, KHÔNG ngắt trang (chủ
       // shop có thể đã kết nối lại), không tạo yêu cầu mới.
       const replayed = await findMetaReplay(tx, subjectHash, verified.issuedAt)
       if (replayed) return { request: replayed, created: false, disconnected: 0, replay: true }
-      let disconnected = 0
-      if (source === 'meta_deauthorize') {
-        disconnected = (await disconnectMetaUserTx(tx, { events: deps.events, log: deps.log }, verified.userId)).disconnected.length
-      }
-      // Ảnh chụp phạm vi `all` (Story 9.2): trang FB + IG của đúng tài khoản này + dòng `meta_accounts`; `null` = người lạ.
-      const scope = await metaUserPurgeScope(tx, verified.userId)
+      const disconnected = cfg.disconnect ? (await cfg.disconnect(tx, { events: deps.events, log: deps.log }, verified.userId)).disconnected.length : 0
+      // Ảnh chụp phạm vi `all` (Story 9.2): trang của đúng tài khoản này (+ dòng `meta_accounts` với Meta App); `null` = người lạ.
+      const scope = await cfg.purgeScope(tx, verified.userId)
       const recorded = await recordMetaRequest(tx, deps.events, { source, subjectHash, issuedAt: verified.issuedAt, scope })
       return { ...recorded, disconnected, replay: false }
     })
@@ -152,11 +175,22 @@ export function registerPrivacy(app: FastifyInstance, deps: PrivacyDeps): void {
       return reply.code(200).send()
     })
 
-    scope.post(PRIVACY_PATHS.dataDeletion, { bodyLimit: CALLBACK_BODY_LIMIT, config: callbackLimit }, async (req, reply) => {
-      const { request } = await handleCallback(req, 'meta_data_deletion')
-      const body: MetaDataDeletionResponse = { url: statusUrl(request.code), confirmation_code: request.code }
-      return reply.code(200).header('Cache-Control', 'no-store').send(body)
+    const deletionCallback = (source: Extract<CallbackDeletionSource, 'meta_data_deletion' | 'threads_delete'>) =>
+      async (req: FastifyRequest, reply: FastifyReply) => {
+        const { request } = await handleCallback(req, source)
+        const body: MetaDataDeletionResponse = { url: statusUrl(request.code), confirmation_code: request.code }
+        return reply.code(200).header('Cache-Control', 'no-store').send(body)
+      }
+
+    scope.post(PRIVACY_PATHS.dataDeletion, { bodyLimit: CALLBACK_BODY_LIMIT, config: callbackLimit }, deletionCallback('meta_data_deletion'))
+
+    // Story 9.4 — Threads app: cùng dạng `signed_request` và phản hồi `{url, confirmation_code}` như Meta App.
+    scope.post(PRIVACY_PATHS.threadsUninstall, { bodyLimit: CALLBACK_BODY_LIMIT, config: callbackLimit }, async (req, reply) => {
+      await handleCallback(req, 'threads_uninstall')
+      return reply.code(200).send()
     })
+
+    scope.post(PRIVACY_PATHS.threadsDelete, { bodyLimit: CALLBACK_BODY_LIMIT, config: callbackLimit }, deletionCallback('threads_delete'))
   })
 
   // --- Khách hàng › "Xoá khách và toàn bộ hội thoại" (Story 9.2, dưới guard phiên + kiểm Origin + rate-limit ghi) ---
@@ -191,5 +225,8 @@ export function registerPrivacy(app: FastifyInstance, deps: PrivacyDeps): void {
     dataDeletionUrl: `${base}${PRIVACY_PATHS.dataDeletion}`,
     operatorConfigured: Boolean(deps.operator.name && deps.operator.email),
     metaSecretConfigured: Boolean(deps.metaAppSecret),
+    threadsUninstallUrl: `${base}${PRIVACY_PATHS.threadsUninstall}`,
+    threadsDeleteUrl: `${base}${PRIVACY_PATHS.threadsDelete}`,
+    threadsSecretConfigured: Boolean(deps.threadsAppSecret),
   }))
 }

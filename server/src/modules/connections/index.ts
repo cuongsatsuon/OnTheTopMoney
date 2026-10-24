@@ -56,6 +56,8 @@ export { getAccessToken, grantedScopes, removePage, tokenOwnerPageId } from './c
 // Story 9.1: người dùng Meta gỡ app (callback deauthorize của `privacy`, ghép ở entrypoint).
 // Story 9.2: phạm vi xoá `scope=all` của người dùng + phần `connections` của luồng xoá (xoá `meta_accounts`).
 export { REASON_META_DEAUTHORIZED, disconnectMetaUserTx, isKnownMetaUser, metaUserPurgeScope } from './deauthorize.ts'
+// Story 9.4: người dùng gỡ Threads app / xin xoá dữ liệu (callback của `privacy` cho Threads app, ghép ở entrypoint).
+export { REASON_THREADS_DEAUTHORIZED, disconnectThreadsUserTx, threadsUserPurgeScope } from './threads-deauthorize.ts'
 export { handleConnectionsPurge, type ConnectionsPurgeDeps } from './purge.ts'
 export { FAKE_CODE, FAKE_THREADS_CODE } from './fake-meta.ts'
 export {

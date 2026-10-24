@@ -7,7 +7,7 @@
 //   một yêu cầu đang mở.
 // - `getRequestByCode`: đọc trạng thái (kèm tiến độ phần) cho trang công khai `/privacy/status/<code>`.
 // Việc xoá thật ở consumer `<module>.purge` của từng module; điều phối giai đoạn ở `coordinator.ts`.
-import { purgePartCount, type DeletionScope, type DeletionSource, type DeletionStatus } from '@ottm/shared'
+import { purgePartCount, type CallbackDeletionSource, type DeletionScope, type DeletionSource, type DeletionStatus } from '@ottm/shared'
 import { createHmac, randomBytes } from 'node:crypto'
 import { and, count, desc, eq, sql } from 'drizzle-orm'
 import type { DbExecutor } from '../../platform/db/index.ts'
@@ -27,6 +27,14 @@ export function newConfirmationCode(): string {
  */
 export function metaSubjectHash(appSecret: string, userId: string): string {
   return createHmac('sha256', appSecret).update(`meta-user:${userId}`).digest('hex')
+}
+
+/**
+ * Story 9.4: khoá idempotent của một người dùng Threads app — HMAC-SHA256(Threads app secret, `threads-user:<id>`). Tiền
+ * tố khác `meta-user:` nên id trùng nhau giữa hai app không chung khoá (hai người khác nhau, hai yêu cầu riêng).
+ */
+export function threadsSubjectHash(appSecret: string, userId: string): string {
+  return createHmac('sha256', appSecret).update(`threads-user:${userId}`).digest('hex')
 }
 
 export interface DeletionRequestView {
@@ -100,15 +108,17 @@ export async function findMetaReplay(tx: DbExecutor, subjectHash: string, issued
 }
 
 export interface RecordMetaRequestInput {
-  source: Extract<DeletionSource, 'meta_deauthorize' | 'meta_data_deletion'>
+  /** Callback Meta App (9.1) hoặc Threads app (9.4) — cùng luật idempotent / chống phát lại. */
+  source: CallbackDeletionSource
   subjectHash: string
   /** `issued_at` của `signed_request` (giây epoch) — mốc chống phát lại. */
   issuedAt: number | null
   /**
    * Phạm vi xoá của người dùng đã biết (tra `connections` ở entrypoint, cùng transaction): trang FB + IG lấy token qua
-   * tài khoản này và dòng `meta_accounts` của nó. `null` = app không giữ dữ liệu gì của người này.
+   * tài khoản này và dòng `meta_accounts` của nó. `null` = app không giữ dữ liệu gì của người này. Threads app (9.4): trang
+   * Threads của người dùng, `metaAccountId = null` (Threads không có `meta_accounts`).
    */
-  scope: { pageIds: string[]; metaAccountId: string } | null
+  scope: { pageIds: string[]; metaAccountId: string | null } | null
 }
 
 export interface RecordMetaRequestResult {

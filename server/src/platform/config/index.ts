@@ -170,6 +170,12 @@ export const EnvSchema = z
     THREADS_APP_SECRET: z.string().optional(),
     /** `THREADS_APP_ID` là Threads test app (`test`) hay app thật (`live`). Production chỉ nhận `live`. */
     THREADS_APP_ENV: z.enum(['test', 'live']).optional(),
+    /**
+     * Story 9.4 (tuỳ chọn): secret verify `X-Hub-Signature-256` của `POST /webhooks/threads` khi sự kiện Threads thật cho
+     * thấy Meta không ký bằng `THREADS_APP_SECRET` (vd App Secret ở App settings › Basic của Threads app). Không đặt →
+     * dùng `THREADS_APP_SECRET`. Không ảnh hưởng OAuth hay callback quyền riêng tư.
+     */
+    THREADS_WEBHOOK_SECRET: z.string().min(1).optional(),
     /** Chuỗi tự đặt cho bước xác minh webhook của Meta (`hub.verify_token`). */
     META_VERIFY_TOKEN: z.string().min(16, 'ít nhất 16 ký tự').optional(),
     /**

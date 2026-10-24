@@ -51,7 +51,7 @@
   evidence: Hàm đã có từ 4.4 nhưng parser 4.1 cho IG `is_deleted` cùng khoá `messages:<mid>` với tin gốc (bị chặn như trùng) và Messenger `message_edit` thành field `messaging`; cần khoá riêng + chuẩn hoá ở `webhook-message.ts`. Hiện vẫn `ignored`.
 - source_spec: `spec-4-4-binh-luan-vao-hop-thu.md`
   summary: Xác nhận dạng payload webhook Threads `replies` (dạng `values` + `root_post.owner_id`) và bình luận FB thiếu `from` bằng sự kiện thật.
-  evidence: Parser/chuẩn hoá Threads theo tài liệu mẫu [ASSUMPTION AD-4]; bình luận FB không có `from.id` đang bị bỏ qua (`malformed`) — nếu Meta lược `from` thật thì cần định danh dự phòng theo id bình luận.
+  evidence: Parser/chuẩn hoá Threads theo tài liệu mẫu [ASSUMPTION AD-4]; bình luận FB không có `from.id` đang bị bỏ qua (`malformed`) — nếu Meta lược `from` thật thì cần định danh dự phòng theo id bình luận. Story 9.4 gom việc kiểm vào checklist sau Live: `deploy/app-review.md` mục 8.3.
 - source_spec: `spec-4-4-binh-luan-vao-hop-thu.md`
   summary: Sửa/xoá/ẩn bình luận tới trước (hoặc chạy song song) lần thêm → `missing` → `ignored`, thay đổi mất; ẩn/bỏ ẩn lệch thứ tự không có mốc để so.
   evidence: `webhook.route` concurrency 10, FB tự ẩn bình luận theo từ khoá gần như cùng lúc `add`. Cần tombstone theo `(page_id, platform_message_id)` áp khi ingest, hoặc retry `missing` khi mục còn mới (không làm `failed` mục sửa bình luận cũ trước khi kết nối); ẩn/bỏ ẩn cần mốc thời gian (`entry.time`).
@@ -63,13 +63,13 @@
   evidence: 4.7 chỉ gắn định danh `(page, recipient_id)` vào cùng khách; khách trả lời qua Messenger thì vào hội thoại `dm` mới của cùng khách nhưng không có liên kết ngược. (Phần "gợi ý gộp khi `recipient_id` đã thuộc khách khác" đã làm ở Story 4.9 — `contact_merge_suggestions`.) Story 5.5 (AI nhắn riêng người bình luận) làm việc này đáng làm hơn: khách trả lời tin nhắn riêng của AI qua Messenger thì vào hội thoại `dm` mới, lượt AI ở đó không thấy bình luận, caption hay câu AI vừa nhắn riêng (prompt chỉ đọc hội thoại hiện tại) — câu "ok lấy 2 cái" có thể thành `AI_UNCERTAIN`. AC 5.5 không đòi nên chưa làm.
 - source_spec: `spec-4-7-gui-tin-24-gio.md`
   summary: Xác nhận bằng Meta thật: Send API `/me/messages` cho IG (token Fanpage nguồn), `metadata` cho IG, Threads publish container trả lời ngay sau khi tạo (tài liệu khuyên chờ), giới hạn ký tự IG 1000.
-  evidence: Đường gửi mới chỉ chạy với Meta giả/fake client. Threads publish lỗi tạm thì retry tạo container mới (container cũ mồ côi, vô hại).
+  evidence: Đường gửi mới chỉ chạy với Meta giả/fake client. Threads publish lỗi tạm thì retry tạo container mới (container cũ mồ côi, vô hại). Story 9.4 gom việc kiểm vào checklist sau Live: `deploy/app-review.md` mục 8.3.
 - source_spec: `spec-4-7-gui-tin-24-gio.md`
   summary: Gửi tin hết giờ / lỗi mạng (không có phản hồi HTTP) hoặc 5xx có thể đã tới Meta → không retry tự động mà ghi `failed` `SEND_UNKNOWN` (hoặc tra lại trước khi retry); Threads tách retry bước publish khỏi bước tạo container.
   evidence: `deliverMessage` (server/src/modules/inbox/send.ts) coi mọi `TRANSIENT` là retry được — `transientFailure()` của adapter gộp hết giờ, lỗi kết nối và 5xx — nên tin có thể tới khách 2–6 lần; Threads `threads_publish` hết giờ mà đã đăng thì retry tạo container mới và đăng lại. Cần adapter phân biệt "chưa gửi được" (DNS/kết nối bị từ chối) với "không rõ" (hết giờ sau khi gửi) và quyết định sản phẩm (AD-10 hiện ghi retry lỗi tạm). Story 4.5 giảm bớt: echo Messenger (`metadata`) tới trong 5 giây backoff đầu đặt tin `sent` nên lần retry không chiếm lại được; IG/Threads/bình luận và echo tới muộn vẫn có thể gửi trùng. Story 6.4 đã thêm cờ `notSent` ở adapter (`MetaFailure.notSent`: chặn trước khi gửi / không mở được kết nối) — `deliverMessage` có thể chỉ retry khi có cờ này, còn lại `SEND_UNKNOWN`, như `publish.target`.
 - source_spec: `spec-4-5-nhan-dien-echo.md`
   summary: Xác nhận bằng sự kiện Meta thật: echo IG có `app_id`/`metadata` không, bình luận FB/IG của trang và trả lời Threads của tài khoản có về webhook không, IG `messaging_seen` dạng `read.mid`, Business Suite gửi `app_id` riêng.
-  evidence: Phân loại echo (`server/src/modules/inbox/echo.ts`) theo tài liệu Meta; echo không `app_id` (bình luận, Threads, có thể IG) chỉ khớp được theo id/nội dung, không khớp thì sau ~15 giây coi là chủ shop trả lời ngoài app (`external_human`) — nếu Meta đổi chữ tin app gửi (vd rút gọn link) thì tin app có thể bị tính là ngoài app và tắt AI.
+  evidence: Phân loại echo (`server/src/modules/inbox/echo.ts`) theo tài liệu Meta; echo không `app_id` (bình luận, Threads, có thể IG) chỉ khớp được theo id/nội dung, không khớp thì sau ~15 giây coi là chủ shop trả lời ngoài app (`external_human`) — nếu Meta đổi chữ tin app gửi (vd rút gọn link) thì tin app có thể bị tính là ngoài app và tắt AI. Story 9.4 gom việc kiểm vào checklist sau Live: `deploy/app-review.md` mục 8.3.
 - source_spec: `spec-4-5-nhan-dien-echo.md`
   summary: Tin của trang vào luồng chưa có hội thoại (khách cũ trước khi kết nối, nhắn riêng từ Business Suite) đang bị bỏ (`ignored`).
   evidence: `ingestEcho` trả `no_conversation`, không tạo khách/hội thoại từ tin của trang; khi khách trả lời thì hội thoại mới không có tin trước đó của trang. Cân nhắc khi làm hội thoại `dm` từ nhắn riêng (việc hoãn của 4.7).
@@ -319,9 +319,6 @@
 - source_spec: `spec-8-5-tong-quan.md`
   summary: Tổng quan refetch cả `GET /overview` (~15 câu: hội thoại, bài lỗi / sắp đăng, chiến dịch + `engagementGains`, sức khoẻ webhook, hạn mức AI) cho MỖI hint `message` / `conversation` / `contact` — tin / bình luận dồn dập (livestream) thì server tính đủ một lượt cho mỗi tin (client huỷ request đang bay nhưng server vẫn chạy).
   evidence: `ENTITY_ALSO_INVALIDATES` + `handleHint` (`invalidateQueries`, mặc định `cancelRefetch`) ở `web/src/lib/realtime.ts` (review lượt 1). Hướng làm: gom hint theo gốc khoá — throttle có lượt cuối (vd. 1 giây, vẫn ≤3 giây của AC) cho `['overview', …]`, hoặc `cancelRefetch: false` + đánh dấu "cần tải lại" khi lượt đang bay xong.
-- source_spec: `spec-9-1-chinh-sach-va-callback-xoa.md`
-  summary: Callback gỡ app / xoá dữ liệu của Threads app (Uninstall Callback URL, Delete Callback URL trong cài đặt Threads app) — 9.1 chỉ làm cho Meta App (Facebook Login).
-  evidence: `server/src/app/privacy.ts` chỉ verify bằng `META_APP_SECRET`. Threads có thể đòi hai URL này khi nộp review; nếu cần thì thêm `POST /privacy/threads/{uninstall,delete}` verify bằng `THREADS_APP_SECRET` (dạng `signed_request` cần xác nhận với tài liệu Threads) — đối chiếu ở 9.4.
 - source_spec: `spec-9-2-xoa-du-lieu.md`
   summary: Kiểm bằng trình duyệt "Xoá khách" ở `/khach-hang?id=` với phiên chủ shop + worker: hộp xác nhận (ô "Tôi hiểu…" bắt buộc), khách biến mất khỏi danh sách / Hộp thư, link "Xem trạng thái xoá" mở `/privacy/status/<code>` trên host api (cả chế độ tách) và chuyển "Đã xoá xong".
   evidence: Chỉ có test API (Postgres thật, pg-boss thật, Cloudinary giả — `server/test/privacy-purge.test.ts`) và test helper web (`web/src/lib/contacts.test.ts`); chưa chạy UI (dev không có mật khẩu mẫu).
@@ -349,3 +346,9 @@
 - source_spec: `spec-9-3-don-du-lieu-theo-thoi-han.md`
   summary: Dòng metadata của `webhook_events` (sau khi payload về null) giữ vô hạn theo AD-22 ("giữ metadata") — bảng vẫn tăng, `dedupe_key` mang id tin Meta. Cân nhắc xoá hẳn dòng quá N tháng (giữ đủ cho chống trùng + sức khoẻ: vài ngày là đủ).
   evidence: `server/src/modules/webhooks/retention.ts` chỉ đặt `payload = null`; sức khoẻ chỉ đọc `max(received_at)`, chống trùng chỉ cần cửa sổ Meta gửi lại.
+- source_spec: `spec-9-4-app-review.md`
+  summary: Bước của chủ dự án sau khi Meta duyệt: chuyển Live hai app, kiểm webhook đủ ba nguồn với khách thật, xác nhận secret ký webhook Threads (runbook mục 10) và dạng `signed_request` / `user_id` của callback Threads app (`/privacy/threads/{uninstall,delete}`).
+  evidence: Chỉ kiểm được với app Live — `deploy/app-review.md` mục 7–8. Callback Threads giả định giống Meta App (HMAC-SHA256 bằng `THREADS_APP_SECRET`, `user_id` = id `/me` của Threads = `pages.platform_account_id`); sai thì callback trả 400 hoặc ghi người lạ (`matched=false`), không xoá nhầm. Webhook Threads có `THREADS_WEBHOOK_SECRET` để đổi secret không cần sửa code.
+- source_spec: `spec-9-4-app-review.md`
+  summary: Reviewer của Meta cần vào app — app chỉ có một chủ sở hữu, nên hồ sơ hướng dẫn tạm đổi mật khẩu chủ sở hữu trong kỳ duyệt; chưa có môi trường staging tách biệt.
+  evidence: `deploy/app-review.md` mục 2.4. Nếu Meta đòi tài khoản thử riêng hoặc chủ shop không muốn đưa mật khẩu production, dựng VPS staging theo runbook (app Meta riêng) hoặc thêm tài khoản chỉ đọc.

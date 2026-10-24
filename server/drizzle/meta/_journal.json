@@ -295,6 +295,13 @@
       "when": 1792821261917,
       "tag": "0041_loose_black_widow",
       "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1792823223632,
+      "tag": "0042_big_menace",
+      "breakpoints": true
     }
   ]
 }

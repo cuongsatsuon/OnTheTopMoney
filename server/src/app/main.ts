@@ -52,7 +52,10 @@ if (!config.META_VERIFY_TOKEN) logger.warn('META_VERIFY_TOKEN chưa đặt — G
 // Thiếu app secret → không verify được chữ ký webhook → POST /webhooks/* luôn 401, Meta có thể tắt subscription.
 if (!config.META_FAKE) {
   if (!config.META_APP_SECRET) logger.warn('META_APP_SECRET chưa đặt — POST /webhooks/meta trả 401 (không verify được chữ ký; Meta có thể tắt subscription)')
-  if (!config.THREADS_APP_SECRET) logger.warn('THREADS_APP_SECRET chưa đặt — POST /webhooks/threads trả 401 (không verify được chữ ký)')
+  if (!config.THREADS_APP_SECRET && !config.THREADS_WEBHOOK_SECRET) {
+    logger.warn('THREADS_APP_SECRET chưa đặt — POST /webhooks/threads trả 401 (không verify được chữ ký)')
+  }
+  if (config.THREADS_WEBHOOK_SECRET) logger.info('POST /webhooks/threads verify chữ ký bằng THREADS_WEBHOOK_SECRET (runbook mục 10)')
 }
 // Trang chính sách công khai (Story 9.1) hiện chỗ trống khi thiếu — Meta duyệt app sẽ thấy.
 if (!config.PRIVACY_CONTROLLER_NAME || !config.PRIVACY_CONTACT_EMAIL) {

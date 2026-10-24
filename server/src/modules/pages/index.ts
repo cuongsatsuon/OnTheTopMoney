@@ -4,6 +4,7 @@ export const MODULE = 'pages'
 
 export {
   findPageByPlatformAccountId,
+  findPageRefByPlatformAccount,
   getPage,
   getPlatformAccountId,
   listPages,

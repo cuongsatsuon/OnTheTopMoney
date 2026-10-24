@@ -116,6 +116,7 @@ export function policyHtml(operator: PolicyOperator): string {
   <h2>7. Quyền của bạn và cách yêu cầu xoá dữ liệu</h2>
   <ul>
     <li><strong>Bạn đã cấp quyền cho ứng dụng qua Facebook:</strong> vào phần cài đặt “Ứng dụng và trang web” của Facebook, chọn ứng dụng này, gỡ ứng dụng và gửi yêu cầu xoá dữ liệu. Facebook chuyển yêu cầu tới chúng tôi; bạn nhận một mã xác nhận và đường dẫn để xem trạng thái xoá.</li>
+    <li><strong>Bạn đã cấp quyền cho ứng dụng qua Threads:</strong> trong Threads, vào Cài đặt › Tài khoản › Quyền của trang web, gỡ ứng dụng này hoặc gửi yêu cầu xoá dữ liệu. Threads chuyển yêu cầu tới chúng tôi theo cùng cách: bạn nhận mã xác nhận và đường dẫn trạng thái.</li>
     <li><strong>Bạn đã nhắn tin hoặc bình luận với trang của chúng tôi:</strong> gửi email tới ${email} hoặc nhắn trực tiếp cho trang, nêu tên trang và tài khoản bạn đã dùng. Chúng tôi xoá hồ sơ của bạn và toàn bộ hội thoại liên quan khỏi ứng dụng. Tin nhắn vẫn còn trên Facebook, Instagram, Threads theo chính sách của nền tảng; bạn có thể tự xoá ở đó.</li>
     <li>Bạn cũng có thể yêu cầu xem hoặc sửa thông tin của mình qua email trên.</li>
   </ul>
@@ -150,6 +151,11 @@ const SCOPE_LABEL: Record<DeletionRequestStatus['scope'], string> = {
   all: 'Dữ liệu gắn với tài khoản Facebook đã cấp quyền',
 }
 
+/** Story 9.4: yêu cầu `all` từ Threads app là dữ liệu của tài khoản Threads, không phải Facebook. */
+function scopeLabel(req: DeletionRequestStatus): string {
+  return req.scope === 'all' && req.source.startsWith('threads_') ? 'Dữ liệu gắn với tài khoản Threads đã cấp quyền' : SCOPE_LABEL[req.scope]
+}
+
 function statusView(req: DeletionRequestStatus): { label: string; detail: string; tone: 'pending' | 'done' } {
   if (req.status === 'completed') {
     return req.matched
@@ -166,7 +172,7 @@ export function statusHtml(req: DeletionRequestStatus): string {
   const view = statusView(req)
   const progress =
     req.status !== 'completed' && req.partsTotal > 0 ? `<dt>Tiến độ</dt><dd>Đã xong ${req.partsDone}/${req.partsTotal} phần</dd>` : ''
-  const scope = req.matched ? `<dt>Phạm vi</dt><dd>${SCOPE_LABEL[req.scope]}</dd>` : ''
+  const scope = req.matched ? `<dt>Phạm vi</dt><dd>${scopeLabel(req)}</dd>` : ''
   const completed = req.completedAt
     ? `<dt>Hoàn tất lúc</dt><dd>${escapeHtml(VN_DATE_TIME.format(req.completedAt))} (giờ Việt Nam)</dd>`
     : ''
@@ -199,7 +205,7 @@ export function statusNotFoundHtml(): string {
   <h1>Không tìm thấy yêu cầu</h1>
 </header>
 <section>
-  <p>Mã xác nhận không đúng hoặc yêu cầu không tồn tại. Kiểm tra lại đường dẫn Facebook đã gửi cho bạn.</p>
+  <p>Mã xác nhận không đúng hoặc yêu cầu không tồn tại. Kiểm tra lại đường dẫn Facebook hoặc Threads đã gửi cho bạn.</p>
   <p class="muted"><a href="${PRIVACY_PATHS.policy}">Chính sách quyền riêng tư</a></p>
 </section>`,
   )

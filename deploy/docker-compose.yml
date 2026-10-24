@@ -54,6 +54,8 @@ x-app-env: &app-env
   THREADS_APP_ID: ${THREADS_APP_ID:-}
   THREADS_APP_SECRET: ${THREADS_APP_SECRET:-}
   THREADS_APP_ENV: ${THREADS_APP_ENV:-}
+  # Tuỳ chọn (Story 9.4, runbook mục 10): secret verify webhook Threads khi khác THREADS_APP_SECRET; trống → dùng THREADS_APP_SECRET.
+  THREADS_WEBHOOK_SECRET: ${THREADS_WEBHOOK_SECRET:-}
   # Trang chính sách /privacy/policy (Story 9.1): tên đơn vị vận hành + email nhận yêu cầu về dữ liệu. Trống → trang
   # hiện chỗ "Chưa điền" (Meta duyệt app sẽ thấy).
   PRIVACY_CONTROLLER_NAME: ${PRIVACY_CONTROLLER_NAME:-}

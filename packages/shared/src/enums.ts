@@ -233,6 +233,9 @@ export type DeletionStatus = z.infer<typeof DeletionStatus>
 
 // AD-22, Story 9.1: nguồn của yêu cầu xoá — callback Meta (gỡ app / xin xoá dữ liệu) hoặc thao tác tay của chủ shop (9.2).
 // Story 9.2: `page_removed` — cron `privacy.removed_pages` cho trang gỡ quá 30 ngày.
-export const DELETION_SOURCES = ['meta_deauthorize', 'meta_data_deletion', 'manual', 'page_removed'] as const
+// Story 9.4: `threads_uninstall` / `threads_delete` — callback gỡ app / xoá dữ liệu của Threads app (app Meta riêng).
+export const DELETION_SOURCES = ['meta_deauthorize', 'meta_data_deletion', 'manual', 'page_removed', 'threads_uninstall', 'threads_delete'] as const
 export const DeletionSource = z.enum(DELETION_SOURCES)
 export type DeletionSource = z.infer<typeof DeletionSource>
+/** Nguồn đến từ callback `signed_request` (Meta App hoặc Threads app). */
+export type CallbackDeletionSource = Extract<DeletionSource, 'meta_deauthorize' | 'meta_data_deletion' | 'threads_uninstall' | 'threads_delete'>

@@ -66,14 +66,18 @@ export function connectionsOptionsFromConfig(
  * (`META_VERIFY_TOKEN`) + app secret của từng app, gốc công khai để dựng URL callback hiển thị ở Cài đặt.
  */
 export function webhooksOptionsFromConfig(
-  config: Pick<Config, 'META_VERIFY_TOKEN' | 'META_APP_SECRET' | 'THREADS_APP_SECRET' | 'PUBLIC_BASE_URL'>,
+  config: Pick<Config, 'META_VERIFY_TOKEN' | 'META_APP_SECRET' | 'THREADS_APP_SECRET' | 'THREADS_WEBHOOK_SECRET' | 'PUBLIC_BASE_URL'>,
   boss: Pick<PgBoss, 'send'>,
 ): Omit<WebhooksDeps, 'db' | 'log'> {
   return {
     jobs: createJobSender(boss),
     ...(config.META_VERIFY_TOKEN ? { verifyToken: config.META_VERIFY_TOKEN } : {}),
     ...(config.META_APP_SECRET ? { metaAppSecret: config.META_APP_SECRET } : {}),
-    ...(config.THREADS_APP_SECRET ? { threadsAppSecret: config.THREADS_APP_SECRET } : {}),
+    // Story 9.4: `THREADS_WEBHOOK_SECRET` (tuỳ chọn) thay secret ký webhook Threads khi xác nhận bằng sự kiện thật cho
+    // kết quả khác giả định (runbook mục 10); không đặt → `THREADS_APP_SECRET` như cũ.
+    ...(config.THREADS_WEBHOOK_SECRET || config.THREADS_APP_SECRET
+      ? { threadsAppSecret: config.THREADS_WEBHOOK_SECRET ?? config.THREADS_APP_SECRET }
+      : {}),
     publicBaseUrl: config.PUBLIC_BASE_URL,
   }
 }
@@ -83,10 +87,12 @@ export function webhooksOptionsFromConfig(
  * thái, tên + email đơn vị vận hành cho trang chính sách (tuỳ chọn).
  */
 export function privacyOptionsFromConfig(
-  config: Pick<Config, 'META_APP_SECRET' | 'PUBLIC_BASE_URL' | 'PRIVACY_CONTROLLER_NAME' | 'PRIVACY_CONTACT_EMAIL'>,
+  config: Pick<Config, 'META_APP_SECRET' | 'THREADS_APP_SECRET' | 'PUBLIC_BASE_URL' | 'PRIVACY_CONTROLLER_NAME' | 'PRIVACY_CONTACT_EMAIL'>,
 ): Omit<PrivacyDeps, 'db' | 'events' | 'log'> {
   return {
     ...(config.META_APP_SECRET ? { metaAppSecret: config.META_APP_SECRET } : {}),
+    // Story 9.4: callback gỡ app / xoá dữ liệu của Threads app.
+    ...(config.THREADS_APP_SECRET ? { threadsAppSecret: config.THREADS_APP_SECRET } : {}),
     publicBaseUrl: config.PUBLIC_BASE_URL,
     operator: { name: config.PRIVACY_CONTROLLER_NAME, email: config.PRIVACY_CONTACT_EMAIL },
   }

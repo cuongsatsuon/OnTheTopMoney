@@ -36,7 +36,7 @@ import {
 } from '../lib/connections'
 import { errorMessage, errorMessageOf } from '../lib/error-messages'
 import { useNotificationPrefs, useSaveNotificationPrefs } from '../lib/notifications'
-import { metaAppPrivacyFields, usePrivacyConfig } from '../lib/privacy'
+import { metaAppPrivacyFields, threadsAppPrivacyFields, usePrivacyConfig } from '../lib/privacy'
 import {
   WEBHOOK_LOG_SUBTITLE,
   WEBHOOK_PRODUCT_LABEL,
@@ -951,12 +951,12 @@ export default function Settings() {
           {section === 'meta' && (
             <Card>
               <CardHeader
-                title="Quyền riêng tư cho Meta App"
-                subtitle="Meta cần các địa chỉ này trước khi cho app chạy Live. Dán vào đúng ô trong Meta App."
+                title="Quyền riêng tư cho Meta App và Threads app"
+                subtitle="Meta cần các địa chỉ này trước khi cho app chạy Live. Dán vào đúng ô trong Meta App và Threads app."
               />
               {privacyConfig.data ? (
                 <div className="space-y-4 p-4">
-                  {(!privacyConfig.data.operatorConfigured || !privacyConfig.data.metaSecretConfigured) && (
+                  {(!privacyConfig.data.operatorConfigured || !privacyConfig.data.metaSecretConfigured || !privacyConfig.data.threadsSecretConfigured) && (
                     <div className="flex gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-[13px] text-amber-900" role="status">
                       <TriangleAlert size={15} className="mt-0.5 shrink-0" />
                       <div className="space-y-1">
@@ -971,18 +971,31 @@ export default function Settings() {
                             Máy chủ chưa đặt <code className="font-mono">META_APP_SECRET</code> nên chưa nhận được yêu cầu xoá dữ liệu từ Meta.
                           </p>
                         )}
+                        {!privacyConfig.data.threadsSecretConfigured && (
+                          <p>
+                            Máy chủ chưa đặt <code className="font-mono">THREADS_APP_SECRET</code> nên chưa nhận được yêu cầu xoá dữ liệu từ Threads.
+                          </p>
+                        )}
                       </div>
                     </div>
                   )}
-                  {metaAppPrivacyFields(privacyConfig.data).map((f) => (
-                    <Field key={f.label} label={f.label} hint={f.hint}>
-                      <div className="flex gap-2">
-                        <Input readOnly value={f.value} className="font-mono" onFocus={(e) => e.target.select()} />
-                        <Button icon={<Copy size={15} />} onClick={() => copy(f.value)}>
-                          Sao chép
-                        </Button>
-                      </div>
-                    </Field>
+                  {[
+                    { title: 'Meta App (Facebook và Instagram)', fields: metaAppPrivacyFields(privacyConfig.data) },
+                    { title: 'Threads app', fields: threadsAppPrivacyFields(privacyConfig.data) },
+                  ].map((group) => (
+                    <section key={group.title} className="space-y-4">
+                      <h3 className="text-sm font-semibold">{group.title}</h3>
+                      {group.fields.map((f) => (
+                        <Field key={f.label} label={f.label} hint={f.hint}>
+                          <div className="flex gap-2">
+                            <Input readOnly value={f.value} className="font-mono" onFocus={(e) => e.target.select()} />
+                            <Button icon={<Copy size={15} />} onClick={() => copy(f.value)}>
+                              Sao chép
+                            </Button>
+                          </div>
+                        </Field>
+                      ))}
+                    </section>
                   ))}
                   <a
                     href={privacyConfig.data.policyUrl}

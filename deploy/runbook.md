@@ -577,8 +577,8 @@ Cần quyền Admin trên app chính ở <https://developers.facebook.com/apps>.
      banner vàng "Chưa nhận tin mới 30 phút". Gặp banner: kiểm callback + verify token + field ở trên còn đúng, app
      còn Live, và log `docker compose logs api | grep webhook` có `401` (sai app secret) hay không.
    - **Chữ ký webhook Threads [ASSUMPTION]**: tài liệu Meta chưa nói rõ app secret nào ký `X-Hub-Signature-256`
-     của webhook Threads. App hiện kiểm chữ ký `/webhooks/threads` bằng **Threads app secret** (`THREADS_APP_SECRET`).
-     Khi có sự kiện Threads thật, xác nhận lại tại đây và ghi secret đúng: ______________________________________.
+     của webhook Threads. App hiện kiểm chữ ký `/webhooks/threads` bằng **Threads app secret** (`THREADS_APP_SECRET`),
+     đổi được bằng `THREADS_WEBHOOK_SECRET`. Xác nhận bằng sự kiện thật và ghi kết quả ở **mục 10**.
 
 ### 6.2 Thêm tester cho Test App
 
@@ -602,9 +602,10 @@ Threads dùng OAuth riêng, có Threads App ID/secret riêng ([Threads API — G
 3. **Use cases › Access the Threads API › Settings**: ghi lại **Threads App ID** và **Threads app secret**
    (KHÔNG phải App ID/App Secret ở App settings › Basic). Thêm **Redirect Callback URLs**:
    `https://<tunnel>/oauth/threads/callback` (đúng bằng `PUBLIC_BASE_URL` + `/oauth/threads/callback`; production là
-   `https://<tên miền>/oauth/threads/callback` ở Threads app production). Uninstall Callback URL: `https://<tunnel>/oauth/threads/uninstall`;
-   Delete Callback URL: `https://<tunnel>/oauth/threads/delete` (đường dẫn giữ chỗ, route dựng ở story sau — tới
-   lúc đó Meta gọi vào sẽ nhận 404, không ảnh hưởng thử OAuth). Bấm **Save**.
+   `https://<tên miền>/oauth/threads/callback` ở Threads app production). **Deauthorize callback URL** (bản cũ:
+   Uninstall Callback URL): `https://<tunnel>/privacy/threads/uninstall`; **Data Deletion Requests URL** (bản cũ: Delete
+   Callback URL): `https://<tunnel>/privacy/threads/delete` (Story 9.4, verify bằng `THREADS_APP_SECRET`; xem mục 9).
+   Máy nào từng dán đường giữ chỗ cũ `/oauth/threads/{uninstall,delete}` thì đổi sang hai đường này. Bấm **Save**.
 4. Thêm tester: **App roles › Roles** → **Add people** → **Threads Tester** → nhập username Threads. Người được mời
    chấp nhận trong Threads: **Settings › Account › Website permissions › Invites**.
 
@@ -968,10 +969,16 @@ app, chế độ tách (mục 8) là `https://api.<miền>` — host web trên H
    - `PRIVACY_CONTROLLER_NAME` — tên cửa hàng / người vận hành app;
    - `PRIVACY_CONTACT_EMAIL` — email nhận yêu cầu về dữ liệu;
    - `META_APP_SECRET` (đã có ở mục 1.4) — thiếu thì mọi callback trả 400.
-2. Mở Cài đặt › Tài khoản Meta › "Quyền riêng tư cho Meta App" để chép ba URL, rồi dán vào Meta App:
+2. Mở Cài đặt › Tài khoản Meta › "Quyền riêng tư cho Meta App và Threads app" để chép URL, rồi dán vào Meta App:
    - **Privacy Policy URL** (Settings › Basic): `<PUBLIC_BASE_URL>/privacy/policy`;
    - **Data deletion callback URL** (Settings › Basic › User data deletion): `<PUBLIC_BASE_URL>/privacy/meta/data-deletion`;
    - **Deauthorize callback URL** (Facebook Login for Business › Settings): `<PUBLIC_BASE_URL>/privacy/meta/deauthorize`.
+
+   Và vào **Threads app** (app Meta riêng, Story 9.4 — cần `THREADS_APP_SECRET`, thiếu thì callback Threads trả 400):
+   - **Privacy Policy URL** (App settings › Basic): cùng `<PUBLIC_BASE_URL>/privacy/policy`;
+   - **Deauthorize callback URL** / Uninstall Callback URL (Use cases › Access the Threads API › Settings):
+     `<PUBLIC_BASE_URL>/privacy/threads/uninstall`;
+   - **Data Deletion Requests URL** / Delete Callback URL (cùng trang): `<PUBLIC_BASE_URL>/privacy/threads/delete`.
 3. Kiểm: `curl -sI https://<host api>/privacy/policy` → `200`, đúng **một** header `Content-Security-Policy` (của api,
    có `style-src 'self'`). Hai header CSP là site nginx còn bản mẫu cũ: cài lại `nginx.conf.example` /
    `nginx-api.conf.example` (map `$ottm_csp` / `$ottm_api_csp`) rồi `sudo nginx -t && sudo systemctl reload nginx`.
@@ -982,4 +989,42 @@ Khi Meta gọi callback: app kiểm chữ ký `signed_request` bằng `META_APP_
 `deletion_requests`) và trả mã xác nhận + đường `/privacy/status/<mã>`. Gỡ app (deauthorize) còn chuyển các trang
 Facebook / Instagram lấy qua tài khoản đó sang "Mất kết nối". Tài khoản Facebook không có dữ liệu trong app → yêu cầu
 ghi "Đã hoàn tất" ngay. Việc xoá dữ liệu thật do bản có Story 9.2 thực hiện; trước đó yêu cầu nằm ở "đang chờ xoá".
+Callback của Threads app làm giống hệt nhưng kiểm chữ ký bằng `THREADS_APP_SECRET`, người dùng là tài khoản Threads đã
+kết nối (`user_id` = id Threads), phạm vi xoá chỉ gồm trang Threads đó; gỡ app trên Threads chuyển trang Threads sang
+"Mất kết nối". Hồ sơ nộp App Review và checklist chuyển Live: `deploy/app-review.md`.
 nginx không ghi access log cho `/privacy/status/` (mã nằm trong đường dẫn).
+
+## 10. Sau khi app Live: xác nhận secret ký webhook Threads
+
+Tài liệu Meta chưa nói rõ secret nào ký `X-Hub-Signature-256` của webhook Threads. App mặc định kiểm chữ ký
+`POST /webhooks/threads` bằng **Threads app secret** (`THREADS_APP_SECRET`, ở Use cases › Access the Threads API ›
+Settings). Chỉ xác nhận được bằng sự kiện thật sau khi Threads app đã publish và bật webhook `replies`
+(`deploy/app-review.md` mục 7.2, 8.1 bước 5).
+
+1. Một tài khoản Threads **không có vai trò** trên app trả lời một bài Threads của shop.
+2. Xem log trong vòng một phút:
+
+   ```bash
+   docker compose logs --since 5m api | grep -E 'webhook (nhận|: thiếu)|/webhooks/threads'
+   ```
+
+   - Có `webhook nhận` với `"product":"threads"`, và Cài đặt › Webhook tin nhắn › Nhật ký sự kiện có sự kiện `replies`
+     → **`THREADS_APP_SECRET` đúng**. Ghi kết quả bên dưới.
+   - Request `/webhooks/threads` trả `401` → Meta ký bằng secret khác. Thử **App Secret** ở *App settings › Basic* của
+     Threads app: đặt `THREADS_WEBHOOK_SECRET=<App Secret đó>` trong `deploy/.env` → `docker compose up -d api` → api
+     log `POST /webhooks/threads verify chữ ký bằng THREADS_WEBHOOK_SECRET` → lặp lại bước 1. Biến này chỉ đổi secret
+     verify webhook; OAuth và callback quyền riêng tư vẫn dùng `THREADS_APP_SECRET`.
+   - Không có request `/webhooks/threads` nào → chưa phải chuyện chữ ký. Kiểm callback / verify token / field `replies`
+     / app đã publish (mục 6.1).
+3. Ghi kết quả (không ghi giá trị secret):
+
+   | Mục | Kết quả |
+   |---|---|
+   | Ngày kiểm | ____________ |
+   | Người kiểm | ____________ |
+   | Secret ký webhook Threads (tên biến / ô trong bảng điều khiển Meta) | ______________________________________ |
+   | Cần `THREADS_WEBHOOK_SECRET`? (có / không) | ____________ |
+   | Callback Threads `signed_request` (`/privacy/threads/uninstall`) verify được bằng `THREADS_APP_SECRET`? (`deploy/app-review.md` mục 8.3) | ____________ |
+   | Ghi chú | ______________________________________ |
+
+Xác nhận xong thì bỏ nhãn [ASSUMPTION] ở mục 6.1 và ghi kết quả vào `deploy/app-review.md` mục 8.2.

@@ -3,6 +3,7 @@
 // chỉ module nền (`pages`, `settings`). Không import `adapters/meta` (verify `signed_request` tự làm).
 // Story 9.1: ghi yêu cầu từ callback Meta + phát `privacy.purge_requested`. Story 9.2: yêu cầu xoá khách / trang gỡ quá 30
 // ngày, chống phát lại `signed_request`, điều phối hai giai đoạn (`coordinator.ts`), tiến độ cho trang trạng thái.
+// Story 9.4: callback của Threads app dùng cùng đường ghi (`threadsSubjectHash`, nguồn `threads_*`).
 export const MODULE = 'privacy'
 
 export {
@@ -21,6 +22,7 @@ export {
   newConfirmationCode,
   recordMetaRequest,
   requestTargetDeletion,
+  threadsSubjectHash,
   type DeletionRequestStatus,
   type DeletionRequestView,
   type RecordMetaRequestInput,

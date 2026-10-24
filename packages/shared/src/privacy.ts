@@ -11,6 +11,12 @@ export const PRIVACY_PATHS = {
   deauthorize: '/privacy/meta/deauthorize',
   /** Meta gọi khi người dùng xin xoá dữ liệu (Data deletion callback URL). */
   dataDeletion: '/privacy/meta/data-deletion',
+  /**
+   * Story 9.4 — Threads app (app Meta riêng, `THREADS_APP_SECRET`): Meta gọi khi người dùng gỡ app khỏi Threads
+   * (Deauthorize / Uninstall callback URL) và khi xin xoá dữ liệu (Data Deletion Requests / Delete callback URL).
+   */
+  threadsUninstall: '/privacy/threads/uninstall',
+  threadsDelete: '/privacy/threads/delete',
   /** Tiền tố trang trạng thái: `/privacy/status/<code>`. */
   status: '/privacy/status',
 } as const
@@ -31,6 +37,11 @@ export const PrivacyConfigResponse = z.object({
   operatorConfigured: z.boolean(),
   /** Có `META_APP_SECRET` — thiếu thì callback không verify được chữ ký (luôn 400). */
   metaSecretConfigured: z.boolean(),
+  /** Story 9.4: hai callback của Threads app (dán vào Threads app › Settings). */
+  threadsUninstallUrl: z.url(),
+  threadsDeleteUrl: z.url(),
+  /** Có `THREADS_APP_SECRET` — thiếu thì callback Threads luôn 400. */
+  threadsSecretConfigured: z.boolean(),
 })
 export type PrivacyConfigResponse = z.infer<typeof PrivacyConfigResponse>
 

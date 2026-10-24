@@ -405,6 +405,9 @@ describe('GET /api/v1/privacy/config', () => {
       dataDeletionUrl: `${BASE}/privacy/meta/data-deletion`,
       operatorConfigured: true,
       metaSecretConfigured: true,
+      threadsUninstallUrl: `${BASE}/privacy/threads/uninstall`,
+      threadsDeleteUrl: `${BASE}/privacy/threads/delete`,
+      threadsSecretConfigured: false,
     })
     const bare = build({ secret: undefined, operator: { name: 'Shop' } })
     const res2 = await bare.inject({ method: 'GET', url: '/api/v1/privacy/config', headers: { cookie: `${SESSION_COOKIE}=${token}` } })
