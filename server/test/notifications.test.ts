@@ -401,6 +401,10 @@ describe('worker thật: publish → events.notifications → thông báo; job h
         'campaigns.generate_window': async () => {},
         'campaigns.complete_check': async () => {},
         'content.requeue': async () => {},
+        'analytics.post_metrics': async () => {},
+        'analytics.page_metrics': async () => {},
+        'analytics.collect_posts': async () => {},
+        'analytics.collect_page': async () => {},
         'events.notifications': async (job) => {
           await handleEvent(workerDeps, parseEventEnvelope(job.data))
         },

@@ -272,3 +272,18 @@
 - source_spec: `spec-7-6-tu-tam-dung-khi-su-co.md`
   summary: "Tiếp tục" chỉ kiểm lý do đang ghi (luật 7.5): chiến dịch dừng vì `PUBLISH_FAILURES` mà trang cũng đã mất kết nối thì tiếp tục được, rồi mới bị dừng lại (`PAGE_DISCONNECTED`) ở lần đăng lỗi / lượt sinh kế tiếp.
   evidence: `campaigns/lifecycle.ts` `assertReasonCleared`; lý do hệ thống không đè nhau (chỉ đè `MANUAL`). Hướng làm: tiếp tục kiểm mọi điều kiện chặn (trang, hồ sơ, hạn mức, khoá) bất kể lý do đã ghi.
+- source_spec: `spec-8-1-thu-thap-so-lieu.md`
+  summary: Kiểm bằng Meta thật bảng ánh xạ `analytics/metric-map.ts` (worker chạy, trang thật đã cấp quyền thống kê):
+    - FB: `post_media_view` / `post_total_media_view_unique` qua `insights.metric(...)` lồng trong `GET /{post}`, `page_media_view`, `page_total_media_view_unique`, `page_post_engagements`, `page_daily_follows_unique` / `page_daily_unfollows_unique` với `period=day`; ngày của giá trị = `end_time` − 1 ngày (lịch Meta) [ASSUMPTION];
+    - IG: `views,reach,likes,comments,shares,saved` theo media (media cũ / ít người xem có thể trả lỗi riêng — hiện bỏ bài đó), `views,reach,total_interactions` `metric_type=total_value` theo cửa sổ ngày VN, `follows_and_unfollows` `breakdown=follow_type` (FOLLOWER / NON_FOLLOWER);
+    - Threads: `views,likes,replies,reposts,quotes` theo media và `threads_insights` theo cửa sổ ngày VN.
+  evidence: Chỉ có test Postgres thật + Meta giả (`server/test/analytics-metrics.test.ts`); tên metric theo tài liệu lúc viết. Sai tên metric thì Meta trả lỗi 100 → bài bị bỏ (`REJECTED`) / số liệu trang `failed` — xem `metric_sync_states` sau lượt cron đầu.
+- source_spec: `spec-8-1-thu-thap-so-lieu.md`
+  summary: `metric_sync_states` (bảng thứ ba của `analytics`, ngoài hai bảng ở Structural Seed) chưa có trong bảng sở hữu của ARCHITECTURE-SPINE; chưa API / màn nào đọc — Story 8.2 hiện "Thiếu quyền thống kê — Kết nối lại" (`permissions_missing` / `permission_denied`).
+  evidence: `server/src/modules/analytics/schema.ts`. Quyền insight không bắt buộc khi chọn trang (`PAGE_REQUIRED_SCOPES`), nên trang kết nối đủ quyền nhắn tin vẫn có thể thiếu `read_insights` / `instagram_manage_insights`.
+- source_spec: `spec-8-1-thu-thap-so-lieu.md`
+  summary: Số liệu trang chỉ lùi 3–4 ngày: worker / Meta dừng lâu hơn thì các ngày giữa bị thiếu, không tự lấp; trang mới kết nối không kéo lịch sử trước ngày kết nối.
+  evidence: `PAGE_METRICS_LOOKBACK_DAYS` ở `analytics/collect.ts`. Hướng làm: lùi tới ngày cuối đã có dòng (tối đa 30 ngày) khi phát hiện khoảng trống; Story 8.2 dùng `insufficientData` cho trang <7 ngày nên chưa cần.
+- source_spec: `spec-8-1-thu-thap-so-lieu.md`
+  summary: Số liệu trang Threads: `views` của `threads_insights` là chuỗi theo ngày Meta (`end_time` giờ Thái Bình Dương) nhưng job hỏi theo cửa sổ ngày VN rồi cộng mọi giá trị — ngày VN D có thể nhận số ngày Meta D−1 (lệch một ngày so với trang FB) hoặc cộng hai ngày nếu Meta trả giá trị chồng cửa sổ; `likes` / `replies` / … (`total_value`) thì đúng cửa sổ VN.
+  evidence: `PAGE_METRIC_MAP.threads` (`mode: 'per_day'`) ở `analytics/metric-map.ts` + `parseInsightTotals`. Hướng làm: kiểm bằng Meta thật; nếu đúng là chuỗi ngày thì tách `views` sang lời gọi `range` như FB (`parseInsightDaily`, ngày = `end_time` − 1 ngày).

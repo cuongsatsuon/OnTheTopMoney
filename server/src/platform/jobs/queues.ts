@@ -80,6 +80,12 @@ export interface QueuePayloads {
   'campaigns.generate_window': Record<string, never>
   /** Story 7.5: hằng giờ chuyển chiến dịch không còn slot mở sang `done`. */
   'campaigns.complete_check': Record<string, never>
+  /** Story 8.1: cron rải job thu số liệu theo trang. */
+  'analytics.post_metrics': Record<string, never>
+  'analytics.page_metrics': Record<string, never>
+  /** Story 8.1: thu số liệu bài / trang của một trang; `deferredSince` = lần hoãn `RATE_LIMITED` đầu (ISO). */
+  'analytics.collect_posts': { pageId: string; deferredSince?: string }
+  'analytics.collect_page': { pageId: string; deferredSince?: string }
   /** Story 4.5: tin của chính trang chưa khớp tin nào của app — bản chuẩn hoá (dạng JSON) để thử khớp lại. */
   'inbox.echo_match': {
     pageId: string
@@ -463,6 +469,43 @@ export const QUEUES = {
     concurrency: 1,
     expireInSeconds: 120,
     cron: { expression: '5 * * * *', tz: CRON_TZ },
+  },
+  // Module `analytics` (Story 8.1, AD-17): cron chỉ rải `analytics.collect_posts` (mỗi 6 giờ, phút 15) / `analytics.collect_page`
+  // (4h30 sáng giờ VN, sau `connections.token_check`) cho mỗi trang chưa gỡ, không mất kết nối — không gọi Meta. Cron chạy
+  // lại kỳ sau → retry 1.
+  'analytics.post_metrics': {
+    policy: 'standard',
+    retryLimit: 1,
+    concurrency: 1,
+    expireInSeconds: 120,
+    cron: { expression: '15 */6 * * *', tz: CRON_TZ },
+  },
+  'analytics.page_metrics': {
+    policy: 'standard',
+    retryLimit: 1,
+    concurrency: 1,
+    expireInSeconds: 120,
+    cron: { expression: '30 4 * * *', tz: CRON_TZ },
+  },
+  // Module `analytics` (Story 8.1, AD-17, AD-6, AD-24 `analytics.*`): kéo insight của một trang, hạng `background`. Ghi bằng
+  // upsert theo khoá ngày → chạy trùng / retry không nhân đôi số. `RATE_LIMITED` không ném: handler tự enqueue lại `startAfter`
+  // (không tính lượt retry). Chỉ lỗi tạm mức trang ném để retry (3, backoff từ 60 giây); lần cuối ghi `failed`. Concurrency 2
+  // giữ nhịp gọi thấp. Hạn 900 giây > 300 bài × một lời gọi nhanh (lỗi tạm liên tiếp dừng sớm).
+  'analytics.collect_posts': {
+    policy: 'standard',
+    retryLimit: 3,
+    retryDelay: 60,
+    retryBackoff: true,
+    concurrency: 2,
+    expireInSeconds: 900,
+  },
+  'analytics.collect_page': {
+    policy: 'standard',
+    retryLimit: 3,
+    retryDelay: 60,
+    retryBackoff: true,
+    concurrency: 2,
+    expireInSeconds: 300,
   },
 } as const satisfies { [N in keyof QueuePayloads]: QueueDef }
 

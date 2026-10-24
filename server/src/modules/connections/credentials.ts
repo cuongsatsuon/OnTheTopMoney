@@ -45,6 +45,20 @@ export async function tokenOwnerPageId(db: DbExecutor, pageId: string): Promise<
 }
 
 /**
+ * Quyền Meta đã cấp cho RIÊNG trang này (`page_credentials.granular_scopes`, đọc từ `debug_token` lúc kết nối — IG có
+ * danh sách của chính nó dù token lấy từ Fanpage nguồn). Trang chưa có token → `[]`. Story 8.1: `analytics` kiểm quyền
+ * insight trước khi gọi Meta; thiếu thì không thu, không coi là mất kết nối.
+ */
+export async function grantedScopes(db: DbExecutor, pageId: string): Promise<string[]> {
+  const [cred] = await db
+    .select({ granularScopes: pageCredentials.granularScopes })
+    .from(pageCredentials)
+    .where(eq(pageCredentials.pageId, pageId))
+  const scopes = cred?.granularScopes
+  return Array.isArray(scopes) ? scopes.filter((s): s is string => typeof s === 'string') : []
+}
+
+/**
  * Gỡ một trang khỏi app (Story 2.7): trong MỘT transaction (AD-3) soft-delete trang (`pages.setRemoved` đặt
  * `removed_at` + phát `page.removed`) rồi xoá token của chính trang đó (`page_credentials`). Giữ toàn bộ lịch sử —
  * chỉ đánh dấu trang đã gỡ. Trả `true` khi vừa gỡ; `false` khi trang không tồn tại hoặc đã gỡ (route → 404,

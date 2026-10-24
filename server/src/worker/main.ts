@@ -8,6 +8,7 @@ import { QUEUES, createBoss, createJobSender, ensureQueues, isCriticalQueue, sta
 import { createSecretCipher } from '../adapters/crypto/index.ts'
 import { createMediaStores } from '../adapters/media/index.ts'
 import { gcReservations, handleAiEvent } from '../modules/ai/index.ts'
+import { handleCollectPageJob, handleCollectPostsJob, runPageMetricsCron, runPostMetricsCron } from '../modules/analytics/index.ts'
 import { handleCampaignsEvent, handleGenerateJob, handlePreviewJob, runCompleteCheck, runGenerateWindow } from '../modules/campaigns/index.ts'
 import { handleRunJob, handleTriageEvent } from '../modules/autoreply/index.ts'
 import {
@@ -57,6 +58,9 @@ const jobs = createJobSender(boss)
 const media = createMediaStores({ CLOUDINARY_URL: config.CLOUDINARY_URL, CLOUDINARY_FOLDER: config.CLOUDINARY_FOLDER })
 // Story 4.5: id app của chính máy chủ — echo có `app_id` khác là chủ shop trả lời ngoài app (Business Suite…).
 const appIds = [config.META_APP_ID, config.THREADS_APP_ID].filter((id): id is string => typeof id === 'string' && id !== '')
+
+// Story 8.1: phụ thuộc của job thu số liệu (token / quyền qua `connections`, Meta hạng `background`).
+const analyticsDeps = { db: dbHandle.db, events, jobs, cipher, graph, threads, log: logger.child({ component: 'analytics' }) }
 
 let heartbeatTimer: NodeJS.Timeout | undefined
 let closing = false
@@ -253,6 +257,25 @@ try {
       'campaigns.complete_check': async () => {
         const done = await runCompleteCheck({ db: dbHandle.db, events })
         if (done > 0) logger.info({ done }, 'campaigns: chiến dịch đã xong')
+      },
+      // Story 8.1: cron rải job thu số liệu bài (6 giờ) / trang (hằng ngày) cho mỗi trang đang kết nối.
+      'analytics.post_metrics': async () => {
+        const pages = await runPostMetricsCron({ db: dbHandle.db, jobs })
+        logger.debug({ pages }, 'analytics.post_metrics')
+      },
+      'analytics.page_metrics': async () => {
+        const pages = await runPageMetricsCron({ db: dbHandle.db, jobs })
+        logger.debug({ pages }, 'analytics.page_metrics')
+      },
+      // Story 8.1: kéo insight một trang (hạng `background`). `RATE_LIMITED` → handler tự hoãn bằng job mới; chỉ lỗi tạm mức
+      // trang ném để retry, lần cuối ghi `failed`.
+      'analytics.collect_posts': async (job) => {
+        const result = await handleCollectPostsJob(analyticsDeps, job as JobWithMetadata<unknown>)
+        logger.debug({ jobId: job.id, result }, 'analytics.collect_posts')
+      },
+      'analytics.collect_page': async (job) => {
+        const result = await handleCollectPageJob(analyticsDeps, job as JobWithMetadata<unknown>)
+        logger.debug({ jobId: job.id, result }, 'analytics.collect_page')
       },
       // Story 6.3: xoá ảnh bài không gắn vào bài nào quá 7 ngày (dòng + file Cloudinary).
       'content.media_gc': async () => {
