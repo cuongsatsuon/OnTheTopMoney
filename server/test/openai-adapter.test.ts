@@ -1,9 +1,10 @@
 // adapters/openai — checkKey gọi GET /v1/models; createResponse (Responses API, store:false) và generateImage
-// (Images API, JPEG base64): phân loại lỗi, timeout, huỷ, không đưa khoá vào kết quả.
+// (Images API, JPEG base64): phân loại lỗi, timeout, huỷ, không đưa khoá vào kết quả. Story 6.6: editImage (multipart
+// `image[]`), ảnh trong createResponse (`input_image` base64), `input_fidelity` theo model, usage tách token ảnh vào.
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { classifyStatus, createOpenAiAdapter, parseUsage } from '../src/adapters/openai/index.ts'
+import { classifyStatus, createOpenAiAdapter, inputFidelityFor, parseUsage } from '../src/adapters/openai/index.ts'
 import { freePort } from './helpers/net.ts'
 
 const KEY = 'sk-test-ADAPTER-0000'
@@ -245,5 +246,113 @@ describe('adapters/openai createResponse / generateImage', () => {
     expect(parseUsage(undefined)).toBeNull()
     expect(parseUsage({})).toBeNull()
     expect(parseUsage({ input_tokens: 10, input_tokens_details: { cached_tokens: 99 }, output_tokens: -3 })).toEqual({ inputTokens: 10, cachedInputTokens: 10, outputTokens: 0 })
+  })
+})
+
+describe('adapters/openai ảnh vào (Story 6.6)', () => {
+  let server: Server
+  let baseUrl: string
+  let handler: (req: IncomingMessage, res: ServerResponse) => void = () => {}
+  const seen: { url?: string; contentType?: string; raw: Buffer }[] = []
+  const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0xff, 0xd9])
+
+  beforeAll(async () => {
+    server = createServer((req, res) => {
+      const chunks: Buffer[] = []
+      req.on('data', (c: Buffer) => chunks.push(c))
+      req.on('end', () => {
+        seen.push({ url: req.url, contentType: req.headers['content-type'], raw: Buffer.concat(chunks) })
+        handler(req, res)
+      })
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`
+  })
+  afterAll(async () => {
+    server.closeAllConnections()
+    await new Promise((resolve) => server.close(resolve))
+  })
+  const reply = (status: number, body: unknown) => {
+    handler = (_req, res) => {
+      res.writeHead(status, { 'content-type': 'application/json' })
+      res.end(JSON.stringify(body))
+    }
+  }
+
+  it('editImage: POST /v1/images/edits multipart (model, prompt, n, size, output_format=jpeg, input_fidelity, image[] có MIME); usage tách token ảnh', async () => {
+    reply(200, { data: [{ b64_json: jpeg.toString('base64') }], usage: { input_tokens: 1100, output_tokens: 4160, input_tokens_details: { image_tokens: 1000, text_tokens: 100 } } })
+    seen.length = 0
+    const result = await createOpenAiAdapter({ baseUrl }).editImage({
+      apiKey: KEY,
+      model: 'gpt-image-1.5',
+      prompt: 'bàn gỗ',
+      n: 1,
+      size: '1024x1024',
+      images: [{ data: jpeg, mime: 'image/jpeg' }],
+      inputFidelity: 'high',
+    })
+    expect(result).toEqual({ ok: true, images: [jpeg], usage: { inputTokens: 1100, cachedInputTokens: 0, outputTokens: 4160, imageInputTokens: 1000 } })
+    expect(seen[0]!.url).toBe('/v1/images/edits')
+    expect(seen[0]!.contentType).toMatch(/^multipart\/form-data; boundary=/)
+    const form = await new Response(new Uint8Array(seen[0]!.raw), { headers: { 'content-type': seen[0]!.contentType! } }).formData()
+    expect(Object.fromEntries([...form.entries()].filter(([, v]) => typeof v === 'string'))).toEqual({
+      model: 'gpt-image-1.5',
+      prompt: 'bàn gỗ',
+      n: '1',
+      size: '1024x1024',
+      output_format: 'jpeg',
+      input_fidelity: 'high',
+    })
+    const file = form.get('image[]') as File
+    expect(file.type).toBe('image/jpeg')
+    expect(file.name).toBe('reference-1.jpg')
+    expect(Buffer.from(await file.arrayBuffer())).toEqual(jpeg)
+
+    // Không có inputFidelity → không gửi trường; không ảnh → INVALID_REQUEST, không gọi mạng.
+    seen.length = 0
+    await createOpenAiAdapter({ baseUrl }).editImage({ apiKey: KEY, model: 'gpt-image-2', prompt: 'p', n: 1, size: 's', images: [{ data: jpeg, mime: 'image/jpeg' }] })
+    const form2 = await new Response(new Uint8Array(seen[0]!.raw), { headers: { 'content-type': seen[0]!.contentType! } }).formData()
+    expect(form2.has('input_fidelity')).toBe(false)
+    seen.length = 0
+    expect(await createOpenAiAdapter({ baseUrl }).editImage({ apiKey: KEY, model: 'm', prompt: 'p', n: 1, size: 's', images: [] })).toEqual({ ok: false, kind: 'INVALID_REQUEST' })
+    expect(seen).toEqual([])
+
+    reply(400, { error: { code: 'moderation_blocked' } })
+    expect(await createOpenAiAdapter({ baseUrl }).editImage({ apiKey: KEY, model: 'm', prompt: 'p', n: 1, size: 's', images: [{ data: jpeg, mime: 'image/jpeg' }] })).toEqual({
+      ok: false,
+      kind: 'CONTENT_REJECTED',
+      status: 400,
+    })
+  })
+
+  it('createResponse có ảnh: input = message user [input_text, input_image data URL base64 + detail]; không URL', async () => {
+    reply(200, { status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: 'ok' }] }], usage: { input_tokens: 400, output_tokens: 5 } })
+    seen.length = 0
+    await createOpenAiAdapter({ baseUrl }).createResponse({
+      apiKey: KEY,
+      model: 'gpt-6-luna',
+      input: 'Viết caption',
+      maxOutputTokens: 100,
+      images: [{ data: jpeg, mime: 'image/jpeg', detail: 'low' }],
+    })
+    expect(seen[0]!.contentType).toBe('application/json')
+    const body = JSON.parse(seen[0]!.raw.toString()) as { input: unknown }
+    expect(body.input).toEqual([
+      {
+        role: 'user',
+        content: [
+          { type: 'input_text', text: 'Viết caption' },
+          { type: 'input_image', image_url: `data:image/jpeg;base64,${jpeg.toString('base64')}`, detail: 'low' },
+        ],
+      },
+    ])
+    expect(seen[0]!.raw.toString()).not.toContain('https://')
+  })
+
+  it('inputFidelityFor: gpt-image-1 / 1.5 (+ snapshot) → high; mini / 2 / 2.5 / khác → không gửi', () => {
+    expect(inputFidelityFor('gpt-image-1')).toBe('high')
+    expect(inputFidelityFor('gpt-image-1.5')).toBe('high')
+    expect(inputFidelityFor('gpt-image-1.5-2025-12-16')).toBe('high')
+    for (const m of ['gpt-image-1-mini', 'gpt-image-2', 'gpt-image-2.5-flare', 'gpt-image-2.5-sunburst', 'dall-e-3']) expect(inputFidelityFor(m)).toBeUndefined()
   })
 })

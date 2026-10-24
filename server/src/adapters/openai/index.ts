@@ -3,6 +3,9 @@
 // - `checkKey` (Story 1.5): `GET /v1/models`.
 // - `createResponse` (Story 1.6): Responses API, `store: false`.
 // - `generateImage` (Story 1.6): Images API, ảnh JPEG trả về dạng base64.
+// - Story 6.6: `editImage` — `POST /images/edits` (multipart, `image[]` = ảnh tham khảo) để giữ đúng sản phẩm, đổi bối
+//   cảnh; `createResponse` nhận ảnh (`input_image` base64 cạnh `input_text`) để model chữ đọc ảnh. Ảnh luôn đi bằng bytes
+//   (không URL); adapter không giữ / log bytes.
 // Gọi bằng `fetch` (không dùng SDK) để test trỏ được về server giả và lỗi luôn đi qua `classifyStatus`.
 
 /** Phân loại lỗi OpenAI (Technical Decisions › Lỗi OpenAI). */
@@ -46,6 +49,20 @@ export interface OpenAiTokenUsage {
   inputTokens: number
   cachedInputTokens: number
   outputTokens: number
+  /**
+   * Phần token ảnh trong `inputTokens` (Images API: `input_tokens_details.image_tokens` — ảnh tham khảo của edits, giá
+   * riêng). Không có = 0. Responses API không tách (token ảnh của model chữ tính như token vào thường).
+   */
+  imageInputTokens?: number
+}
+
+/** MIME ảnh gửi OpenAI (edits nhận PNG/JPEG/WebP; vision nhận thêm GIF tĩnh — app chỉ gửi ba loại này). */
+export type OpenAiImageMime = 'image/jpeg' | 'image/png' | 'image/webp'
+
+/** Một ảnh đầu vào (bytes, không URL). */
+export interface OpenAiInputImage {
+  data: Uint8Array
+  mime: OpenAiImageMime
 }
 
 export type ResponseInputMessage = { role: 'user' | 'assistant' | 'system' | 'developer'; content: string }
@@ -64,6 +81,11 @@ export interface CreateResponseRequest {
   maxOutputTokens: number
   /** Có → bắt model trả JSON theo schema (chữ trả về vẫn ở `text`, caller tự parse). */
   jsonSchema?: ResponseJsonSchema
+  /**
+   * Story 6.6: ảnh cho model đọc. Có ảnh thì `input` phải là chuỗi — adapter dựng một message `user` gồm `input_text` +
+   * mỗi ảnh một `input_image` (data URL base64, `detail`).
+   */
+  images?: readonly (OpenAiInputImage & { detail: 'low' | 'high' | 'auto' })[]
   signal?: AbortSignal
 }
 
@@ -102,6 +124,23 @@ export type GenerateImageResult =
   | OpenAiFailure
   | OpenAiAborted
 
+/** Story 6.6: tạo ảnh từ ảnh tham khảo (`POST /images/edits`). */
+export interface EditImageRequest extends GenerateImageRequest {
+  /** Ảnh tham khảo (1–16 theo OpenAI); gửi thành các trường `image[]`. */
+  images: readonly OpenAiInputImage[]
+  /** `high` = giữ sát chi tiết ảnh vào; không có → không gửi (model không hỗ trợ / mặc định). Xem `inputFidelityFor`. */
+  inputFidelity?: 'high' | 'low'
+}
+
+/**
+ * `input_fidelity` cho model (tài liệu `image_edit_params`, tra 2026-10-24): `gpt-image-1` / `gpt-image-1.5` nhận
+ * `high`; `gpt-image-1-mini` chỉ `low` (mặc định — không gửi); `gpt-image-2` phải bỏ tham số (luôn giữ chi tiết cao);
+ * `gpt-image-2.5-*` tài liệu không nêu → bỏ như `gpt-image-2` [ASSUMPTION]. Model khác → không gửi.
+ */
+export function inputFidelityFor(model: string): 'high' | undefined {
+  return /^gpt-image-1(\.5)?(-\d{4}-\d{2}-\d{2})?$/.test(model) ? 'high' : undefined
+}
+
 export interface OpenAiAdapter {
   /** Kiểm khoá bằng `GET /v1/models` (không tốn token). */
   checkKey(apiKey: string): Promise<CheckKeyResult>
@@ -109,6 +148,8 @@ export interface OpenAiAdapter {
   createResponse(request: CreateResponseRequest): Promise<CreateResponseResult>
   /** `POST /v1/images/generations`, `output_format: jpeg`. */
   generateImage(request: GenerateImageRequest): Promise<GenerateImageResult>
+  /** `POST /v1/images/edits` (multipart), `output_format: jpeg` — Story 6.6. */
+  editImage(request: EditImageRequest): Promise<GenerateImageResult>
 }
 
 export const OPENAI_BASE_URL = 'https://api.openai.com/v1'
@@ -158,17 +199,68 @@ function isConnectFailure(err: unknown): boolean {
 
 const int = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.floor(v) : 0)
 
-/** `usage` của Responses / Images API → số token; thiếu hẳn → `null`. */
+/** `usage` của Responses / Images API → số token; thiếu hẳn → `null`. Images API tách `image_tokens` của phần vào. */
 export function parseUsage(raw: unknown): OpenAiTokenUsage | null {
   if (typeof raw !== 'object' || raw === null) return null
-  const u = raw as { input_tokens?: unknown; output_tokens?: unknown; input_tokens_details?: { cached_tokens?: unknown } }
+  const u = raw as {
+    input_tokens?: unknown
+    output_tokens?: unknown
+    input_tokens_details?: { cached_tokens?: unknown; image_tokens?: unknown }
+  }
   if (u.input_tokens === undefined && u.output_tokens === undefined) return null
   const inputTokens = int(u.input_tokens)
+  const imageInputTokens = Math.min(inputTokens, int(u.input_tokens_details?.image_tokens))
   return {
     inputTokens,
     cachedInputTokens: Math.min(inputTokens, int(u.input_tokens_details?.cached_tokens)),
     outputTokens: int(u.output_tokens),
+    ...(imageInputTokens > 0 ? { imageInputTokens } : {}),
   }
+}
+
+/** Data URL base64 của một ảnh (vision). */
+export const imageDataUrl = (image: OpenAiInputImage): string => `data:${image.mime};base64,${Buffer.from(image.data).toString('base64')}`
+
+/** `input` của Responses API: chuỗi, hoặc một message `user` gồm chữ + ảnh khi có ảnh. */
+export function responseInput(request: Pick<CreateResponseRequest, 'input' | 'images'>): unknown {
+  if (!request.images?.length) return request.input
+  if (typeof request.input !== 'string') throw new TypeError('createResponse: có ảnh thì input phải là chuỗi')
+  return [
+    {
+      role: 'user',
+      content: [
+        { type: 'input_text', text: request.input },
+        ...request.images.map((img) => ({ type: 'input_image', image_url: imageDataUrl(img), detail: img.detail })),
+      ],
+    },
+  ]
+}
+
+const IMAGE_EXT: Record<OpenAiImageMime, string> = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' }
+
+/** Multipart của `POST /images/edits`: mỗi ảnh tham khảo một trường `image[]` (có tên file + MIME để OpenAI nhận dạng). */
+export function editImageForm(request: Omit<EditImageRequest, 'apiKey' | 'signal'>): FormData {
+  const form = new FormData()
+  form.append('model', request.model)
+  form.append('prompt', request.prompt)
+  form.append('n', String(request.n))
+  form.append('size', request.size)
+  form.append('output_format', 'jpeg')
+  if (request.inputFidelity) form.append('input_fidelity', request.inputFidelity)
+  request.images.forEach((img, i) => form.append('image[]', new Blob([new Uint8Array(img.data)], { type: img.mime }), `reference-${i + 1}.${IMAGE_EXT[img.mime]}`))
+  return form
+}
+
+/** Ảnh base64 trong `data[]` của Images API (generations / edits). */
+function imagesOf(json: unknown): Buffer[] {
+  const body = (json ?? {}) as { data?: { b64_json?: unknown }[] }
+  const images: Buffer[] = []
+  for (const d of Array.isArray(body.data) ? body.data : []) {
+    if (typeof d?.b64_json !== 'string') continue
+    const bytes = Buffer.from(d.b64_json, 'base64')
+    if (bytes.length > 0) images.push(bytes)
+  }
+  return images
 }
 
 type ResponseBody = {
@@ -201,8 +293,9 @@ export function createOpenAiAdapter(options: OpenAiAdapterOptions = {}): OpenAiA
   const doFetch = options.fetch ?? fetch
 
   /**
-   * POST JSON có hết giờ + tín hiệu huỷ của caller. Lỗi mạng / hết giờ → `TRANSIENT`; caller huỷ →
-   * `ABORTED`; HTTP lỗi → `classifyStatus`. Không giữ lỗi gốc (có thể mang chi tiết request).
+   * POST JSON (hoặc multipart khi `body` là `FormData` — fetch tự đặt `Content-Type` kèm boundary) có hết giờ + tín hiệu
+   * huỷ của caller. Lỗi mạng / hết giờ → `TRANSIENT`; caller huỷ → `ABORTED`; HTTP lỗi → `classifyStatus`. Không giữ
+   * lỗi gốc (có thể mang chi tiết request).
    */
   async function postJson(
     path: string,
@@ -214,12 +307,13 @@ export function createOpenAiAdapter(options: OpenAiAdapterOptions = {}): OpenAiA
     if (signal?.aborted) return { ok: false, kind: 'ABORTED', maybeBilled: false }
     const timer = AbortSignal.timeout(timeout)
     const combined = signal ? AbortSignal.any([signal, timer]) : timer
+    const form = body instanceof FormData
     let res: Response
     try {
       res = await doFetch(`${baseUrl}${path}`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify(body),
+        headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json', ...(form ? {} : { 'Content-Type': 'application/json' }) },
+        body: form ? body : JSON.stringify(body),
         signal: combined,
       })
     } catch (err) {
@@ -267,7 +361,7 @@ export function createOpenAiAdapter(options: OpenAiAdapterOptions = {}): OpenAiA
         request.apiKey,
         {
           model: request.model,
-          input: request.input,
+          input: responseInput(request),
           ...(request.instructions ? { instructions: request.instructions } : {}),
           max_output_tokens: request.maxOutputTokens,
           ...(request.jsonSchema
@@ -302,15 +396,19 @@ export function createOpenAiAdapter(options: OpenAiAdapterOptions = {}): OpenAiA
         request.signal,
       )
       if (!result.ok) return result
-      const body = (result.json ?? {}) as { data?: { b64_json?: unknown }[]; usage?: unknown }
-      const images: Buffer[] = []
-      for (const d of Array.isArray(body.data) ? body.data : []) {
-        if (typeof d?.b64_json !== 'string') continue
-        const bytes = Buffer.from(d.b64_json, 'base64')
-        if (bytes.length > 0) images.push(bytes)
-      }
+      const images = imagesOf(result.json)
       if (images.length === 0) return { ok: false, kind: 'TRANSIENT', status: 200, maybeBilled: true }
-      return { ok: true, images, usage: parseUsage(body.usage) }
+      return { ok: true, images, usage: parseUsage((result.json as { usage?: unknown } | null)?.usage) }
+    },
+
+    async editImage(request) {
+      if (request.images.length === 0) return { ok: false, kind: 'INVALID_REQUEST' }
+      const { apiKey, signal, ...rest } = request
+      const result = await postJson('/images/edits', apiKey, editImageForm(rest), imageTimeoutMs, signal)
+      if (!result.ok) return result
+      const images = imagesOf(result.json)
+      if (images.length === 0) return { ok: false, kind: 'TRANSIENT', status: 200, maybeBilled: true }
+      return { ok: true, images, usage: parseUsage((result.json as { usage?: unknown } | null)?.usage) }
     },
   }
 }

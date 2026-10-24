@@ -41,4 +41,4 @@ export {
   type AutoreplyModelReason,
   type AutoreplyPromptContext,
 } from './autoreply.ts'
-export { buildImagePrompt } from './image.ts'
+export { buildImagePrompt, buildReferenceImagePrompt } from './image.ts'

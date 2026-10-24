@@ -25,6 +25,8 @@ export interface ModelPrice {
   cachedInput: bigint | null
   output: bigint | null
   imageEach: bigint | null
+  /** Story 6.6: giá token ảnh vào (model ảnh, edits); `null` → giá `input`. */
+  imageInput: bigint | null
 }
 
 /** Chuỗi `numeric` của Postgres ("0.100000") → số nguyên × 10⁶, chính xác (không qua số thực). */
@@ -47,6 +49,7 @@ export async function getModelPrice(db: DbExecutor, model: string): Promise<Mode
     cachedInput: parseMicros(row.cachedInputUsdPer1m),
     output: parseMicros(row.outputUsdPer1m),
     imageEach: parseMicros(row.imageUsdEach),
+    imageInput: parseMicros(row.imageInputUsdPer1m),
   }
 }
 
@@ -66,6 +69,8 @@ export interface UsageCounts {
   cachedInputTokens: number
   outputTokens: number
   images: number
+  /** Phần token ảnh trong `inputTokens` (model ảnh: ảnh tham khảo, tính theo `imageInput`). Không có = 0. */
+  imageInputTokens?: number
 }
 
 export interface Cost {
@@ -87,8 +92,9 @@ function toCost(usdE12: bigint, exchangeRateVnd: number): Cost {
 }
 
 /**
- * Chi phí thật từ usage. Chữ / ảnh có `usage`: (input − cached) × giá input + cached × giá cached (thiếu →
- * giá input) + output × giá output. Ảnh không có token nào (Images API không trả `usage`): số ảnh × giá mỗi ảnh.
+ * Chi phí thật từ usage. Chữ / ảnh có `usage`: (input − cached − ảnh vào) × giá input + cached × giá cached (thiếu →
+ * giá input) + ảnh vào × giá ảnh vào (thiếu → giá input; Story 6.6) + output × giá output. Ảnh không có token nào
+ * (Images API không trả `usage`): số ảnh × giá mỗi ảnh.
  */
 export function computeCost(price: ModelPrice, usage: UsageCounts, exchangeRateVnd: number): Cost {
   const input = price.input ?? 0n
@@ -97,10 +103,32 @@ export function computeCost(price: ModelPrice, usage: UsageCounts, exchangeRateV
     return toCost(big(usage.images) * (price.imageEach ?? 0n) * E6, exchangeRateVnd)
   }
   const cached = Math.min(usage.cachedInputTokens, usage.inputTokens)
+  const imageIn = Math.min(usage.imageInputTokens ?? 0, usage.inputTokens - cached)
   const usdE12 =
-    big(usage.inputTokens - cached) * input + big(cached) * (price.cachedInput ?? input) + big(usage.outputTokens) * (price.output ?? 0n)
+    big(usage.inputTokens - cached - imageIn) * input +
+    big(cached) * (price.cachedInput ?? input) +
+    big(imageIn) * (price.imageInput ?? input) +
+    big(usage.outputTokens) * (price.output ?? 0n)
   return toCost(usdE12, exchangeRateVnd)
 }
+
+/**
+ * Token ước tính cho mỗi ảnh vào khi giữ chỗ (Story 6.6) [ASSUMPTION, bảo thủ]:
+ * - ảnh tham khảo của edits: `gpt-image-2` luôn xử lý ảnh vào ở độ chi tiết cao, ảnh ≤ 1024 px → 6.000 token;
+ * - ảnh cho model chữ đọc (`detail: low`, ~300 token theo cách tính patch) → 1.600 token (đủ cả khi model bỏ qua `low`).
+ */
+export const REFERENCE_IMAGE_ESTIMATE_TOKENS = 6_000
+export const VISION_IMAGE_ESTIMATE_TOKENS = 1_600
+
+/** Phần ước tính thêm cho ảnh vào: số ảnh × token ước tính × giá (ảnh vào của model ảnh / input của model chữ). */
+export function estimateInputImagesCost(price: ModelPrice, count: number, exchangeRateVnd: number): Cost {
+  const perImage = price.kind === 'image' ? REFERENCE_IMAGE_ESTIMATE_TOKENS : VISION_IMAGE_ESTIMATE_TOKENS
+  const rate = (price.kind === 'image' ? price.imageInput : null) ?? price.input ?? 0n
+  return toCost(big(count) * big(perImage) * rate, exchangeRateVnd)
+}
+
+/** Cộng hai chi phí ước tính. */
+export const addCost = (a: Cost, b: Cost): Cost => ({ usdMicros: a.usdMicros + b.usdMicros, costVnd: a.costVnd + b.costVnd })
 
 /**
  * Ước tính token đầu vào: số ký tự ÷ 2 (làm tròn lên) — tiếng Việt có dấu tách token dày hơn tiếng Anh

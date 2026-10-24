@@ -3,7 +3,7 @@
 // - API `https://api.cloudinary.com/v1_1/<cloud>/<resource_type>/{upload,destroy,download}`: kiểm `api_key` và chữ
 //   ký như Cloudinary (sai → 401), lưu file, `format` đổi định dạng ảnh, ảnh hỏng → 400, `destroy` trả
 //   `{result: 'ok' | 'not found'}`, `download` (chỉ file `authenticated`) trả bytes hoặc 404.
-// - Giao file `https://res.cloudinary.com/<cloud>/<resource_type>/<type>/...`: `upload` công khai → 200; `authenticated`
+// - Giao file `https://res.cloudinary.com/<cloud>/<resource_type>/<type>/[<transformation>/]...`: `upload` công khai → 200; `authenticated`
 //   chỉ trả khi URL có chữ ký giả của chính fake (`s--fakesig--`), không thì 401; không có → 404.
 // - Admin API `GET …/<cloud>/resources/<resource_type>/<type>?prefix=&max_results=&next_cursor=` (Story 9.3): Basic auth
 //   `api_key:api_secret` (sai → 401), lọc theo prefix, sắp theo public_id, phân trang bằng con trỏ; `created_at` lấy từ
@@ -183,6 +183,9 @@ export function createFakeCloudinary(options: FakeCloudinaryOptions): FakeCloudi
     const [resourceType = '', type = '', ...rest] = path.split('/')
     let signedOk = false
     if (rest[0]?.startsWith('s--')) signedOk = rest.shift() === FAKE_SIGNATURE
+    // Đoạn transformation khi giao (vd `c_limit,w_1024,h_1024`, Story 6.6) nằm trước `v<version>` → bỏ qua.
+    const versionAt = rest.findIndex((seg) => /^v\d+$/.test(seg))
+    if (versionAt > 0) rest.splice(0, versionAt)
     if (rest[0] && /^v\d+$/.test(rest[0])) rest.shift()
     const tail = rest.join('/')
     const candidates = [tail, tail.replace(/\.[A-Za-z0-9]+$/, '')]

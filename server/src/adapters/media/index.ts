@@ -4,6 +4,8 @@
 //   URL công khai dùng được; chỉ server tải về qua API download có chữ ký.
 // - `MediaInventory` (Story 9.3): liệt kê / xoá file theo prefix của app (`<folder>/public|private/`) qua Admin API — cho
 //   lượt dọn file mồ côi; không bao giờ đụng file ngoài hai prefix đó.
+// - `MediaStore.download` (Story 6.6): server tải bytes ảnh công khai của chính cloud này (bản thu nhỏ `c_limit`) để gửi
+//   OpenAI bằng bytes — URL giao ảnh không rời server.
 // Gọi bằng `fetch` (không SDK, như adapters/openai) để test trỏ được về Cloudinary giả (`fake.ts`). Không biết nghiệp
 // vụ, không log, không ném lỗi thô: trả `{ok:false, kind}` đã phân loại. Không bao giờ đưa api secret, chữ ký hay
 // thông báo lỗi gốc của Cloudinary vào kết quả (AD-12). Khởi tạo không gọi mạng.
@@ -89,12 +91,24 @@ export interface StoredImage {
 
 export type PutImageResult = ({ ok: true } & StoredImage) | MediaFailure
 export type DeleteResult = { ok: true } | MediaFailure
+export type DownloadResult = { ok: true; data: Buffer } | MediaFailure
+
+export interface DownloadOptions {
+  /** Cạnh dài tối đa (px): chèn `c_limit,w_,h_` (thu nhỏ giữ tỉ lệ, không phóng to) khi giao. */
+  maxSide?: number
+  signal?: AbortSignal
+}
 
 export interface MediaStore {
   /** Upload ảnh công khai vào `<folder>/public/<uuidv7>`. */
   put(request: PutImageRequest): Promise<PutImageResult>
   /** Xoá ảnh công khai (kèm xoá cache CDN). Không tồn tại → vẫn ok (idempotent). */
   delete(publicId: string): Promise<DeleteResult>
+  /**
+   * Tải bytes một ảnh công khai đã lưu (`url` = `StoredImage.url`). Chỉ nhận URL giao ảnh `image/upload` của đúng cloud
+   * đã cấu hình (khác → `INVALID_REQUEST`, không gọi mạng). Quá `MEDIA_MAX_BYTES` → `INVALID_REQUEST`.
+   */
+  download(url: string, options?: DownloadOptions): Promise<DownloadResult>
 }
 
 /** Chỗ của một file riêng tư trên Cloudinary — caller lưu nguyên bộ này để `get`/`delete` sau. */
@@ -175,6 +189,8 @@ export interface MediaConfig {
 }
 
 export const CLOUDINARY_API_BASE_URL = 'https://api.cloudinary.com/v1_1'
+/** Gốc URL giao file của Cloudinary (`secure_url`). */
+export const CLOUDINARY_DELIVERY_BASE_URL = 'https://res.cloudinary.com'
 export const UPLOAD_TIMEOUT_MS = 60_000
 export const REQUEST_TIMEOUT_MS = 30_000
 
@@ -282,7 +298,7 @@ export function createMediaStores(config: MediaConfig, options: MediaStoresOptio
   if (!creds) {
     return {
       configured: false,
-      publicStore: { put: notConfigured, delete: notConfigured },
+      publicStore: { put: notConfigured, delete: notConfigured, download: notConfigured },
       privateStore: { put: notConfigured, get: notConfigured, delete: notConfigured },
       inventory: { prefix: (kind) => storedFilePrefix(config.CLOUDINARY_FOLDER, kind), list: notConfigured, delete: notConfigured },
     }
@@ -392,6 +408,36 @@ export function createMediaStores(config: MediaConfig, options: MediaStoresOptio
     },
     delete(publicId) {
       return destroy('image', publicId, 'upload', true)
+    },
+    async download(url, opts = {}) {
+      const marker = `${CLOUDINARY_DELIVERY_BASE_URL}/${creds.cloudName}/image/upload/`
+      // `..` / query / fragment không có trong URL do Cloudinary trả về → từ chối thay vì đoán.
+      if (!url.startsWith(marker) || /[?#]|(^|\/)\.\.?(\/|$)/.test(url.slice(marker.length))) return { ok: false, kind: 'INVALID_REQUEST' }
+      const side = opts.maxSide !== undefined ? Math.floor(opts.maxSide) : 0
+      const href = side > 0 ? `${marker}c_limit,w_${side},h_${side}/${url.slice(marker.length)}` : url
+      const timer = AbortSignal.timeout(timeoutMs)
+      let res: Response
+      try {
+        res = await doFetch(href, { method: 'GET', signal: opts.signal ? AbortSignal.any([opts.signal, timer]) : timer })
+      } catch {
+        return { ok: false, kind: 'TRANSIENT' }
+      }
+      if (!res.ok) {
+        await res.body?.cancel().catch(() => {})
+        return { ok: false, kind: classifyStatus(res.status), status: res.status }
+      }
+      const declared = Number(res.headers.get('content-length') ?? '')
+      if (Number.isFinite(declared) && declared > MEDIA_MAX_BYTES) {
+        await res.body?.cancel().catch(() => {})
+        return { ok: false, kind: 'INVALID_REQUEST', status: res.status }
+      }
+      try {
+        const data = Buffer.from(await res.arrayBuffer())
+        if (data.length === 0 || data.length > MEDIA_MAX_BYTES) return { ok: false, kind: 'INVALID_REQUEST', status: res.status }
+        return { ok: true, data }
+      } catch {
+        return { ok: false, kind: 'TRANSIENT', status: res.status }
+      }
     },
   }
 

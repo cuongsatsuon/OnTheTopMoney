@@ -8,10 +8,12 @@
 //   target `held`. `campaign_id` KHÔNG có FK: `content` không biết bảng `campaigns` (AD-1). Story 7.4: `generate_lease_until`
 //   = job đang viết slot (chiếm trước khi gọi AI — hai job không cùng viết / cùng tính tiền một slot).
 // - `media_assets` chỉ chứa ảnh bài (không logo, không đính kèm của khách); ảnh gắn vào target qua `post_target_media`.
+//   Story 6.6: ô ảnh AI sinh từ ảnh tham khảo trỏ `reference_asset_id` tới ảnh đó — FK KHÔNG cascade: ảnh tham khảo không
+//   bị xoá khi còn ô nào trỏ tới (cron dọn bỏ qua, xoá theo yêu cầu gặp lỗi khoá ngoại thì giữ).
 // - FK tới `pages`/`posts` `on delete cascade`: trang chỉ bị xoá cứng khi xoá dữ liệu theo yêu cầu (gỡ trang là soft-delete).
 import { CANCEL_REASONS, IMAGE_ERROR_CODES, MEDIA_ASSET_SOURCES, MEDIA_ASSET_STATUSES, POST_SOURCES, POST_TARGET_STATUSES } from '@ottm/shared'
 import { sql } from 'drizzle-orm'
-import { boolean, check, index, integer, pgTable, primaryKey, text, timestamp, unique, uuid } from 'drizzle-orm/pg-core'
+import { boolean, check, index, integer, pgTable, primaryKey, text, timestamp, unique, uuid, type AnyPgColumn } from 'drizzle-orm/pg-core'
 import { pagesTable } from '../pages/index.ts'
 
 const inList = (xs: readonly string[]) => sql.raw(xs.map((s) => `'${s}'`).join(', '))
@@ -110,6 +112,8 @@ export const mediaAssets = pgTable(
     errorCode: text('error_code'),
     /** Prompt ảnh AI đã dựng (`ai/prompts/image.ts`) — job đọc lại ở mỗi lượt thử. Không log. */
     prompt: text('prompt'),
+    /** Story 6.6: ảnh tham khảo của ô ảnh AI (Images API edits); null = sinh từ chữ / ảnh tải lên. */
+    referenceAssetId: uuid('reference_asset_id').references((): AnyPgColumn => mediaAssets.id),
     /** public_id trên Cloudinary (`<folder>/public/<uuid>`) — để cron `content.media_gc` xoá file. Null khi chưa `ready`. */
     publicId: text('public_id'),
     /** URL công khai `https://res.cloudinary.com/...` — Meta và trình duyệt tải trực tiếp. */
@@ -124,6 +128,7 @@ export const mediaAssets = pgTable(
   (t) => [
     unique('media_assets_public_id_unique').on(t.publicId),
     index('media_assets_created_at_idx').on(t.createdAt),
+    index('media_assets_reference_idx').on(t.referenceAssetId),
     check('media_assets_source_check', sql`${t.source} in (${inList(MEDIA_ASSET_SOURCES)})`),
     check('media_assets_status_check', sql`${t.status} in (${inList(MEDIA_ASSET_STATUSES)})`),
     check(

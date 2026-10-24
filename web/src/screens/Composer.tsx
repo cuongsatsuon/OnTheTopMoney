@@ -8,7 +8,9 @@
 // rồi chuyển mọi trang sang `scheduled`; bài đã rời nháp chỉ xem được — mỗi tab có nhãn trạng thái (đã lên lịch, đang
 // đăng, đã đăng + "Xem bài", lỗi + lý do), footer có "Bỏ lịch" / "Đổi giờ" / "Đăng lại". Xem trước IG đệm trắng ảnh
 // ngoài khung 4:5–1,91:1 như lúc đăng. Story 8.4: "Tạo bài tương tự" mở `?idea=…&trang=<pageId>` — bài mới chọn đúng
-// trang của bài gốc làm đích + điền ý tưởng; không gọi AI tới khi chủ shop bấm "Tạo bằng AI".
+// trang của bài gốc làm đích + điền ý tưởng; không gọi AI tới khi chủ shop bấm "Tạo bằng AI". Story 6.6: ảnh tải lên có
+// "Dùng làm ảnh tham khảo" → 4 ảnh AI giữ đúng sản phẩm, đổi bối cảnh theo "Yêu cầu bối cảnh"; tab đã có ảnh thì mọi nút
+// AI viết caption gửi kèm ảnh của tab cho AI xem.
 import {
   AlertCircle,
   Bookmark,
@@ -23,6 +25,7 @@ import {
   Globe,
   Heart,
   ImageOff,
+  ImagePlus,
   Images,
   Loader2,
   MessageCircle,
@@ -91,9 +94,11 @@ import {
   buildComposeBody,
   buildImageBody,
   buildSaveBody,
+  canUseAsReference,
   captionCounter,
   captionViolations,
   clearImage,
+  composeImages,
   composeLock,
   composeLockCodeOf,
   composeToast,
@@ -112,6 +117,7 @@ import {
   keepAttachedGenerated,
   orderedTargets,
   pendingTiles,
+  referenceAsset,
   startSelection,
   tileImages,
   toggleGroupSelection,
@@ -194,6 +200,8 @@ export default function Composer() {
   const [genIds, setGenIds] = useState<string[]>([])
   const [imageDesc, setImageDesc] = useState('')
   const [imageStyle, setImageStyle] = useState<ImageStyle>('product')
+  /** Ảnh tham khảo đang chọn (Story 6.6): ảnh AI giữ đúng sản phẩm trong ảnh này, mô tả là yêu cầu bối cảnh. */
+  const [referenceId, setReferenceId] = useState<string | null>(null)
   /** "Kèm 4 ảnh AI": "Tạo bằng AI" sinh ảnh cùng lúc với caption (UX F4 b3). */
   const [withImages, setWithImages] = useState(true)
   const imageDescRef = useRef<HTMLInputElement>(null)
@@ -241,6 +249,7 @@ export default function Composer() {
     setActiveTab('')
     setNotes({})
     setGenIds([])
+    setReferenceId(null)
     setSession((s) => s + 1)
     setLoadedKey(initKey)
   }
@@ -271,7 +280,9 @@ export default function Composer() {
   const generated = generatedQuery.data?.images
   const tiles = imageTiles(genIds, generated, pool)
   const imagesPending = pendingTiles(tiles)
-  const activeImage = activeDraft ? tileImages(tiles).find((m) => m.id === activeDraft.mediaIds[0]) : undefined
+  const readyImages = tileImages(tiles)
+  const activeImage = activeDraft ? readyImages.find((m) => m.id === activeDraft.mediaIds[0]) : undefined
+  const reference = referenceAsset(tiles, referenceId)
   const emptyTabs = targets.filter((p) => !draftOf(drafts, p.id).caption.trim())
   const tabsWithIssues = targets.filter((p) => blockingIssues(issuesFor(p.platform, draftOf(drafts, p.id))).length > 0)
   const grouped = groupList.map((g) => ({ group: g, pages: allPages.filter((p) => p.groupId === g.id) })).filter((x) => x.pages.length > 0)
@@ -340,8 +351,12 @@ export default function Composer() {
     if (revise) setBusy({ pageId: list[0]!.id, action: revise.action })
     else setWriting(list.length)
     const stamp = lockStamp
+    const pageIds = list.map((p) => p.id)
+    // Story 6.6: tab có ảnh sẵn sàng → gửi kèm cho AI xem.
+    const images = composeImages(pageIds, drafts, new Set(readyImages.map((m) => m.id)))
+    const withImage = new Set(images.map((i) => i.pageId))
     compose.mutate(
-      { body: buildComposeBody({ topic: idea, goal, length, pageIds: list.map((p) => p.id), ...(revise ? { revise } : {}) }), signal: ctrl.signal },
+      { body: buildComposeBody({ topic: idea, goal, length, pageIds, images, ...(revise ? { revise } : {}) }), signal: ctrl.signal },
       {
         onSuccess: ({ results }) => {
           if (ctrl.signal.aborted) return // Dừng / đã nạp nháp khác ngay lúc kết quả về: bỏ kết quả
@@ -350,7 +365,7 @@ export default function Composer() {
           setNotes((n) => applyComposeResults({}, n, results).notes)
           const { lockCode } = applyComposeResults({}, {}, results)
           setServerLock(lockCode ? { code: lockCode, stamp } : null)
-          notify(composeToast(results))
+          notify(composeToast(results, withImage))
         },
         onError: (err) => {
           if (ctrl.signal.aborted) return // nút Dừng: giữ nguyên nội dung
@@ -372,14 +387,14 @@ export default function Composer() {
    * realtime; lỗi chặn trước (thiếu khoá, hết hạn mức…) khoá nút AI như khi viết caption.
    */
   function startImages(description: string) {
-    const body = buildImageBody(description, idea, imageStyle)
+    const body = buildImageBody(description, idea, imageStyle, reference?.id ?? null)
     if (!body || lock.locked || imagesBusy) return
     const stamp = lockStamp
     generateImages.mutate(body, {
       onSuccess: ({ images }) => {
         setPool((p) => keepAttachedGenerated(p, generated, drafts))
         setGenIds(images.map((i) => i.id))
-        notify(`AI đang tạo ${images.length} ảnh…`)
+        notify(reference ? `AI đang tạo ${images.length} ảnh từ ảnh tham khảo…` : `AI đang tạo ${images.length} ảnh…`)
       },
       onError: (err) => {
         const code = composeLockCodeOf(err)
@@ -817,6 +832,12 @@ export default function Composer() {
                     </AiQuick>
                   </div>
                 </AiLockHint>
+                {activeImage && (
+                  <p className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <Images size={13} className="shrink-0 text-ai" />
+                    AI sẽ xem ảnh của trang này khi viết, để nội dung khớp với ảnh.
+                  </p>
+                )}
 
                 <div className="mt-6">
                   <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
@@ -831,22 +852,36 @@ export default function Composer() {
                       <input ref={fileRef} type="file" accept={IMAGE_ACCEPT} className="hidden" onChange={(e) => onUpload(e.target.files)} />
                     </div>
                   </div>
+                  {reference && (
+                    <div className="mb-2 flex items-center gap-3 rounded-md border border-ai/30 bg-ai-soft px-3 py-2">
+                      <img src={reference.url} alt="" className="size-12 shrink-0 rounded object-cover" />
+                      <div className="min-w-0 flex-1 text-[13px]">
+                        <span className="block font-medium">Ảnh tham khảo</span>
+                        <span className="text-xs text-muted-foreground">AI giữ đúng sản phẩm trong ảnh này, chỉ đổi bối cảnh theo yêu cầu của bạn.</span>
+                      </div>
+                      <Button size="sm" icon={<X size={14} />} onClick={() => setReferenceId(null)}>
+                        Bỏ ảnh tham khảo
+                      </Button>
+                    </div>
+                  )}
                   <div className="mb-3 flex flex-wrap items-end gap-2">
-                    <Field label="Mô tả ảnh" className="min-w-[200px] flex-1">
+                    <Field label={reference ? 'Yêu cầu bối cảnh' : 'Mô tả ảnh'} className="min-w-[200px] flex-1">
                       <Input
                         ref={imageDescRef}
                         value={imageDesc}
                         onChange={(e) => setImageDesc(e.target.value)}
-                        placeholder="Để trống: AI vẽ theo ý tưởng bài"
+                        placeholder={reference ? 'vd đặt sản phẩm lên bàn gỗ, ánh sáng buổi sáng' : 'Để trống: AI vẽ theo ý tưởng bài'}
                         maxLength={1000}
                       />
                     </Field>
-                    <Field label="Phong cách" className="w-[150px]">
-                      <Select options={IMAGE_STYLE_OPTIONS} value={imageStyle} onChange={(e) => setImageStyle(e.target.value as ImageStyle)} />
-                    </Field>
+                    {!reference && (
+                      <Field label="Phong cách" className="w-[150px]">
+                        <Select options={IMAGE_STYLE_OPTIONS} value={imageStyle} onChange={(e) => setImageStyle(e.target.value as ImageStyle)} />
+                      </Field>
+                    )}
                     <AiLockHint locked={lock.locked} hint={lock.hint} link={lock.link} align="end">
                       <Button variant="ai" size="sm" className="h-9" icon={<Sparkles size={14} />} disabled={!canGenerateImages} onClick={() => startImages(imageDesc)}>
-                        {imagesBusy ? 'AI đang tạo ảnh…' : genIds.length > 0 ? 'Tạo lại ảnh' : 'Tạo ảnh AI'}
+                        {imagesBusy ? 'AI đang tạo ảnh…' : reference ? 'Tạo từ ảnh tham khảo' : genIds.length > 0 ? 'Tạo lại ảnh' : 'Tạo ảnh AI'}
                       </Button>
                     </AiLockHint>
                   </div>
@@ -866,6 +901,11 @@ export default function Composer() {
                           chosen={tile.kind === 'image' && activeDraft.mediaIds.includes(tile.asset.id)}
                           onChoose={(id) => setDrafts((d) => assignImage(d, activePage.id, id))}
                           onRetry={retryImageDescription}
+                          isReference={tile.kind === 'image' && tile.asset.id === reference?.id}
+                          onUseAsReference={(id) => {
+                            setReferenceId(id)
+                            imageDescRef.current?.focus()
+                          }}
                         />
                       ))}
                     </div>
@@ -1167,6 +1207,8 @@ function ImageTileView({
   chosen,
   onChoose,
   onRetry,
+  isReference,
+  onUseAsReference,
 }: {
   tile: ImageTile
   index: number
@@ -1174,6 +1216,9 @@ function ImageTileView({
   chosen: boolean
   onChoose: (mediaId: string) => void
   onRetry: () => void
+  /** Story 6.6: ảnh này đang là ảnh tham khảo. */
+  isReference: boolean
+  onUseAsReference: (mediaId: string) => void
 }) {
   if (tile.kind === 'pending') {
     return (
@@ -1197,17 +1242,33 @@ function ImageTileView({
   }
   const im = tile.asset
   return (
-    <button
-      onClick={() => onChoose(im.id)}
-      className={cn('relative aspect-square overflow-hidden rounded-md border border-border', chosen && 'ring-2 ring-primary ring-offset-2')}
-      aria-pressed={chosen}
-      aria-label={`Dùng ảnh ${index + 1} cho ${pageName}`}
-    >
-      <img src={im.url} alt="" className="size-full object-cover" />
-      <span className={cn('absolute top-1 left-1 rounded px-1 text-[10px] font-semibold', im.source === 'ai' ? 'bg-ai text-white' : 'bg-white/90 text-slate-700')}>
-        {im.source === 'ai' ? 'AI' : 'Tải lên'}
-      </span>
-    </button>
+    <div className="relative aspect-square">
+      <button
+        onClick={() => onChoose(im.id)}
+        className={cn('relative size-full overflow-hidden rounded-md border border-border', chosen && 'ring-2 ring-primary ring-offset-2')}
+        aria-pressed={chosen}
+        aria-label={`Dùng ảnh ${index + 1} cho ${pageName}`}
+      >
+        <img src={im.url} alt="" className="size-full object-cover" />
+        <span className={cn('absolute top-1 left-1 rounded px-1 text-[10px] font-semibold', im.source === 'ai' ? 'bg-ai text-white' : 'bg-white/90 text-slate-700')}>
+          {im.source === 'ai' ? 'AI' : 'Tải lên'}
+        </span>
+      </button>
+      {/* Nút riêng (không lồng trong nút chọn ảnh): ảnh tải lên làm ảnh tham khảo cho ảnh AI. */}
+      {canUseAsReference(im) &&
+        (isReference ? (
+          <span className="pointer-events-none absolute inset-x-1 bottom-1 rounded bg-ai px-1 py-0.5 text-center text-[10px] font-semibold text-white">Ảnh tham khảo</span>
+        ) : (
+          <button
+            type="button"
+            onClick={() => onUseAsReference(im.id)}
+            className="absolute inset-x-1 bottom-1 flex items-center justify-center gap-1 rounded bg-white/90 px-1 py-0.5 text-[10px] font-medium text-ai hover:bg-white"
+            title="AI tạo ảnh mới giữ đúng sản phẩm trong ảnh này, đổi bối cảnh theo yêu cầu"
+          >
+            <ImagePlus size={11} /> Dùng làm ảnh tham khảo
+          </button>
+        ))}
+    </div>
   )
 }
 

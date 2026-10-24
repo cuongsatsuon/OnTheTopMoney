@@ -196,7 +196,8 @@ export function buildApp({ sql, db, logger, http = {}, loginLimiter, health, eve
     registerBrandSample(app, aiDeps)
     registerInboxSuggest(app, aiDeps)
     registerAutoreplyTest(app, aiDeps)
-    registerPostsCompose(app, aiDeps)
+    // Story 6.6: caption đọc ảnh của tab → cần kho media để tải ảnh.
+    registerPostsCompose(app, { ...aiDeps, media: mediaStores })
     // Sinh ảnh AI (Story 6.3): enqueue `content.image.generate` cùng transaction → cần `jobs`.
     if (jobs) registerMediaGenerate(app, { db, cipher: aiDeps.cipher, media: mediaStores, jobs, ...(clock ? { now: clock } : {}) })
   }

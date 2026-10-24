@@ -3,6 +3,7 @@
 // Story 6.2 — caption AI: body gọi AI, áp kết quả từng tab, khoá nút AI, cụm vi phạm còn trong chữ, câu ghi chú / toast.
 // Story 6.3 — ảnh AI: lưới ô (đang tạo / lỗi / ảnh rồi kho ảnh), tạo lại giữ ảnh đang gắn, "Thử mô tả khác", mô tả gửi AI.
 // Story 8.4 — "Tạo bài tương tự": link mở Soạn bài (ý tưởng + trang), chọn đích theo `?trang=`.
+// Story 6.6 — ảnh tham khảo (chỉ ảnh tải lên, body `referenceId`, bỏ chọn khi rời lưới), ảnh tab gửi kèm caption AI, toast.
 import {
   ComposeCaptionsRequest,
   GenerateImagesRequest,
@@ -28,9 +29,11 @@ import {
   buildComposeBody,
   buildImageBody,
   buildSaveBody,
+  canUseAsReference,
   captionCounter,
   captionViolations,
   clearImage,
+  composeImages,
   composeLock,
   composeLockCodeOf,
   composeToast,
@@ -50,6 +53,7 @@ import {
   keepAttachedGenerated,
   orderedTargets,
   pendingTiles,
+  referenceAsset,
   similarPostLink,
   startSelection,
   tileImages,
@@ -242,7 +246,7 @@ describe('Viết caption bằng AI (Story 6.2)', () => {
       [B]: { ...EMPTY_DRAFT, caption: 'cũ B' },
     }
     const results: ComposeCaptionResult[] = [
-      { pageId: A, status: 'ok', caption: 'Mới A', violations: [{ kind: 'banned_word', text: 'rẻ nhất' }] },
+      { pageId: A, status: 'ok', caption: 'Mới A', violations: [{ kind: 'banned_word', text: 'rẻ nhất' }], imageUsed: false },
       { pageId: B, status: 'error', errorCode: 'CONFIG_MISSING' },
       { pageId: C, status: 'error', errorCode: 'AI_PROVIDER_ERROR' },
     ]
@@ -257,7 +261,7 @@ describe('Viết caption bằng AI (Story 6.2)', () => {
     })
     expect(r).toMatchObject({ written: 1, failed: 2, lockCode: null })
     const budget = applyComposeResults({}, {}, [
-      { pageId: A, status: 'ok', caption: 'x', violations: [] },
+      { pageId: A, status: 'ok', caption: 'x', violations: [], imageUsed: false },
       { pageId: B, status: 'error', errorCode: 'AI_BUDGET_EXCEEDED' },
       { pageId: C, status: 'error', errorCode: 'OPENAI_KEY_INVALID' },
     ])
@@ -291,10 +295,10 @@ describe('Viết caption bằng AI (Story 6.2)', () => {
   it('aiErrorText / composeToast: câu theo mã; tóm tắt số trang viết được / chưa', () => {
     expect(aiErrorText('CONFIG_MISSING')).toContain('chưa có hồ sơ thương hiệu')
     expect(aiErrorText('AI_PROVIDER_ERROR')).not.toBe('')
-    expect(composeToast([{ pageId: A, status: 'ok', caption: 'x', violations: [] }])).toBe('AI đã viết cho 1 trang')
+    expect(composeToast([{ pageId: A, status: 'ok', caption: 'x', violations: [], imageUsed: false }])).toBe('AI đã viết cho 1 trang')
     expect(
       composeToast([
-        { pageId: A, status: 'ok', caption: 'x', violations: [] },
+        { pageId: A, status: 'ok', caption: 'x', violations: [], imageUsed: false },
         { pageId: B, status: 'error', errorCode: 'CONFIG_MISSING' },
       ]),
     ).toBe('AI đã viết cho 1 trang · 1 trang chưa viết được')
@@ -360,5 +364,33 @@ describe('ảnh AI (Story 6.3)', () => {
     expect(buildImageBody('Nồi chiên trên bếp gỗ', 'Khuyến mãi', 'lifestyle')).toEqual({ prompt: 'Nồi chiên trên bếp gỗ', style: 'lifestyle' })
     expect(GenerateImagesRequest.parse(buildImageBody('', 'Khuyến mãi', 'product'))).toEqual({ prompt: 'Khuyến mãi', style: 'product' })
     expect(buildImageBody(' ', '  ', 'product')).toBeNull()
+  })
+
+  it('ảnh tham khảo (6.6): chỉ ảnh tải lên; body có referenceId, không phong cách; hợp đồng server nhận; rời lưới → bỏ chọn', () => {
+    expect(canUseAsReference(uploaded)).toBe(true)
+    expect(canUseAsReference(asset(302))).toBe(false)
+    const body = buildImageBody('', 'Bình giữ nhiệt', 'illustration', uploaded.id)
+    expect(body).toEqual({ prompt: 'Bình giữ nhiệt', referenceId: uploaded.id })
+    expect(GenerateImagesRequest.parse(body)).toMatchObject({ prompt: 'Bình giữ nhiệt', referenceId: uploaded.id })
+    expect(buildImageBody('bàn gỗ, nắng sớm', '', 'product', uploaded.id)).toEqual({ prompt: 'bàn gỗ, nắng sớm', referenceId: uploaded.id })
+    expect(buildImageBody(' ', ' ', 'product', uploaded.id)).toBeNull()
+    const tiles = imageTiles(genIds, gen, [uploaded])
+    expect(referenceAsset(tiles, uploaded.id)?.id).toBe(uploaded.id)
+    expect(referenceAsset(tiles, null)).toBeNull()
+    expect(referenceAsset(imageTiles([], undefined, []), uploaded.id)).toBeNull()
+  })
+
+  it('ảnh tab gửi kèm caption AI (6.6): chỉ tab có ảnh sẵn sàng trong lưới, đúng thứ tự trang; body hợp lệ; toast nêu trang không xem được ảnh', () => {
+    const [A, B, C] = [id(1), id(2), id(3)]
+    const drafts: Drafts = { [A]: { ...EMPTY_DRAFT, mediaIds: [id(302)] }, [B]: { ...EMPTY_DRAFT }, [C]: { ...EMPTY_DRAFT, mediaIds: [id(301)] } }
+    const ready = new Set(tileImages(imageTiles(genIds, gen, [uploaded])).map((m) => m.id))
+    const images = composeImages([A, B, C], drafts, ready)
+    expect(images).toEqual([{ pageId: A, mediaId: id(302) }]) // C trỏ ô đang tạo → không gửi
+    const body = buildComposeBody({ topic: 'Ý tưởng', goal: 'sales', length: 'medium', pageIds: [A, B, C], images })
+    expect(ComposeCaptionsRequest.safeParse(body).success).toBe(true)
+    expect(buildComposeBody({ topic: 'Ý tưởng', goal: 'sales', length: 'medium', pageIds: [A], images: [] })).not.toHaveProperty('images')
+    const ok = (pageId: string, imageUsed: boolean) => ({ pageId, status: 'ok' as const, caption: 'x', violations: [], imageUsed })
+    expect(composeToast([ok(A, true), ok(B, false)], new Set([A]))).toBe('AI đã viết cho 2 trang')
+    expect(composeToast([ok(A, false), ok(B, false)], new Set([A]))).toBe('AI đã viết cho 2 trang · 1 trang viết không xem được ảnh')
   })
 })

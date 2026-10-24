@@ -3,6 +3,7 @@
 // không job, không lưu bài). Nghiệp vụ ở `content.composeCaptions` (hồ sơ hiệu lực từng trang → gateway
 // `feature=compose_caption` → `checkOutput`); mỗi trang một kết quả, trang chưa có hồ sơ báo `CONFIG_MISSING` riêng.
 // Dừng = client đóng kết nối → AbortSignal sang OpenAI (dùng chung `runAbortable` với Viết thử / Gợi ý).
+// Story 6.6: `images` = ảnh của tab cho AI đọc (server tải từ kho, gửi bytes).
 import { ComposeCaptionsRequest, ComposeCaptionsResponse } from '@ottm/shared'
 import type { FastifyInstance } from 'fastify'
 import { composeCaptions, type ComposeDeps } from '../modules/content/index.ts'

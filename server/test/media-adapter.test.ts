@@ -134,6 +134,44 @@ describe('adapters/media — MediaStore (công khai)', () => {
   })
 })
 
+describe('adapters/media — download (ảnh gửi OpenAI, Story 6.6)', () => {
+  it('tải bytes ảnh đã lưu; maxSide → chèn c_limit,w_,h_ sau /image/upload/', async () => {
+    const { fake, stores } = setup()
+    const put = await stores.publicStore.put({ data: FAKE_PNG, mime: 'image/png' })
+    if (!put.ok) throw new Error(put.kind)
+    const plain = await stores.publicStore.download(put.url)
+    expect(plain).toEqual({ ok: true, data: FAKE_PNG })
+    fake.requests.length = 0
+    const small = await stores.publicStore.download(put.url, { maxSide: 1024 })
+    expect(small).toEqual({ ok: true, data: FAKE_PNG })
+    expect(fake.requests[0]!.url).toBe(put.url.replace('/image/upload/', '/image/upload/c_limit,w_1024,h_1024/'))
+  })
+
+  it('URL ngoài cloud / không phải image/upload / có query / có .. → INVALID_REQUEST, không gọi mạng', async () => {
+    const { fake, stores } = setup()
+    for (const url of [
+      'https://evil.example.com/demo-cloud/image/upload/v1/a.jpg',
+      `${FAKE_DELIVERY_BASE_URL}/other-cloud/image/upload/v1/a.jpg`,
+      `${FAKE_DELIVERY_BASE_URL}/demo-cloud/raw/authenticated/v1/a.pdf`,
+      `${FAKE_DELIVERY_BASE_URL}/demo-cloud/image/upload/v1/a.jpg?x=1`,
+      `${FAKE_DELIVERY_BASE_URL}/demo-cloud/image/upload/../raw/upload/a`,
+    ]) {
+      expect(await stores.publicStore.download(url), url).toEqual({ ok: false, kind: 'INVALID_REQUEST' })
+    }
+    expect(fake.requests).toHaveLength(0)
+  })
+
+  it('không có → NOT_FOUND; 503 → TRANSIENT; lỗi mạng → TRANSIENT', async () => {
+    const { fake, stores } = setup()
+    const url = `${FAKE_DELIVERY_BASE_URL}/demo-cloud/image/upload/v1/ottm-test/public/none.jpg`
+    expect(await stores.publicStore.download(url)).toEqual({ ok: false, kind: 'NOT_FOUND', status: 404 })
+    fake.failNext(503)
+    expect(await stores.publicStore.download(url)).toEqual({ ok: false, kind: 'TRANSIENT', status: 503 })
+    fake.failNext('network')
+    expect(await stores.publicStore.download(url)).toEqual({ ok: false, kind: 'TRANSIENT' })
+  })
+})
+
 describe('adapters/media — fitImageUrl (URL giao đã biến đổi, Story 6.4)', () => {
   const URL = 'https://res.cloudinary.com/demo/image/upload/v17/ottm/public/abc.jpg'
   const IG = { minAspect: 4 / 5, maxAspect: 1.91, maxWidth: 1440 }
@@ -317,6 +355,7 @@ describe('adapters/media — lỗi', () => {
     const results = await Promise.all([
       stores.publicStore.put({ data: FAKE_PNG, mime: 'image/png' }),
       stores.publicStore.delete('x'),
+      stores.publicStore.download('https://res.cloudinary.com/x/image/upload/v1/a.jpg'),
       stores.privateStore.put({ data: PDF, mime: 'application/pdf' }),
       stores.privateStore.get(ref),
       stores.privateStore.delete(ref),

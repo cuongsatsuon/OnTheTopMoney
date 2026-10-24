@@ -30,7 +30,7 @@ import { bossDbFor, type Db, type DbExecutor } from '../../platform/db/index.ts'
 import { AppError } from '../../platform/errors/index.ts'
 import type { EventPublisher } from '../../platform/events/index.ts'
 import type { JobSender } from '../../platform/jobs/index.ts'
-import { buildImagePrompt } from '../ai/index.ts'
+import { buildImagePrompt, isMaybeBilled } from '../ai/index.ts'
 import { getPage } from '../pages/index.ts'
 import { resolveEffectiveOrNull } from '../profiles/index.ts'
 import { composeCaptionForPage, type ComposeDeps } from './compose.ts'
@@ -310,7 +310,8 @@ export class SlotGenerateRetryableError extends Error {
   }
 }
 
-const retryable = (err: AppError) => err.code === 'RATE_LIMITED' || (err.code === 'AI_PROVIDER_ERROR' && err.statusCode >= 500)
+// Lỗi có thể OpenAI đã tính tiền (vd hết giờ sau khi gửi) → không retry, tránh tính tiền hai lần (giống content/images.ts).
+const retryable = (err: AppError) => !isMaybeBilled(err) && (err.code === 'RATE_LIMITED' || (err.code === 'AI_PROVIDER_ERROR' && err.statusCode >= 500))
 const isAbortError = (err: unknown): boolean => err instanceof Error && err.name === 'AbortError'
 
 /** Chiếm slot chưa sinh cho lượt này (lease `SLOT_GENERATE_LEASE_MS`, theo giờ DB); `null` = slot không còn chờ / đang bị giữ. */

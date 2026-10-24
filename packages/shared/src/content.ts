@@ -161,11 +161,22 @@ export const IMAGE_ERROR_CODES = ['IMAGE_REJECTED', 'IMAGE_FAILED'] as const sat
 export const ImageErrorCode = z.enum(IMAGE_ERROR_CODES)
 export type ImageErrorCode = z.infer<typeof ImageErrorCode>
 
-/** Body `POST /api/v1/media-assets/generate`: mô tả ảnh (Composer gửi "Mô tả ảnh", trống thì ý tưởng bài) + phong cách. */
+/**
+ * Cạnh dài tối đa (px) của ảnh server gửi cho OpenAI (Story 6.6: ảnh tham khảo, ảnh caption đọc) — tải bản thu nhỏ từ
+ * kho, đủ cho model đọc / giữ chi tiết sản phẩm mà không đội token ảnh vào [ASSUMPTION].
+ */
+export const AI_INPUT_IMAGE_MAX_SIDE = 1024
+
+/**
+ * Body `POST /api/v1/media-assets/generate`: mô tả ảnh (Composer gửi "Mô tả ảnh", trống thì ý tưởng bài) + phong cách.
+ * Story 6.6: có `referenceId` (ảnh đã có trong kho, `ready`) → AI giữ đúng sản phẩm trong ảnh đó, `prompt` là yêu cầu
+ * bối cảnh, `style` không dùng.
+ */
 export const GenerateImagesRequest = z
   .object({
     prompt: z.string().trim().min(1, 'Nhập mô tả ảnh hoặc ý tưởng bài').max(POST_TOPIC_MAX, `Mô tả tối đa ${POST_TOPIC_MAX} ký tự`),
     style: ImageStyle.default('product'),
+    referenceId: z.uuid().optional(),
   })
   .strict()
 export type GenerateImagesRequest = z.input<typeof GenerateImagesRequest>
@@ -397,6 +408,11 @@ export const ComposeCaptionsRequest = z
       })
       .strict()
       .optional(),
+    /** Story 6.6: ảnh đang gắn tab (tối đa 1 ảnh mỗi trang) — AI xem ảnh để caption bám theo ảnh. */
+    images: z
+      .array(z.object({ pageId: z.uuid(), mediaId: z.uuid() }).strict())
+      .max(POST_TARGETS_MAX, `Tối đa ${POST_TARGETS_MAX} ảnh`)
+      .default([]),
   })
   .strict()
   .superRefine((body, ctx) => {
@@ -404,6 +420,12 @@ export const ComposeCaptionsRequest = z
     body.pageIds.forEach((id, i) => {
       if (seen.has(id)) ctx.addIssue({ code: 'custom', path: ['pageIds', i], message: 'Trang bị chọn hai lần' })
       seen.add(id)
+    })
+    const withImage = new Set<string>()
+    body.images.forEach((img, i) => {
+      if (!seen.has(img.pageId)) ctx.addIssue({ code: 'custom', path: ['images', i, 'pageId'], message: 'Trang của ảnh không nằm trong danh sách viết' })
+      else if (withImage.has(img.pageId)) ctx.addIssue({ code: 'custom', path: ['images', i, 'pageId'], message: `Mỗi trang tối đa ${POST_TARGET_MEDIA_MAX} ảnh` })
+      withImage.add(img.pageId)
     })
     const action = body.revise?.action
     if ((!action || action === 'rewrite') && !body.topic) ctx.addIssue({ code: 'custom', path: ['topic'], message: 'Nhập ý tưởng để AI viết' })
@@ -418,9 +440,10 @@ export type ParsedComposeCaptionsRequest = z.output<typeof ComposeCaptionsReques
 /**
  * Kết quả của một trang: `ok` = caption AI (kèm cụm vi phạm hậu kiểm còn lại sau một lần sinh lại, FE đánh dấu);
  * `error` = trang đó không viết được (`CONFIG_MISSING` = chưa có hồ sơ thương hiệu; mã AI như `AI_BUDGET_EXCEEDED`).
+ * `imageUsed` (Story 6.6): AI đã xem ảnh của trang khi viết (false khi trang không gửi ảnh, hoặc tải ảnh từ kho lỗi).
  */
 export const ComposeCaptionResult = z.discriminatedUnion('status', [
-  z.object({ pageId: z.uuid(), status: z.literal('ok'), caption: z.string(), violations: z.array(AiViolation) }),
+  z.object({ pageId: z.uuid(), status: z.literal('ok'), caption: z.string(), violations: z.array(AiViolation), imageUsed: z.boolean() }),
   z.object({ pageId: z.uuid(), status: z.literal('error'), errorCode: ErrorCode }),
 ])
 export type ComposeCaptionResult = z.infer<typeof ComposeCaptionResult>

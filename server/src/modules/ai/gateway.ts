@@ -6,24 +6,31 @@
 //   5. phát cảnh báo 80% / 100% đúng một lần (trong `settle`).
 // Lỗi có mã HTTP / huỷ trước khi gửi → trả chỗ giữ; hết giờ / đứt kết nối / huỷ sau khi gửi → ghi chi phí
 // ước tính (`ai_usage.estimated`), vì OpenAI có thể đã tính tiền. 401 lúc chạy → khoá thành `invalid` + `openai_key.invalidated`.
-// Không tự retry (caller quyết theo loại lỗi). Log chỉ id, feature, model, số token, chi phí (AD-12).
+// Không tự retry (caller quyết theo loại lỗi; lỗi có thể đã tính tiền mang `details.maybeBilled` để caller không gọi lại).
+// Story 6.6: ảnh vào bằng bytes — `generateText({images})` cho model chữ đọc ảnh (`detail: low`), `generateImage({references})`
+// sinh ảnh từ ảnh tham khảo (Images API edits). Giữ chỗ cộng phần ước tính của ảnh vào; chi phí thật theo usage (token ảnh
+// vào của model ảnh theo giá riêng). Log chỉ id, feature, model, số token, chi phí (AD-12) — không bao giờ bytes ảnh.
 import { AiFeature, IMAGE_SIZES, ImageSize } from '@ottm/shared'
-import type {
-  CreateResponseResult,
-  GenerateImageResult as AdapterImageResult,
-  OpenAiAborted,
-  OpenAiErrorKind,
-  OpenAiFailure,
-  ResponseInputMessage,
-  ResponseJsonSchema,
+import {
+  inputFidelityFor,
+  type CreateResponseResult,
+  type GenerateImageResult as AdapterImageResult,
+  type OpenAiAborted,
+  type OpenAiErrorKind,
+  type OpenAiFailure,
+  type OpenAiInputImage,
+  type ResponseInputMessage,
+  type ResponseJsonSchema,
 } from '../../adapters/openai/index.ts'
 import { AppError } from '../../platform/errors/index.ts'
 import { getOpenAiPrefs, type OpenAiPrefs } from '../settings/index.ts'
 import { release, reserve, settle, type SettleInput } from './budget.ts'
 import {
+  addCost,
   assertPriced,
   computeCost,
   estimateImageCost,
+  estimateInputImagesCost,
   estimateTextCost,
   getModelPrice,
   type Cost,
@@ -36,6 +43,12 @@ import { listModels, resolveModel } from './models.ts'
 /** Giới hạn đầu vào của gateway (bảo vệ chi phí; caller tự đặt mức nhỏ hơn). */
 export const MAX_OUTPUT_TOKENS_LIMIT = 32_000
 export const MAX_IMAGES_PER_CALL = 4
+/** Story 6.6: số ảnh vào tối đa mỗi lời gọi (app gửi 1) và kích thước mỗi ảnh (ảnh đã thu nhỏ trước khi gửi). */
+export const MAX_INPUT_IMAGES_PER_CALL = 4
+export const MAX_INPUT_IMAGE_BYTES = 10 * 1024 * 1024
+
+/** Ảnh vào (bytes + MIME) — caller tải từ kho; không bao giờ là URL. */
+export type AiInputImage = OpenAiInputImage
 
 /** Chi tiết chi phí của một lời gọi đã tính tiền. */
 export interface AiCallUsage extends UsageCounts, Cost {
@@ -61,6 +74,8 @@ export interface GenerateTextRequest extends CallContext {
   maxOutputTokens: number
   /** Structured output (AD-16: quyết định của AI trả lời tự động). `text` là JSON, caller parse + kiểm. */
   jsonSchema?: ResponseJsonSchema
+  /** Story 6.6: ảnh cho model đọc (`input` phải là chuỗi), gửi `detail: low`. */
+  images?: readonly AiInputImage[]
 }
 
 export interface GenerateTextResult {
@@ -76,6 +91,8 @@ export interface GenerateImageRequest extends CallContext {
   n?: number
   /** Mặc định kích thước ở Cài đặt. */
   size?: ImageSize
+  /** Story 6.6: ảnh tham khảo → Images API edits (giữ chi tiết ảnh vào, `input_fidelity` theo model). */
+  references?: readonly AiInputImage[]
 }
 
 export interface GenerateImageResult {
@@ -90,9 +107,12 @@ export interface GenerateImageResult {
 
 type GatewayDeps = AiDeps
 
-/** Lỗi đã phân loại của adapter → lỗi API (ma trận Story 1.6). */
-export function providerError(kind: OpenAiErrorKind, status?: number): AppError {
-  const withStatus = status !== undefined ? { status } : {}
+/**
+ * Lỗi đã phân loại của adapter → lỗi API (ma trận Story 1.6). `maybeBilled` (Story 6.6): request có thể đã tới OpenAI
+ * và bị tính tiền (hết giờ / đứt kết nối sau khi gửi) → `details.maybeBilled = true` để caller không retry tự động.
+ */
+export function providerError(kind: OpenAiErrorKind, status?: number, maybeBilled = false): AppError {
+  const withStatus = { ...(status !== undefined ? { status } : {}), ...(maybeBilled ? { maybeBilled: true } : {}) }
   switch (kind) {
     case 'KEY_INVALID':
       return new AppError('OPENAI_KEY_INVALID', 400, { details: { kind } })
@@ -109,6 +129,18 @@ export function providerError(kind: OpenAiErrorKind, status?: number): AppError 
     case 'TRANSIENT':
       return new AppError('AI_PROVIDER_ERROR', 502, { details: { kind, ...withStatus } })
   }
+}
+
+/** Lỗi gateway mà lời gọi có thể đã bị OpenAI tính tiền (`details.maybeBilled`) — gọi lại là trả tiền lần nữa. */
+export function isMaybeBilled(err: unknown): boolean {
+  return err instanceof AppError && (err.details as { maybeBilled?: unknown } | undefined)?.maybeBilled === true
+}
+
+/** Kiểm ảnh vào: số ảnh, kích thước từng ảnh (chặn chi phí + payload). */
+function assertInputImages(path: string, images: readonly AiInputImage[] | undefined): void {
+  if (!images) return
+  if (images.length > MAX_INPUT_IMAGES_PER_CALL) throw invalid(path, `tối đa ${MAX_INPUT_IMAGES_PER_CALL} ảnh`)
+  if (images.some((img) => img.data.byteLength === 0 || img.data.byteLength > MAX_INPUT_IMAGE_BYTES)) throw invalid(path, 'ảnh rỗng hoặc quá 10MB')
 }
 
 function abortError(signal: AbortSignal | undefined): unknown {
@@ -195,7 +227,7 @@ async function runCall<R extends { ok: true } | OpenAiFailure | OpenAiAborted>(
     }
     if (result.kind === 'KEY_INVALID') await invalidateOpenAiKey(deps, key.envelope)
     deps.log?.warn({ ...logBase, kind: result.kind, status: result.status }, 'ai: OpenAI trả lỗi')
-    throw providerError(result.kind, result.status)
+    throw providerError(result.kind, result.status, maybeBilled)
   }
 
   const success = result as Success<R>
@@ -234,10 +266,17 @@ export async function generateText(deps: GatewayDeps, req: GenerateTextRequest):
   if (!Number.isInteger(req.maxOutputTokens) || req.maxOutputTokens < 1 || req.maxOutputTokens > MAX_OUTPUT_TOKENS_LIMIT) {
     throw invalid('maxOutputTokens', `số nguyên 1–${MAX_OUTPUT_TOKENS_LIMIT}`)
   }
+  assertInputImages('images', req.images)
+  const images = req.images?.length ? req.images : undefined
+  if (images && typeof req.input !== 'string') throw invalid('input', 'có ảnh thì input phải là chuỗi')
   const chars = inputChars(req)
   const { result, usage } = await runCall<CreateResponseResult>(deps, req, {
     kind: 'text',
-    estimate: (price, prefs) => estimateTextCost(price, chars, req.maxOutputTokens, prefs.exchangeRateVnd),
+    estimate: (price, prefs) =>
+      addCost(
+        estimateTextCost(price, chars, req.maxOutputTokens, prefs.exchangeRateVnd),
+        estimateInputImagesCost(price, images?.length ?? 0, prefs.exchangeRateVnd),
+      ),
     call: (apiKey, model) =>
       adapterOf(deps).createResponse({
         apiKey,
@@ -246,6 +285,7 @@ export async function generateText(deps: GatewayDeps, req: GenerateTextRequest):
         maxOutputTokens: req.maxOutputTokens,
         ...(req.instructions ? { instructions: req.instructions } : {}),
         ...(req.jsonSchema ? { jsonSchema: req.jsonSchema } : {}),
+        ...(images ? { images: images.map((img) => ({ ...img, detail: 'low' as const })) } : {}),
         ...(req.signal ? { signal: req.signal } : {}),
       }),
     usageOf: (r) => ({ ...r.usage, images: 0 }),
@@ -256,28 +296,35 @@ export async function generateText(deps: GatewayDeps, req: GenerateTextRequest):
   return { text: result.text, incomplete: result.incomplete, usage }
 }
 
-/** Sinh ảnh qua Images API (JPEG). Chi phí theo `usage` nếu API trả, ngược lại số ảnh × `image_usd_each`. */
+/**
+ * Sinh ảnh qua Images API (JPEG). Chi phí theo `usage` nếu API trả, ngược lại số ảnh × `image_usd_each`. Có `references`
+ * (Story 6.6) → `POST /images/edits`; giữ chỗ cộng token ảnh vào ước tính, chi phí thật tính token ảnh vào theo giá riêng.
+ */
 export async function generateImage(deps: GatewayDeps, req: GenerateImageRequest): Promise<GenerateImageResult> {
   const n = req.n ?? 1
   if (!Number.isInteger(n) || n < 1 || n > MAX_IMAGES_PER_CALL) throw invalid('n', `số nguyên 1–${MAX_IMAGES_PER_CALL}`)
   if (req.size !== undefined && !ImageSize.safeParse(req.size).success) throw invalid('size', IMAGE_SIZES.join(' | '))
+  assertInputImages('references', req.references)
+  const references = req.references?.length ? req.references : undefined
   const { result, usage } = await runCall<AdapterImageResult>(deps, req, {
     kind: 'image',
-    estimate: (price, prefs) => estimateImageCost(price, n, req.size ?? prefs.imageSize, prefs.exchangeRateVnd),
-    call: (apiKey, model, prefs) =>
-      adapterOf(deps).generateImage({
-        apiKey,
-        model,
-        prompt: req.prompt,
-        n,
-        size: req.size ?? prefs.imageSize,
-        ...(req.signal ? { signal: req.signal } : {}),
-      }),
+    estimate: (price, prefs) =>
+      addCost(
+        estimateImageCost(price, n, req.size ?? prefs.imageSize, prefs.exchangeRateVnd),
+        estimateInputImagesCost(price, references?.length ?? 0, prefs.exchangeRateVnd),
+      ),
+    call: (apiKey, model, prefs) => {
+      const base = { apiKey, model, prompt: req.prompt, n, size: req.size ?? prefs.imageSize, ...(req.signal ? { signal: req.signal } : {}) }
+      if (!references) return adapterOf(deps).generateImage(base)
+      const fidelity = inputFidelityFor(model)
+      return adapterOf(deps).editImage({ ...base, images: references, ...(fidelity ? { inputFidelity: fidelity } : {}) })
+    },
     usageOf: (r) => ({
       inputTokens: r.usage?.inputTokens ?? 0,
       cachedInputTokens: r.usage?.cachedInputTokens ?? 0,
       outputTokens: r.usage?.outputTokens ?? 0,
       images: r.images.length,
+      ...(r.usage?.imageInputTokens ? { imageInputTokens: r.usage.imageInputTokens } : {}),
     }),
   })
   return { images: result.images, mimeType: 'image/jpeg', requested: n, received: result.images.length, usage }

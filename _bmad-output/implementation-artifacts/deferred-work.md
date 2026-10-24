@@ -169,7 +169,7 @@
   evidence: `media_assets` không gắn với bài; `draftFromPost` chỉ dựng kho ảnh từ ảnh đang gắn target. Nếu chủ shop phản ánh mất ảnh vừa sinh: lưu `post_id` cho ô ảnh AI (bài đã lưu) hoặc giữ danh sách id trong `sessionStorage` theo `?bai=`.
 - source_spec: `spec-6-3-sinh-anh-ai.md`
   summary: Ảnh AI đã tính tiền có thể mất hoặc bị tính lại: kho (Cloudinary) lỗi tạm sau khi OpenAI đã trả ảnh → ô `failed IMAGE_FAILED` ngay, ảnh bỏ đi; lời gọi hết giờ sau khi gửi (`maybeBilled`, gateway ghi chi phí ước tính) ném `AI_PROVIDER_ERROR` 502 → job retry gọi OpenAI lần nữa (tối đa 3 lần tính tiền cho một ô).
-  evidence: `content/images.ts` `generateImageAsset` (`put` lỗi → `markFailed`, `retryable` coi mọi `AI_PROVIDER_ERROR` ≥500 là thử lại được); `ai/gateway.ts` `runCall` nhánh `maybeBilled`. Hướng sửa: thử `put` lại 1 lần trong job trước khi `failed`; gateway đưa `maybeBilled` vào `details` để job không retry lời gọi có thể đã tính tiền.
+  evidence: `content/images.ts` `generateImageAsset` (`put` lỗi → `markFailed`). Hướng sửa: thử `put` lại 1 lần trong job trước khi `failed`. Story 6.6 đã đóng nửa còn lại: gateway đưa `maybeBilled` vào `details` (`ai.isMaybeBilled`), job ảnh gặp lỗi này thì `failed` ngay, không retry — còn mở: kho lỗi sau khi đã có ảnh.
 - source_spec: `spec-6-4-len-lich-va-dang-bai.md`
   summary: Kiểm bằng Meta / Cloudinary thật luồng đăng bài:
     - FB `/{page}/photos` nhận `message` (không phải `caption`) và trả `post_id`; `/{page}/feed`; `permalink_url`;
@@ -355,3 +355,12 @@
 - source_spec: none
   summary: Story 9.5 (diễn tập khôi phục backup) bỏ qua theo quyết định chủ dự án — hệ thống chỉ có sao lưu tay `pg_dump` (runbook mục 4), không backup tự động, chưa diễn tập khôi phục.
   evidence: AC 9.5 giả định "backup đêm qua", mâu thuẫn quyết định bỏ restic ngày 2026-10-22 (spec-bo-backup-restic.md: "Không thêm công cụ backup thay thế"). Chủ dự án chọn bỏ qua ngày 2026-10-24; RPO hiện phụ thuộc lần dump tay gần nhất.
+- source_spec: `spec-6-6-anh-tham-khao-va-caption-doc-anh.md`
+  summary: Kiểm bằng trình duyệt + OpenAI / Cloudinary thật, worker chạy: ảnh tải lên → "Dùng làm ảnh tham khảo" + "Yêu cầu bối cảnh" → 4 biến thể có giữ đúng sản phẩm (gpt-image-2.5 với prompt tiếng Việt, không gửi `input_fidelity`); tab có ảnh → "Tạo bằng AI" / Viết lại / Ngắn hơn / Thêm CTA → caption nhắc đúng màu / bối cảnh trong ảnh; đối chiếu `ai_usage` với hoá đơn OpenAI (token ảnh vào của edits, token ảnh của vision `detail: low`).
+  evidence: Chỉ có test API (Postgres thật, pg-boss, OpenAI + Cloudinary giả — `server/test/content-reference.test.ts`, adapter / gateway) và test helper web. Dev hiện không có `CLOUDINARY_URL` nên tải ảnh lên trả 500 `MEDIA_NOT_CONFIGURED`, không chạy được UI đầu-cuối. Giả định cần xác nhận: `gpt-image-2.5-*` bỏ `input_fidelity` như `gpt-image-2`; `gpt-6-luna` / `gpt-6.1-sol` nhận `input_image`; ước tính giữ chỗ 6.000 token ảnh tham khảo / 1.600 token vision.
+- source_spec: `spec-6-6-anh-tham-khao-va-caption-doc-anh.md`
+  summary: Mỗi ô biến thể gửi lại ảnh tham khảo (4 job × `n=1`) → trả 4 lần token ảnh vào. Nếu chi phí đáng kể: một job `n=4` cho bộ ảnh tham khảo (mất ô lỗi / retry riêng), hoặc dùng `file_id` (Files API) cho ảnh tham khảo.
+  evidence: `content/images.ts` `generateImageAsset` tải + gửi ảnh tham khảo ở mỗi ô; trang giá OpenAI: ảnh vào $8 / 1M token, gpt-image-2 luôn xử lý ảnh vào ở độ chi tiết cao.
+- source_spec: `spec-6-6-anh-tham-khao-va-caption-doc-anh.md`
+  summary: Ảnh tham khảo sống chừng nào còn ô AI trỏ tới (FK không cascade) — biến thể đã đăng giữ ảnh tham khảo mãi; xoá theo yêu cầu (9.2) gặp ảnh tham khảo còn biến thể thì giữ dòng, `content.media_gc` dọn sau khi biến thể bị dọn.
+  evidence: `media_assets.reference_asset_id` (migration `0043_loose_starfox.sql`), `content/media-gc.ts` `notReference`. Nếu cần gọn: khi biến thể đã `ready` thì đặt `reference_asset_id = null` (biến thể không cần ảnh tham khảo nữa).

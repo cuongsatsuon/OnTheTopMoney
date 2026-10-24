@@ -5,6 +5,8 @@
 // Mỗi dòng: xoá dòng trước (điều kiện "không gắn" lặp lại ngay trong lệnh xoá), rồi xoá file — ngược lại thì một ảnh
 // vừa được gắn có thể mất file. Lưu nháp khoá dòng ảnh `FOR KEY SHARE` (`posts.ts`) nên lệnh xoá chen vào chỉ gặp lỗi
 // khoá ngoại → bỏ qua dòng đó.
+// Story 6.6: ảnh còn ô ảnh AI trỏ tới (`reference_asset_id`, mọi trạng thái) là ảnh tham khảo đang được dùng → giữ; ô
+// con bị dọn (sau 7 ngày của chính nó) thì lượt sau mới dọn ảnh tham khảo.
 import { DAY_MS, RETENTION } from '@ottm/shared'
 import { and, asc, eq, lt, notExists, sql } from 'drizzle-orm'
 import type { MediaStores } from '../../adapters/media/index.ts'
@@ -34,6 +36,8 @@ export interface MediaGcResult {
 }
 
 const notAttached = notExists(sql`(select 1 from ${postTargetMedia} where ${postTargetMedia.mediaAssetId} = ${mediaAssets.id})`)
+/** Không ô ảnh AI nào lấy ảnh này làm ảnh tham khảo (bảng con đặt bí danh `c`; `media_assets` bên ngoài là dòng đang xét). */
+const notReference = notExists(sql`(select 1 from ${mediaAssets} c where c.reference_asset_id = ${mediaAssets.id})`)
 
 /** Lỗi khoá ngoại của Postgres (Drizzle bọc lỗi gốc trong `cause`). */
 function isForeignKeyViolation(err: unknown): boolean {
@@ -43,7 +47,7 @@ function isForeignKeyViolation(err: unknown): boolean {
 
 export async function gcOrphanMedia(deps: MediaGcDeps): Promise<MediaGcResult> {
   const cutoff = new Date((deps.now?.() ?? new Date()).getTime() - MEDIA_GC_AFTER_MS)
-  const old = and(lt(mediaAssets.createdAt, cutoff), notAttached)
+  const old = and(lt(mediaAssets.createdAt, cutoff), notAttached, notReference)
   const candidates = await deps.db
     .select({ id: mediaAssets.id, publicId: mediaAssets.publicId })
     .from(mediaAssets)
@@ -58,7 +62,7 @@ export async function gcOrphanMedia(deps: MediaGcDeps): Promise<MediaGcResult> {
     try {
       const rows = await deps.db
         .delete(mediaAssets)
-        .where(and(eq(mediaAssets.id, c.id), lt(mediaAssets.createdAt, cutoff), notAttached))
+        .where(and(eq(mediaAssets.id, c.id), lt(mediaAssets.createdAt, cutoff), notAttached, notReference))
         .returning({ id: mediaAssets.id })
       removed = rows.length > 0
     } catch (err) {

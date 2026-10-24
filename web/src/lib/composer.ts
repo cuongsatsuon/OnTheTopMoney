@@ -261,13 +261,17 @@ export const LENGTH_OPTIONS: { id: ComposeLength; label: string }[] = [
   { id: 'long', label: 'Dài' },
 ]
 
-/** Body `POST /posts/compose`: viết mới cho các trang, hoặc sửa caption của MỘT trang (`revise`). */
+/**
+ * Body `POST /posts/compose`: viết mới cho các trang, hoặc sửa caption của MỘT trang (`revise`). `images` (Story 6.6) =
+ * ảnh đang gắn tab cho AI xem (xem `composeImages`); rỗng thì bỏ khoá.
+ */
 export function buildComposeBody(input: {
   topic: string
   goal: ComposeGoal
   length: ComposeLength
   pageIds: readonly string[]
   revise?: { action: ComposeReviseAction; caption: string }
+  images?: readonly { pageId: string; mediaId: string }[]
 }): ComposeCaptionsRequest {
   return {
     topic: input.topic.trim(),
@@ -275,7 +279,19 @@ export function buildComposeBody(input: {
     length: input.length,
     pageIds: [...input.pageIds],
     ...(input.revise ? { revise: input.revise } : {}),
+    ...(input.images?.length ? { images: [...input.images] } : {}),
   }
+}
+
+/**
+ * Ảnh gửi kèm cho AI đọc (Story 6.6): ảnh đầu của tab mỗi trang trong `pageIds`, chỉ khi ảnh đó là ảnh sẵn sàng đang
+ * hiện trong lưới (`ready` = id ảnh tải lên / ảnh AI đã xong). Tab không ảnh → không gửi.
+ */
+export function composeImages(pageIds: readonly string[], drafts: Drafts, ready: ReadonlySet<string>): { pageId: string; mediaId: string }[] {
+  return pageIds.flatMap((pageId) => {
+    const mediaId = draftOf(drafts, pageId).mediaIds[0]
+    return mediaId && ready.has(mediaId) ? [{ pageId, mediaId }] : []
+  })
 }
 
 /** Ghi chú AI trên tab của một trang: cụm vi phạm hậu kiểm của caption AI, hoặc mã lỗi khiến trang đó chưa viết được. */
@@ -319,14 +335,17 @@ export function applyComposeResults(
  * Câu toast sau một lần AI viết: "AI đã viết cho N trang" (+ số trang chưa viết được); không trang nào viết được → lý do
  * của trang đầu tiên (vd hết hạn mức, chưa có hồ sơ).
  */
-export function composeToast(results: readonly ComposeCaptionResult[]): string {
+export function composeToast(results: readonly ComposeCaptionResult[], withImage: ReadonlySet<string> = new Set()): string {
   const written = results.filter((r) => r.status === 'ok').length
   const failed = results.length - written
   if (written === 0) {
     const first = results.find((r) => r.status === 'error')
     return first?.status === 'error' ? aiErrorText(first.errorCode) : 'AI chưa viết được bài nào'
   }
-  return failed ? `AI đã viết cho ${written} trang · ${failed} trang chưa viết được` : `AI đã viết cho ${written} trang`
+  const base = failed ? `AI đã viết cho ${written} trang · ${failed} trang chưa viết được` : `AI đã viết cho ${written} trang`
+  // Story 6.6: trang có gửi ảnh mà server không tải được ảnh → AI viết không xem ảnh.
+  const noImage = results.filter((r) => r.status === 'ok' && withImage.has(r.pageId) && !r.imageUsed).length
+  return noImage ? `${base} · ${noImage} trang viết không xem được ảnh` : base
 }
 
 /** Mã khoá trong lỗi của cả request (vd mạng vẫn ổn nhưng server trả mã khoá); lỗi khác → `null`. */
@@ -373,11 +392,22 @@ export const IMAGE_STYLE_OPTIONS: { value: ImageStyle; label: string }[] = [
 /** Mô tả gửi AI: ô "Mô tả ảnh" nếu có, không thì ý tưởng bài. Cả hai trống → chuỗi rỗng (nút khoá). */
 export const imagePrompt = (description: string, idea: string): string => description.trim() || idea.trim()
 
-/** Body `POST /media-assets/generate`; `null` khi chưa có gì để mô tả. */
-export function buildImageBody(description: string, idea: string, style: ImageStyle): GenerateImagesRequest | null {
+/**
+ * Body `POST /media-assets/generate`; `null` khi chưa có gì để mô tả. `referenceId` (Story 6.6) → ảnh giữ đúng sản phẩm
+ * trong ảnh tham khảo, mô tả là yêu cầu bối cảnh, không gửi phong cách.
+ */
+export function buildImageBody(description: string, idea: string, style: ImageStyle, referenceId: string | null = null): GenerateImagesRequest | null {
   const prompt = imagePrompt(description, idea)
-  return prompt ? { prompt, style } : null
+  if (!prompt) return null
+  return referenceId ? { prompt, referenceId } : { prompt, style }
 }
+
+/** Ảnh dùng được làm ảnh tham khảo (Story 6.6): ảnh chủ shop tự tải lên (ảnh sản phẩm thật). */
+export const canUseAsReference = (asset: Pick<MediaAssetDto, 'source'>): boolean => asset.source === 'upload'
+
+/** Ảnh tham khảo đang chọn còn trong lưới không (nạp nháp khác / ảnh rời lưới → bỏ chọn). */
+export const referenceAsset = (tiles: readonly ImageTile[], referenceId: string | null): MediaAssetDto | null =>
+  (referenceId && tileImages(tiles).find((m) => m.id === referenceId)) || null
 
 /** Một ô của lưới ảnh: ô AI đang sinh, ô AI lỗi, hoặc ảnh chọn được (AI đã xong / tải lên / đang gắn). */
 export type ImageTile = { kind: 'pending'; id: string } | { kind: 'failed'; id: string; errorCode: ImageErrorCode } | { kind: 'image'; asset: MediaAssetDto }

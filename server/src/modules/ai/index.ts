@@ -37,9 +37,13 @@ export {
   type SettleInput,
 } from './budget.ts'
 export {
+  REFERENCE_IMAGE_ESTIMATE_TOKENS,
+  VISION_IMAGE_ESTIMATE_TOKENS,
+  addCost,
   budgetMonth,
   computeCost,
   estimateImageCost,
+  estimateInputImagesCost,
   estimateInputTokens,
   estimateTextCost,
   IMAGE_ESTIMATE_DEFAULT_MICROS,
@@ -52,10 +56,14 @@ export {
 } from './cost.ts'
 export {
   MAX_IMAGES_PER_CALL,
+  MAX_INPUT_IMAGES_PER_CALL,
+  MAX_INPUT_IMAGE_BYTES,
   MAX_OUTPUT_TOKENS_LIMIT,
   generateImage,
   generateText,
+  isMaybeBilled,
   providerError,
+  type AiInputImage,
   type AiCallUsage,
   type GenerateImageRequest,
   type GenerateImageResult,
@@ -77,6 +85,7 @@ export {
   buildComposePrompt,
   buildContactSummaryPrompt,
   buildImagePrompt,
+  buildReferenceImagePrompt,
   composeInput,
   composeInstructions,
   contactSummaryInput,

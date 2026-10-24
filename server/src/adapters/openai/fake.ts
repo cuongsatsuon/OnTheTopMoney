@@ -2,10 +2,12 @@
 // - `checkKey`: khoá nằm trong `results` trả kết quả đó; khoá khác trả `fallback` (mặc định KEY_INVALID 401).
 // - `createResponse` / `generateImage`: mặc định thành công với usage cố định; đổi bằng `onResponse` /
 //   `onImage` (giá trị hoặc hàm nhận request — trả Promise để giả lời gọi chậm, đọc `request.signal` để giả huỷ).
+// - `editImage` (Story 6.6): ghi vào `editRequests`, kết quả theo `onEdit` (mặc định thành công như `generateImage`).
 import type {
   CheckKeyResult,
   CreateResponseRequest,
   CreateResponseResult,
+  EditImageRequest,
   GenerateImageRequest,
   GenerateImageResult,
   OpenAiAdapter,
@@ -19,10 +21,12 @@ export interface FakeOpenAiAdapter extends OpenAiAdapter {
   /** Các request sinh chữ / ảnh đã nhận (theo thứ tự). */
   readonly responseRequests: readonly CreateResponseRequest[]
   readonly imageRequests: readonly GenerateImageRequest[]
+  readonly editRequests: readonly EditImageRequest[]
   /** Đặt kết quả cho một khoá (hoặc cho mọi khoá chưa đặt, với `'*'`). */
   set(apiKey: string | '*', result: CheckKeyResult): void
   onResponse(handler: Handler<CreateResponseRequest, CreateResponseResult>): void
   onImage(handler: Handler<GenerateImageRequest, GenerateImageResult>): void
+  onEdit(handler: Handler<EditImageRequest, GenerateImageResult>): void
 }
 
 export const FAKE_RESPONSE_TEXT = 'Xin chào từ fake OpenAI'
@@ -46,8 +50,14 @@ export function createFakeOpenAiAdapter(
   let calls = 0
   const responseRequests: CreateResponseRequest[] = []
   const imageRequests: GenerateImageRequest[] = []
+  const editRequests: EditImageRequest[] = []
   let responseHandler: Handler<CreateResponseRequest, CreateResponseResult> = DEFAULT_RESPONSE
   let imageHandler: Handler<GenerateImageRequest, GenerateImageResult> = (req) => ({
+    ok: true,
+    images: Array.from({ length: req.n }, () => Buffer.from(FAKE_JPEG)),
+    usage: null,
+  })
+  let editHandler: Handler<EditImageRequest, GenerateImageResult> = (req) => ({
     ok: true,
     images: Array.from({ length: req.n }, () => Buffer.from(FAKE_JPEG)),
     usage: null,
@@ -61,6 +71,7 @@ export function createFakeOpenAiAdapter(
     },
     responseRequests,
     imageRequests,
+    editRequests,
     set(apiKey, result) {
       if (apiKey === '*') fallbackResult = result
       else table.set(apiKey, result)
@@ -70,6 +81,9 @@ export function createFakeOpenAiAdapter(
     },
     onImage(handler) {
       imageHandler = handler
+    },
+    onEdit(handler) {
+      editHandler = handler
     },
     async checkKey(apiKey) {
       calls += 1
@@ -84,6 +98,11 @@ export function createFakeOpenAiAdapter(
       imageRequests.push(request)
       if (request.signal?.aborted) return { ok: false, kind: 'ABORTED', maybeBilled: false }
       return run(imageHandler, request)
+    },
+    async editImage(request) {
+      editRequests.push(request)
+      if (request.signal?.aborted) return { ok: false, kind: 'ABORTED', maybeBilled: false }
+      return run(editHandler, request)
     },
   }
 }

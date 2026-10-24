@@ -302,6 +302,13 @@
       "when": 1792823223632,
       "tag": "0042_big_menace",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1792828698502,
+      "tag": "0043_loose_starfox",
+      "breakpoints": true
     }
   ]
 }

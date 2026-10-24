@@ -32,7 +32,15 @@ export { PUBLISHING_STUCK_MS, REQUEUE_OVERDUE_MS, requeueTargets, type RequeueDe
 // Ảnh bài (AD-14): kiểm bytes trước khi tải lên kho công khai, ghi `media_assets` sau.
 export { POST_IMAGE_VALIDATION, recordMediaAsset, toGeneratedImageDto, toMediaAssetDto, validatePostImage } from './media.ts'
 // Viết caption bằng AI theo hồ sơ từng trang (Story 6.2) — chạy trong request, không lưu bài.
-export { AI_STOP_CODES, COMPOSE_CONCURRENCY, composeCaptionForPage, composeCaptions, type ComposeBrief, type ComposeDeps } from './compose.ts'
+export {
+  AI_STOP_CODES,
+  COMPOSE_CONCURRENCY,
+  COMPOSE_IMAGE_VALIDATION,
+  composeCaptionForPage,
+  composeCaptions,
+  type ComposeBrief,
+  type ComposeDeps,
+} from './compose.ts'
 // Slot chiến dịch (Story 7.2, AD-13, AD-15): tạo / dọn slot theo kế hoạch của `campaigns`, sinh caption + ảnh, đọc xem trước.
 // Story 7.4: lease khi sinh, cửa sổ cuốn chiếu (`listSlotsToGenerate({until})`), hàng đợi "Bài chờ duyệt", nháp kẹt.
 // Story 8.5: `countPendingSlots` — số bài chờ duyệt cho Tổng quan.
@@ -75,9 +83,11 @@ export {
 } from './slots-hold.ts'
 // Story 7.6: consumer `events.content` — gỡ trang (`page.removed`) huỷ bài chưa đăng của trang đó (`PAGE_REMOVED`).
 export { handleContentEvent, type ContentEventDeps, type ContentEventResult } from './events.ts'
-// Sinh ảnh AI (Story 6.3, AD-14): yêu cầu 4 ô + job `content.image.generate`; cron dọn ảnh không gắn bài.
+// Sinh ảnh AI (Story 6.3, AD-14): yêu cầu 4 ô + job `content.image.generate`; cron dọn ảnh không gắn bài. Story 6.6: ảnh
+// tham khảo (`referenceId`, Images API edits).
 export {
   ImageGenerateRetryableError,
+  REFERENCE_VALIDATION,
   failStuckSlotImages,
   generateImageAsset,
   handleImageGenerateJob,

@@ -134,9 +134,9 @@ describe('POST /api/v1/posts/compose', () => {
     const res = await compose({ topic: IDEA, goal: 'sales', length: 'short', pageIds: [fb, ig, th] })
     expect(res.statusCode).toBe(200)
     expect(ComposeCaptionsResponse.parse(res.json()).results).toEqual([
-      { pageId: fb, status: 'ok', caption: 'Caption cho Fanpage Minh Phát', violations: [] },
-      { pageId: ig, status: 'ok', caption: 'Caption cho IG Minh Phát', violations: [] },
-      { pageId: th, status: 'ok', caption: 'Caption cho Threads Minh Phát', violations: [] },
+      { pageId: fb, status: 'ok', caption: 'Caption cho Fanpage Minh Phát', violations: [], imageUsed: false },
+      { pageId: ig, status: 'ok', caption: 'Caption cho IG Minh Phát', violations: [], imageUsed: false },
+      { pageId: th, status: 'ok', caption: 'Caption cho Threads Minh Phát', violations: [], imageUsed: false },
     ])
     expect(fake.responseRequests).toHaveLength(3)
     const usage = await handle.sql<{ feature: string; page_id: string }[]>`select feature, page_id from ai_usage order by page_id`
@@ -169,9 +169,9 @@ describe('POST /api/v1/posts/compose', () => {
     fake.onResponse((req) => ok(`Bài ${pageNameOf(req)}`))
     const body = ComposeCaptionsResponse.parse((await compose({ topic: IDEA, pageIds: [a, none, b] })).json())
     expect(body.results).toEqual([
-      { pageId: a, status: 'ok', caption: 'Bài Trang A', violations: [] },
+      { pageId: a, status: 'ok', caption: 'Bài Trang A', violations: [], imageUsed: false },
       { pageId: none, status: 'error', errorCode: 'CONFIG_MISSING' },
-      { pageId: b, status: 'ok', caption: 'Bài Trang B', violations: [] },
+      { pageId: b, status: 'ok', caption: 'Bài Trang B', violations: [], imageUsed: false },
     ])
     expect(fake.responseRequests).toHaveLength(2)
     expect(requestsFor('Trang không hồ sơ')).toHaveLength(0)
@@ -182,7 +182,7 @@ describe('POST /api/v1/posts/compose', () => {
     let n = 0
     fake.onResponse(() => ok(++n === 1 ? 'Siêu GIAM GIA cuối tuần' : 'Ưu đãi 20% cuối tuần nhé'))
     const body = ComposeCaptionsResponse.parse((await compose({ topic: IDEA, pageIds: [p] })).json())
-    expect(body.results).toEqual([{ pageId: p, status: 'ok', caption: 'Ưu đãi 20% cuối tuần nhé', violations: [] }])
+    expect(body.results).toEqual([{ pageId: p, status: 'ok', caption: 'Ưu đãi 20% cuối tuần nhé', violations: [], imageUsed: false }])
     expect(fake.responseRequests).toHaveLength(2)
     expect(inputOf(fake.responseRequests[0]!)).not.toContain('trước bị chặn')
     expect(inputOf(fake.responseRequests[1]!)).toContain('Bản caption trước bị chặn')
@@ -202,6 +202,7 @@ describe('POST /api/v1/posts/compose', () => {
           { kind: 'banned_word', text: 'giảm giá' },
           { kind: 'disallowed_url', text: 'http://evil.com' },
         ],
+        imageUsed: false,
       },
     ])
     expect(fake.responseRequests).toHaveLength(2)
@@ -212,7 +213,7 @@ describe('POST /api/v1/posts/compose', () => {
     const text = `${'a'.repeat(498)}😍😍`
     fake.onResponse(ok(text))
     const body = ComposeCaptionsResponse.parse((await compose({ topic: IDEA, pageIds: [p] })).json())
-    expect(body.results).toEqual([{ pageId: p, status: 'ok', caption: text, violations: [{ kind: 'too_long', text: '506/500' }] }])
+    expect(body.results).toEqual([{ pageId: p, status: 'ok', caption: text, violations: [{ kind: 'too_long', text: '506/500' }], imageUsed: false }])
     expect(fake.responseRequests).toHaveLength(2)
   })
 
@@ -220,7 +221,7 @@ describe('POST /api/v1/posts/compose', () => {
     const p = await page('instagram', 'Trang IG')
     fake.onResponse(ok('Bản mới'))
     const shorter = await compose({ pageIds: [p], revise: { action: 'shorter', caption: 'Caption cũ rất dài' } })
-    expect(ComposeCaptionsResponse.parse(shorter.json()).results).toEqual([{ pageId: p, status: 'ok', caption: 'Bản mới', violations: [] }])
+    expect(ComposeCaptionsResponse.parse(shorter.json()).results).toEqual([{ pageId: p, status: 'ok', caption: 'Bản mới', violations: [], imageUsed: false }])
     expect(inputOf(fake.responseRequests.at(-1)!)).toContain('Caption hiện tại:\n«Caption cũ rất dài»')
     expect(inputOf(fake.responseRequests.at(-1)!)).toContain('rút gọn')
 
@@ -253,7 +254,7 @@ describe('POST /api/v1/posts/compose', () => {
 
     fake.onResponse(ok('Nồi chiên giảm 20% cuối tuần, nhắn shop nhé'))
     const res = await compose({ topic: best.idea, pageIds: [best.pageId] })
-    expect(ComposeCaptionsResponse.parse(res.json()).results).toEqual([{ pageId: fb, status: 'ok', caption: 'Nồi chiên giảm 20% cuối tuần, nhắn shop nhé', violations: [] }])
+    expect(ComposeCaptionsResponse.parse(res.json()).results).toEqual([{ pageId: fb, status: 'ok', caption: 'Nồi chiên giảm 20% cuối tuần, nhắn shop nhé', violations: [], imageUsed: false }])
     expect(fake.responseRequests).toHaveLength(1)
     const req = fake.responseRequests[0]!
     expect(pageNameOf(req)).toBe('Fanpage Minh Phát')
@@ -333,7 +334,7 @@ describe('POST /api/v1/posts/compose', () => {
     fake.onResponse((req) => (pageNameOf(req) === 'Trang B' ? { ok: false, kind: 'INVALID_REQUEST', status: 400 } : ok('Bài A')))
     const body = ComposeCaptionsResponse.parse((await compose({ topic: IDEA, pageIds: [a, b] })).json())
     expect(body.results).toEqual([
-      { pageId: a, status: 'ok', caption: 'Bài A', violations: [] },
+      { pageId: a, status: 'ok', caption: 'Bài A', violations: [], imageUsed: false },
       { pageId: b, status: 'error', errorCode: 'AI_PROVIDER_ERROR' },
     ])
   })
@@ -400,7 +401,7 @@ describe('content.composeCaptions', () => {
     const input = ComposeCaptionsRequest.parse({ topic: IDEA, pageIds: pages })
     const { results } = await composeCaptions(deps(), input, new AbortController().signal, { concurrency: 1 })
     expect(results).toEqual([
-      { pageId: pages[0], status: 'ok', caption: 'Bài P1', violations: [] },
+      { pageId: pages[0], status: 'ok', caption: 'Bài P1', violations: [], imageUsed: false },
       { pageId: pages[1], status: 'error', errorCode: 'AI_BUDGET_EXCEEDED' },
       { pageId: pages[2], status: 'error', errorCode: 'AI_BUDGET_EXCEEDED' },
     ])

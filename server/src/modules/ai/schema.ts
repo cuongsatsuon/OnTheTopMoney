@@ -25,6 +25,8 @@ export const aiModelPrices = pgTable(
     cachedInputUsdPer1m: numeric('cached_input_usd_per_1m', { precision: 12, scale: 6 }),
     outputUsdPer1m: numeric('output_usd_per_1m', { precision: 12, scale: 6 }),
     imageUsdEach: numeric('image_usd_each', { precision: 12, scale: 6 }),
+    /** Story 6.6: giá token ẢNH vào của model ảnh (ảnh tham khảo của edits); NULL → tính như input chữ. */
+    imageInputUsdPer1m: numeric('image_input_usd_per_1m', { precision: 12, scale: 6 }),
     active: boolean('active').notNull().default(true),
     sort: integer('sort').notNull().default(0),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),

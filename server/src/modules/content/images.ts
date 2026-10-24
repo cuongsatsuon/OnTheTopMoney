@@ -12,6 +12,10 @@
 // - Story 7.4: payload `autoApprove` ("Tự đăng") → ảnh xong thì slot duyệt luôn (`scheduled`); ảnh lỗi vẫn về "Chờ duyệt".
 //   Cron `campaigns.generate_window` gọi `failStuckSlotImages`: ô gắn slot chờ quá `IMAGE_PENDING_MS` (job mất) → `failed
 //   IMAGE_FAILED` qua đúng đường lỗi của job (slot về "Chờ duyệt"); job tới muộn thấy ô không còn `pending` thì bỏ qua.
+// - Story 6.6: `referenceId` → 4 ô trỏ `reference_asset_id` tới ảnh tham khảo (phải `ready`, khoá `FOR KEY SHARE` lúc ghi).
+//   Job tải bản thu nhỏ của ảnh tham khảo (lỗi kho tạm → retry, chưa tốn tiền) rồi gọi gateway `references` (Images API
+//   edits). Lỗi gateway có thể đã tính tiền (`maybeBilled`, hết giờ sau khi gửi) → `failed` ngay, không retry (áp dụng cả
+//   ảnh từ chữ — mỗi lượt thử lại là một lần trả tiền).
 // `ai` không chạm `media_assets` (gateway chỉ trả bytes + ghi `ai_usage`). Không log prompt / mô tả.
 import {
   IMAGE_GENERATE_COUNT,
@@ -27,9 +31,19 @@ import type { MediaStores } from '../../adapters/media/index.ts'
 import { bossDbFor, type Db, type DbExecutor } from '../../platform/db/index.ts'
 import { AppError } from '../../platform/errors/index.ts'
 import type { JobSender } from '../../platform/jobs/index.ts'
-import { buildImagePrompt, generateImage, getBudgetSummary, getUsableOpenAiKey, type AiDeps } from '../ai/index.ts'
+import {
+  buildImagePrompt,
+  buildReferenceImagePrompt,
+  generateImage,
+  getBudgetSummary,
+  getUsableOpenAiKey,
+  isMaybeBilled,
+  type AiDeps,
+  type AiInputImage,
+} from '../ai/index.ts'
 import { detectImageMime } from '../profiles/index.ts'
 import { getOpenAiPrefs } from '../settings/index.ts'
+import { isRetryableInputImageFailure, loadInputImage } from './input-images.ts'
 import { toGeneratedImageDto } from './media.ts'
 import { mediaAssets, postTargetMedia, postTargets } from './schema.ts'
 import { settleSlotImage, slotOfAsset } from './slots.ts'
@@ -57,10 +71,17 @@ export class ImageGenerateRetryableError extends Error {
   }
 }
 
+/** Câu lỗi dưới ô ảnh tham khảo (`VALIDATION_FAILED` path `referenceId`). */
+export const REFERENCE_VALIDATION = {
+  missing: 'Ảnh tham khảo không còn — tải ảnh lên lại',
+  notReady: 'Ảnh tham khảo chưa sẵn sàng',
+} as const
+
 /**
  * Yêu cầu một bộ `IMAGE_GENERATE_COUNT` ảnh. Chặn trước khi ghi (không ô nào, không job nào): kho media chưa cấu hình
  * (ảnh sinh ra không có chỗ lưu) → `MEDIA_NOT_CONFIGURED`; khoá OpenAI thiếu / hỏng → mã khoá; hạn mức đã hết →
- * `AI_BUDGET_EXCEEDED`. Hạn mức còn nhưng không đủ cả 4 ảnh → các job sau tự `failed IMAGE_FAILED`.
+ * `AI_BUDGET_EXCEEDED`; ảnh tham khảo (Story 6.6) không có / chưa `ready` → `VALIDATION_FAILED` path `referenceId`.
+ * Hạn mức còn nhưng không đủ cả 4 ảnh → các job sau tự `failed IMAGE_FAILED`.
  */
 export async function requestImageGeneration(deps: RequestImagesDeps, input: ParsedGenerateImagesRequest): Promise<GeneratedImageDto[]> {
   if (!deps.media.configured) throw new AppError('MEDIA_NOT_CONFIGURED', 500, { message: 'CLOUDINARY_URL chưa đặt' })
@@ -69,12 +90,21 @@ export async function requestImageGeneration(deps: RequestImagesDeps, input: Par
   if (budget.state === 'blocked') {
     throw new AppError('AI_BUDGET_EXCEEDED', 402, { details: { month: budget.month, limitVnd: budget.limitVnd, spentVnd: budget.spentVnd, remainingVnd: 0 } })
   }
-  const prompt = buildImagePrompt({ description: input.prompt, style: input.style })
+  const referenceId = input.referenceId ?? null
+  const prompt = referenceId ? buildReferenceImagePrompt({ request: input.prompt }) : buildImagePrompt({ description: input.prompt, style: input.style })
   const now = deps.now?.() ?? new Date()
   return deps.db.transaction(async (tx) => {
+    if (referenceId) {
+      // Khoá dòng ảnh tham khảo tới hết transaction: cron dọn / xoá theo yêu cầu không xoá chen giữa lúc kiểm và lúc ghi ô.
+      const [ref] = await tx.select({ status: mediaAssets.status }).from(mediaAssets).where(eq(mediaAssets.id, referenceId)).for('key share')
+      if (!ref || ref.status !== 'ready') {
+        const message = ref ? REFERENCE_VALIDATION.notReady : REFERENCE_VALIDATION.missing
+        throw new AppError('VALIDATION_FAILED', 400, { message, details: [{ path: ['referenceId'], message }] })
+      }
+    }
     const rows = await tx
       .insert(mediaAssets)
-      .values(Array.from({ length: IMAGE_GENERATE_COUNT }, () => ({ source: 'ai', status: 'pending', prompt })))
+      .values(Array.from({ length: IMAGE_GENERATE_COUNT }, () => ({ source: 'ai', status: 'pending', prompt, referenceAssetId: referenceId })))
       .returning()
     for (const row of rows) await deps.jobs.send('content.image.generate', { mediaAssetId: row.id }, { db: bossDbFor(tx) })
     return rows.map((r) => toGeneratedImageDto(r, now))
@@ -100,8 +130,11 @@ export function postImageSize(size: ImageSize): ImageSize {
   return size === '1024x1536' ? '1024x1024' : size
 }
 
-/** Lỗi gateway đáng thử lại: chặn tần suất, OpenAI lỗi tạm (5xx / hết giờ). */
-const retryable = (err: AppError) => err.code === 'RATE_LIMITED' || (err.code === 'AI_PROVIDER_ERROR' && err.statusCode >= 500)
+/**
+ * Lỗi gateway đáng thử lại: chặn tần suất, OpenAI lỗi tạm (5xx). Story 6.6: trừ lỗi có thể đã tính tiền (`maybeBilled` —
+ * hết giờ / đứt kết nối sau khi gửi): thử lại là trả tiền lần nữa cho cùng một ô.
+ */
+const retryable = (err: AppError) => !isMaybeBilled(err) && (err.code === 'RATE_LIMITED' || (err.code === 'AI_PROVIDER_ERROR' && err.statusCode >= 500))
 
 /** `pending` → `failed` + sự kiện (chỉ khi ô còn chờ). `cause` = mã gốc, chỉ để log. */
 async function markFailed(deps: Pick<ImageGenerateDeps, 'db' | 'events' | 'log'>, id: string, code: ImageErrorCode, cause: string): Promise<ImageGenerateOutcome> {
@@ -130,9 +163,26 @@ export async function generateImageAsset(
   id: string,
   opts: { finalAttempt: boolean; signal?: AbortSignal | undefined; autoApprove?: boolean },
 ): Promise<ImageGenerateOutcome> {
-  const [row] = await deps.db.select({ status: mediaAssets.status, prompt: mediaAssets.prompt }).from(mediaAssets).where(eq(mediaAssets.id, id))
+  const [row] = await deps.db
+    .select({ status: mediaAssets.status, prompt: mediaAssets.prompt, referenceAssetId: mediaAssets.referenceAssetId })
+    .from(mediaAssets)
+    .where(eq(mediaAssets.id, id))
   if (!row || row.status !== 'pending') return 'skipped'
   if (!row.prompt) return markFailed(deps, id, 'IMAGE_FAILED', 'PROMPT_MISSING')
+
+  // Story 6.6: ảnh tham khảo — tải trước khi gọi OpenAI (lỗi kho tạm → thử lại, chưa tốn tiền).
+  let references: AiInputImage[] | undefined
+  if (row.referenceAssetId) {
+    const [ref] = await deps.db.select({ status: mediaAssets.status, url: mediaAssets.url }).from(mediaAssets).where(eq(mediaAssets.id, row.referenceAssetId))
+    if (!ref || ref.status !== 'ready' || !ref.url) return markFailed(deps, id, 'IMAGE_FAILED', 'REFERENCE_MISSING')
+    const loaded = await loadInputImage(deps.media, ref.url, opts.signal)
+    if (opts.signal?.aborted) throw opts.signal.reason
+    if (!loaded.ok) {
+      if (isRetryableInputImageFailure(loaded.kind) && !opts.finalAttempt) throw new ImageGenerateRetryableError('UPLOAD_FAILED')
+      return markFailed(deps, id, 'IMAGE_FAILED', `REFERENCE_${loaded.kind}`)
+    }
+    references = [loaded.image]
+  }
 
   const size = postImageSize((await getOpenAiPrefs(deps.db)).imageSize)
   const slot = await slotOfAsset(deps.db, id)
@@ -145,6 +195,7 @@ export async function generateImageAsset(
       prompt: row.prompt,
       n: 1,
       size,
+      ...(references ? { references } : {}),
       ...(opts.signal ? { signal: opts.signal } : {}),
     })
     image = res.images[0]!

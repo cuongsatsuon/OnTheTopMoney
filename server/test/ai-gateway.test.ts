@@ -21,6 +21,7 @@ import {
   getBudgetSummary,
   getModelPrice,
   handleAiEvent,
+  isMaybeBilled,
   parseMicros,
   reserve,
   resetSimulatedSpend,
@@ -138,7 +139,7 @@ beforeEach(async () => {
 })
 
 describe('cost', () => {
-  const luna: ModelPrice = { model: 'gpt-6-luna', kind: 'text', active: true, input: 100_000n, cachedInput: 10_000n, output: 500_000n, imageEach: null }
+  const luna: ModelPrice = { model: 'gpt-6-luna', kind: 'text', active: true, input: 100_000n, cachedInput: 10_000n, output: 500_000n, imageEach: null, imageInput: null }
 
   it('giá seed đã điền theo bảng (USD / 1 triệu token, ảnh 0,05 USD/ảnh)', async () => {
     const rows = await handle.sql<{ model: string; input: string; cached: string | null; output: string; each: string | null }[]>`
@@ -177,7 +178,7 @@ describe('cost', () => {
     expect(estimateTextCost(luna, 10, 100, 26_000)).toEqual({ usdMicros: 51, costVnd: 2 })
     expect(estimateInputTokens(11)).toBe(6)
     // Ảnh: theo kích thước (1024×1024 0,10 USD, khác 0,15 USD), không thấp hơn image_usd_each.
-    const flare: ModelPrice = { model: 'f', kind: 'image', active: true, input: 5_000_000n, cachedInput: null, output: 30_000_000n, imageEach: 50_000n }
+    const flare: ModelPrice = { model: 'f', kind: 'image', active: true, input: 5_000_000n, cachedInput: null, output: 30_000_000n, imageEach: 50_000n, imageInput: 8_000_000n }
     expect(estimateImageCost(flare, 2, '1024x1024', 26_000)).toEqual({ usdMicros: 200_000, costVnd: 5_200 })
     expect(estimateImageCost(flare, 1, '1536x1024', 26_000)).toEqual({ usdMicros: 150_000, costVnd: 3_900 })
     expect(estimateImageCost({ ...flare, imageEach: 400_000n }, 1, '1024x1024', 26_000)).toEqual({ usdMicros: 400_000, costVnd: 10_400 })
@@ -429,6 +430,9 @@ describe('generateText', () => {
     fake.onResponse({ ok: false, kind: 'TRANSIENT', maybeBilled: true })
     const err = await errorOf(generateText(depsOf(), roundCall))
     expect(err.code).toBe('AI_PROVIDER_ERROR')
+    // Story 6.6: lỗi có thể đã tính tiền mang cờ để caller không retry.
+    expect(err.details).toEqual({ kind: 'TRANSIENT', maybeBilled: true })
+    expect(isMaybeBilled(err)).toBe(true)
     expect(await counts()).toEqual({ usage: 1, reservations: 0 })
     const [row] = await handle.sql`select estimated, cost_vnd, usd_micros, feature from ai_usage`
     expect(row).toMatchObject({ estimated: true, cost_vnd: '100', usd_micros: '100', feature: 'autoreply' })
@@ -655,6 +659,69 @@ describe('generateImage', () => {
     expect((await errorOf(generateImage(depsOf(), { feature: 'image_generate', prompt: 'p' }))).code).toBe('AI_POLICY_BLOCKED')
     expect(await counts()).toEqual({ usage: 0, reservations: 0 })
     expect((await errorOf(generateImage(depsOf(), { feature: 'image_generate', prompt: 'p', n: 9 }))).code).toBe('VALIDATION_FAILED')
+  })
+})
+
+describe('ảnh vào (Story 6.6)', () => {
+  const REF = { data: Buffer.from(FAKE_JPEG), mime: 'image/jpeg' as const }
+
+  it('giá seed: token ảnh vào 8,00 USD/1M cho cả 3 model ảnh; model chữ không có', async () => {
+    const rows = await handle.sql<{ model: string; v: string | null }[]>`
+      select model, image_input_usd_per_1m::text as v from ai_model_prices where model not like 'testonly-%' order by kind desc, sort`
+    expect(rows.map((r) => [r.model, r.v === null ? null : Number(r.v)])).toEqual([
+      ['gpt-6-luna', null],
+      ['gpt-6.1-sol', null],
+      ['gpt-6-astra', null],
+      ['gpt-image-2.5-flare', 8],
+      ['gpt-image-2.5-sunburst', 8],
+      ['gpt-image-2', 8],
+    ])
+  })
+
+  it('computeCost tách token ảnh vào: 1000 ảnh × 8 + 100 chữ × 5 + 4160 × 30 (micro-USD); thiếu giá ảnh → giá chữ', () => {
+    const img: ModelPrice = { model: 'g', kind: 'image', active: true, input: 5_000_000n, cachedInput: null, output: 30_000_000n, imageEach: 50_000n, imageInput: 8_000_000n }
+    const usage = { inputTokens: 1_100, imageInputTokens: 1_000, cachedInputTokens: 0, outputTokens: 4_160, images: 1 }
+    // 8.000 + 500 + 124.800 = 133.300 micro-USD × 26.000 = 3.465,8 → 3.466 đ.
+    expect(computeCost(img, usage, 26_000)).toEqual({ usdMicros: 133_300, costVnd: 3_466 })
+    // Không giá ảnh vào: 1100 × 5 + 124.800 = 130.300.
+    expect(computeCost({ ...img, imageInput: null }, usage, 26_000).usdMicros).toBe(130_300)
+  })
+
+  it('generateImage({references}) → editImage (không gọi generations), input_fidelity theo model, chi phí theo usage tách ảnh', async () => {
+    await setPrefs({ imageModel: 'gpt-image-2', imageSize: '1024x1024' })
+    let reservedVnd = -1
+    fake.onEdit(async () => {
+      reservedVnd = Number((await handle.sql`select est_vnd from ai_reservations`)[0]!.est_vnd)
+      return { ok: true, images: [Buffer.from(FAKE_JPEG)], usage: { inputTokens: 1_100, imageInputTokens: 1_000, cachedInputTokens: 0, outputTokens: 4_160 } }
+    })
+    const result = await generateImage(depsOf(), { feature: 'image_generate', prompt: 'p', references: [REF] })
+    expect(fake.imageRequests).toHaveLength(0)
+    expect(fake.editRequests).toHaveLength(1)
+    expect(fake.editRequests[0]).toMatchObject({ model: 'gpt-image-2', n: 1, size: '1024x1024', images: [REF] })
+    expect(fake.editRequests[0]!.inputFidelity).toBeUndefined() // gpt-image-2: bỏ tham số
+    expect(result.usage).toMatchObject({ usdMicros: 133_300, costVnd: 3_466 })
+    // Giữ chỗ = ảnh ra 0,10 USD + 6.000 token ảnh vào × 8 = 0,148 USD → 3.848 đ (≥ chi phí thật).
+    expect(reservedVnd).toBe(3_848)
+    const [row] = await handle.sql`select feature, input_tokens, output_tokens, cost_vnd from ai_usage`
+    expect(row).toMatchObject({ feature: 'image_generate', input_tokens: 1_100, output_tokens: 4_160, cost_vnd: '3466' })
+  })
+
+  it('generateText({images}) → ảnh tới adapter với detail low; giữ chỗ cộng 1.600 token ảnh; input phải là chuỗi', async () => {
+    let reservedVnd = -1
+    fake.onResponse(async () => {
+      reservedVnd = Number((await handle.sql`select est_vnd from ai_reservations`)[0]!.est_vnd)
+      return roundUsage
+    })
+    await setPrefs(ROUND)
+    await generateText(depsOf(), { ...roundCall, images: [REF] })
+    expect(fake.responseRequests[0]!.images).toEqual([{ ...REF, detail: 'low' }])
+    expect(fake.responseRequests[0]!.input).toBe('abc')
+    // 100 đ của lời gọi chữ + 1.600 × 0,10 = 160 đ của ảnh.
+    expect(reservedVnd).toBe(260)
+    expect((await errorOf(generateText(depsOf(), { ...roundCall, input: [{ role: 'user', content: 'x' }], images: [REF] }))).code).toBe('VALIDATION_FAILED')
+    expect((await errorOf(generateText(depsOf(), { ...roundCall, images: Array(5).fill(REF) }))).code).toBe('VALIDATION_FAILED')
+    expect((await errorOf(generateImage(depsOf(), { feature: 'image_generate', prompt: 'p', references: [{ data: Buffer.alloc(0), mime: 'image/jpeg' }] }))).code).toBe('VALIDATION_FAILED')
+    expect(fake.responseRequests).toHaveLength(1)
   })
 })
 
