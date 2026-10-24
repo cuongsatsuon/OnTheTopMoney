@@ -240,7 +240,7 @@ describe('lưu nháp → 7 slot + job campaigns.preview', () => {
     expect(usage).toHaveLength(7)
     expect(usage.every((u) => u.feature === 'campaign_generate' && u.page_id === fb)).toBe(true)
     expect(new Set(usage.map((u) => u.ref))).toEqual(new Set(rows.map((r) => r.id)))
-    expect(openai.responseRequests[0]!.input).toContain('Ý tưởng bài: Mẹo hay')
+    expect(openai.responseRequests[0]!.input).toContain('Ý tưởng bài: «Mẹo hay')
 
     let p = await preview(c.id)
     expect(p.items[0]).toMatchObject({ status: 'planned', imagePending: true, aiCaption: true, media: [] })

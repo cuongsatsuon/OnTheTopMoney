@@ -1,7 +1,7 @@
 // Ma trận Story 8.2 — Màn Hiệu suất theo phạm vi (AD-17, AD-18, AD-1). Qua app thật (buildApp) + Postgres nhúng; số liệu
 // chèn thẳng vào bảng của `analytics` (như lượt thu của Story 8.1 để lại) — route không gọi Meta. Phủ: nhóm 30 ngày (KPI +
 // kỳ trước, chuỗi theo nền tảng, bảng trang), thành viên hiện tại, ranh giới ngày VN, `null` ≠ 0, bài tốt nhất, đếm bài,
-// chưa đủ dữ liệu, trạng thái thu (thiếu quyền), phạm vi rỗng / sai, 401.
+// chưa đủ dữ liệu, trạng thái thu (thiếu quyền), phạm vi rỗng / sai, 401. Story 8.4: `idea` của bài tốt nhất.
 import { ErrorResponse, PerformanceResponse } from '@ottm/shared'
 import type { FastifyInstance } from 'fastify'
 import { afterAll, beforeAll, beforeEach, describe, expect, inject, it } from 'vitest'
@@ -76,13 +76,13 @@ async function daily(pageId: string, date: string, m: Metrics): Promise<void> {
 
 async function target(
   pageId: string,
-  opts: { publishedAt?: Date; status?: string; caption?: string; aiCaption?: boolean; permalink?: string | null } = {},
+  opts: { publishedAt?: Date; status?: string; caption?: string; aiCaption?: boolean; permalink?: string | null; postId?: string; position?: number } = {},
 ): Promise<string> {
-  const [post] = await handle.sql<{ id: string }[]>`insert into posts (source) values ('manual') returning id`
+  const postId = opts.postId ?? (await handle.sql<{ id: string }[]>`insert into posts (source) values ('manual') returning id`)[0]!.id
   const status = opts.status ?? 'published'
   const [t] = await handle.sql<{ id: string }[]>`
     insert into post_targets (post_id, page_id, position, status, caption, ai_caption, platform_post_id, published_at, permalink, error_code)
-    values (${post!.id}, ${pageId}, 0, ${status}, ${opts.caption ?? 'Bài viết'}, ${opts.aiCaption ?? false}, ${'pp_' + accounts + '_' + Math.random()},
+    values (${postId}, ${pageId}, ${opts.position ?? 0}, ${status}, ${opts.caption ?? 'Bài viết'}, ${opts.aiCaption ?? false}, ${'pp_' + accounts + '_' + Math.random()},
       ${(opts.publishedAt ?? new Date(NOW.getTime() - 3 * DAY)).toISOString()}::timestamptz, ${opts.permalink ?? null},
       ${status === 'failed' ? 'PUBLISH_FAILED' : null})
     returning id`
@@ -261,6 +261,7 @@ describe('GET /performance — bài', () => {
       targetId: ids[1],
       pageId: fb,
       title: 'Bài số 1 mẹo chăm da',
+      idea: 'Bài số 1. mẹo chăm da.',
       permalink: 'https://facebook.com/p/1',
       ai: true,
       source: 'manual',
@@ -271,6 +272,28 @@ describe('GET /performance — bài', () => {
     expect(r.topPosts[1]).toMatchObject({ targetId: ids[0], ai: false, views: 50 })
     // Đếm bài: 6 bài + bài chưa có số liệu trong kỳ; bài 40 ngày trước và bài lỗi không tính.
     expect(r.pages[0]!.posts).toBe(7)
+  })
+
+  it('Story 8.4 — ý tưởng "Tạo bài tương tự": tóm caption của chính target (bài đăng 2 trang → mỗi dòng một ý tưởng), không gọi AI', async () => {
+    const fb = await page('facebook')
+    const ig = await page('instagram')
+    const [post] = await handle.sql<{ id: string }[]>`insert into posts (source) values ('manual') returning id`
+    const onFb = await target(fb, { postId: post!.id, position: 0, caption: '🔥 SALE nồi chiên 20%\nChỉ cuối tuần!\n#giadung https://x.vn' })
+    const onIg = await target(ig, { postId: post!.id, position: 1, caption: 'Nồi chiên giảm 20% ✨\n\n#noichien #sale' })
+    const bare = await target(fb, { caption: '#giadung 🔥 https://x.vn' })
+    await snapshot(onFb, fb, TO, { engagement: 30 })
+    await snapshot(onIg, ig, TO, { engagement: 20 })
+    await snapshot(bare, fb, TO, { engagement: 10 })
+
+    const r = await perf()
+    expect(r.topPosts.map((p) => ({ targetId: p.targetId, postId: p.postId, pageId: p.pageId, idea: p.idea }))).toEqual([
+      { targetId: onFb, postId: post!.id, pageId: fb, idea: 'SALE nồi chiên 20%. Chỉ cuối tuần!' },
+      { targetId: onIg, postId: post!.id, pageId: ig, idea: 'Nồi chiên giảm 20%.' },
+      { targetId: bare, postId: expect.any(String), pageId: fb, idea: null },
+    ])
+    // Màn Hiệu suất chỉ đọc bảng nội bộ — không lời gọi AI nào (AI chỉ chạy khi chủ shop bấm "Tạo bằng AI" ở Soạn bài).
+    const [usage] = await handle.sql<{ n: number }[]>`select count(*)::int as n from ai_usage`
+    expect(usage!.n).toBe(0)
   })
 
   it('đếm bài theo trang: chỉ bài đã đăng trong kỳ', async () => {

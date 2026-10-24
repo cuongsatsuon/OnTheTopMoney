@@ -2,6 +2,7 @@
 // chép caption, gắn ảnh, body lưu nháp, nạp nháp, kiểm file ảnh, câu lỗi.
 // Story 6.2 — caption AI: body gọi AI, áp kết quả từng tab, khoá nút AI, cụm vi phạm còn trong chữ, câu ghi chú / toast.
 // Story 6.3 — ảnh AI: lưới ô (đang tạo / lỗi / ảnh rồi kho ảnh), tạo lại giữ ảnh đang gắn, "Thử mô tả khác", mô tả gửi AI.
+// Story 8.4 — "Tạo bài tương tự": link mở Soạn bài (ý tưởng + trang), chọn đích theo `?trang=`.
 import {
   ComposeCaptionsRequest,
   GenerateImagesRequest,
@@ -41,12 +42,16 @@ import {
   imageFileIssue,
   imagePrompt,
   imageTiles,
+  IDEA_PARAM,
+  TARGET_PAGE_PARAM,
   initialSelection,
   issueText,
   issuesFor,
   keepAttachedGenerated,
   orderedTargets,
   pendingTiles,
+  similarPostLink,
+  startSelection,
   tileImages,
   toggleGroupSelection,
   type Drafts,
@@ -87,6 +92,24 @@ describe('chọn đích', () => {
     const added = toggleGroupSelection(new Set([IG.id, SOLO.id]), group)
     expect([...added].sort()).toEqual([FB.id, IG.id, SOLO.id].sort())
     expect([...toggleGroupSelection(added, group)]).toEqual([SOLO.id])
+  })
+
+  it('Story 8.4 — link "Tạo bài tương tự": ý tưởng (mã hoá) + trang; ý tưởng null → chỉ trang', () => {
+    const link = similarPostLink({ idea: 'SALE nồi chiên 20%. Chỉ cuối tuần & hôm nay!', pageId: FB.id })
+    expect(link.startsWith('/soan-bai?')).toBe(true)
+    const q = new URLSearchParams(link.split('?')[1])
+    expect(q.get(IDEA_PARAM)).toBe('SALE nồi chiên 20%. Chỉ cuối tuần & hôm nay!')
+    expect(q.get(TARGET_PAGE_PARAM)).toBe(FB.id)
+    expect(similarPostLink({ idea: null, pageId: IG.id })).toBe(`/soan-bai?${TARGET_PAGE_PARAM}=${IG.id}`)
+  })
+
+  it('Story 8.4 — chọn đích theo ?trang=: trang chọn được → chỉ trang đó (bỏ Phạm vi); mất kết nối / không có → Phạm vi + báo; không có tham số → Phạm vi', () => {
+    const group = { kind: 'group', id: G1 } as const
+    expect(startSelection(group, PAGES, SOLO.id)).toEqual({ ids: [SOLO.id], unavailable: false })
+    expect(startSelection({ kind: 'all' }, PAGES, IG.id)).toEqual({ ids: [IG.id], unavailable: false })
+    expect(startSelection(group, PAGES, TH.id)).toEqual({ ids: [FB.id, IG.id], unavailable: true })
+    expect(startSelection({ kind: 'all' }, PAGES, id(999))).toEqual({ ids: [], unavailable: true })
+    expect(startSelection(group, PAGES, null)).toEqual({ ids: [FB.id, IG.id], unavailable: false })
   })
 
   it('tab theo thứ tự danh sách trang', () => {

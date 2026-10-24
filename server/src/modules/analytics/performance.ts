@@ -11,6 +11,7 @@
 // - Tỉ lệ tương tác tính ở server, chỉ trên ngày có CẢ tương tác lẫn tiếp cận (Threads không có reach — cộng tương tác
 //   Threads vào tử mà mẫu không có sẽ thổi phồng tỉ lệ).
 // - Story 8.3: KPI "Tin nhắn" + khối "Hiệu quả AI" (`ai-efficiency.ts`) cùng phạm vi + kỳ.
+// - Story 8.4: bài tốt nhất kèm `idea` (ý tưởng `content` tóm từ caption) cho "Tạo bài tương tự".
 import {
   INSUFFICIENT_DATA_DAYS,
   PERFORMANCE_RANGE_DAYS,
@@ -248,6 +249,7 @@ async function topPosts(db: DbExecutor, targetIds: readonly string[]): Promise<T
       pageId: t.pageId,
       publishedAt: t.publishedAt.toISOString(),
       title: t.title,
+      idea: t.idea,
       permalink: t.permalink,
       thumbnailUrl: t.thumbnailUrl,
       ai: t.ai,

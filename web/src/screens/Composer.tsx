@@ -7,7 +7,8 @@
 // này" + "Thử mô tả khác"), caption không bị ảnh hưởng. Story 6.4: "Lên lịch" (ngày giờ theo giờ VN) / "Đăng ngay" lưu nháp
 // rồi chuyển mọi trang sang `scheduled`; bài đã rời nháp chỉ xem được — mỗi tab có nhãn trạng thái (đã lên lịch, đang
 // đăng, đã đăng + "Xem bài", lỗi + lý do), footer có "Bỏ lịch" / "Đổi giờ" / "Đăng lại". Xem trước IG đệm trắng ảnh
-// ngoài khung 4:5–1,91:1 như lúc đăng.
+// ngoài khung 4:5–1,91:1 như lúc đăng. Story 8.4: "Tạo bài tương tự" mở `?idea=…&trang=<pageId>` — bài mới chọn đúng
+// trang của bài gốc làm đích + điền ý tưởng; không gọi AI tới khi chủ shop bấm "Tạo bằng AI".
 import {
   AlertCircle,
   Bookmark,
@@ -73,10 +74,13 @@ import { useAiBudget } from '../lib/ai-budget'
 import { useApp } from '../lib/app-context'
 import {
   GOAL_OPTIONS,
+  IDEA_PARAM,
   IMAGE_ACCEPT,
   IMAGE_STYLE_OPTIONS,
   LENGTH_OPTIONS,
   POST_PARAM,
+  SOURCE_PAGE_UNAVAILABLE,
+  TARGET_PAGE_PARAM,
   aiErrorText,
   applyComposeResults,
   applyImageToAll,
@@ -102,13 +106,13 @@ import {
   imageFileIssue,
   imagePrompt,
   imageTiles,
-  initialSelection,
   isSelectable,
   issueText,
   issuesFor,
   keepAttachedGenerated,
   orderedTargets,
   pendingTiles,
+  startSelection,
   tileImages,
   toggleGroupSelection,
   useComposeCaptions,
@@ -164,12 +168,14 @@ export default function Composer() {
 
   const [selected, setSelected] = useState<Set<string>>(() => new Set())
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
-  const [idea, setIdea] = useState(params.get('idea') ?? '')
+  const [idea, setIdea] = useState(params.get(IDEA_PARAM) ?? '')
+  /** `?trang=` (Tạo bài tương tự) trỏ tới trang đã mất kết nối / đã gỡ → báo trên ô "Đăng lên". */
+  const [sourcePageUnavailable, setSourcePageUnavailable] = useState(false)
   const [drafts, setDrafts] = useState<Drafts>({})
   /** Kho ảnh của bài (ảnh đã tải lên / đang gắn) — mỗi tab chọn một ảnh từ đây. */
   const [pool, setPool] = useState<MediaAssetDto[]>([])
   const [activeTab, setActiveTab] = useState('')
-  /** Nháp đã nạp vào state: `'new'` (bài mới) hoặc id bài. Đổi `?bai=` → nạp lại. */
+  /** Nháp đã nạp vào state: `new|<idea>|<trang>` (bài mới) hoặc id bài. Đổi `?bai=` / `?idea=` / `?trang=` → nạp lại. */
   const [loadedKey, setLoadedKey] = useState<string | null>(null)
 
   const [goal, setGoal] = useState<ComposeGoal>('sales')
@@ -208,9 +214,11 @@ export default function Composer() {
   const [serverLock, setServerLock] = useState<{ code: ComposeLockCode; stamp: string } | null>(null)
   const lock = composeLock({ key: aiLock, budgetBlocked: budgetState === 'blocked', serverCode: serverLock?.stamp === lockStamp ? serverLock.code : null })
 
-  // Nạp trạng thái ban đầu ngay khi đủ dữ liệu (trong lúc render, không qua effect): bài mới → chọn sẵn theo Phạm vi;
-  // `?bai=<id>` → nội dung nháp đã lưu.
-  const initKey = postId ?? 'new'
+  // Nạp trạng thái ban đầu ngay khi đủ dữ liệu (trong lúc render, không qua effect): bài mới → chọn sẵn theo `?trang=`
+  // (Tạo bài tương tự) hoặc Phạm vi, ý tưởng theo `?idea=`; `?bai=<id>` → nội dung nháp đã lưu. Chỉ nạp state, không gọi AI.
+  // Bài mới: khoá gồm cả `?idea=` / `?trang=` — đang ở Soạn bài từ "Tạo bài tương tự" mà bấm "Tạo bài" (`/soan-bai`)
+  // vẫn cùng màn nên phải nạp lại (bỏ trang chọn sẵn + dòng báo của bài gốc), như đổi `?bai=`.
+  const initKey = postId ?? `new|${params.get(IDEA_PARAM) ?? ''}|${params.get(TARGET_PAGE_PARAM) ?? ''}`
   if (loadedKey !== initKey && pagesQuery.data && (!postId || postQuery.data)) {
     const groupOf = (ids: Iterable<string>) => new Set([...ids].map((id) => allPages.find((p) => p.id === id)?.groupId).filter((g): g is string => !!g))
     if (postId && postQuery.data) {
@@ -220,13 +228,15 @@ export default function Composer() {
       setPool(loaded.pool)
       setIdea(loaded.topic)
       setExpanded(groupOf(loaded.selected))
+      setSourcePageUnavailable(false)
     } else {
-      const ids = initialSelection(scope, allPages)
+      const { ids, unavailable } = startSelection(scope, allPages, params.get(TARGET_PAGE_PARAM))
       setSelected(new Set(ids))
       setDrafts({})
       setPool([])
-      setIdea(params.get('idea') ?? '')
+      setIdea(params.get(IDEA_PARAM) ?? '')
       setExpanded(groupOf(ids))
+      setSourcePageUnavailable(unavailable)
     }
     setActiveTab('')
     setNotes({})
@@ -285,14 +295,18 @@ export default function Composer() {
   const whenIssue = scheduleInputIssue(when.date, when.time, nowMs)
   const publishing = save.isPending || transition.isPending
 
-  const togglePage = (id: string) =>
+  // Chủ shop tự chọn đích → bỏ dòng báo trang của bài gốc không dùng được.
+  const togglePage = (id: string) => {
+    setSourcePageUnavailable(false)
     setSelected((s) => {
       const n = new Set(s)
       if (n.has(id)) n.delete(id)
       else n.add(id)
       return n
     })
+  }
   const toggleGroup = (gid: string, groupPages: PageDto[]) => {
+    setSourcePageUnavailable(false)
     const next = toggleGroupSelection(selected, groupPages)
     setSelected(next)
     if (groupPages.some((p) => next.has(p.id))) setExpanded((e) => new Set(e).add(gid))
@@ -435,7 +449,8 @@ export default function Composer() {
             setParams(
               (p) => {
                 p.set(POST_PARAM, saved.id)
-                p.delete('idea')
+                p.delete(IDEA_PARAM)
+                p.delete(TARGET_PAGE_PARAM)
                 return p
               },
               { replace: true },
@@ -595,6 +610,12 @@ export default function Composer() {
                 <span className="text-[13px] font-medium">Đăng lên</span>
                 <span className="text-xs text-muted-foreground">{targets.length ? `${targets.length} trang đã chọn` : 'Chưa chọn trang'}</span>
               </div>
+              {sourcePageUnavailable && (
+                <p className="mb-2 flex items-start gap-1.5 text-xs text-amber-800">
+                  <AlertCircle size={13} className="mt-px shrink-0" />
+                  {SOURCE_PAGE_UNAVAILABLE}
+                </p>
+              )}
               {loading ? (
                 <div className="space-y-2 rounded-md border border-border p-3" aria-busy="true">
                   {[0, 1, 2].map((i) => (

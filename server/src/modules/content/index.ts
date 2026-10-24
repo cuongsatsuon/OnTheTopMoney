@@ -23,6 +23,8 @@ export {
 } from './publish.ts'
 // Lịch nội dung (Story 6.5, AD-18): target theo `scheduled_at` trong một khoảng.
 export { calendarTitle, listCalendar, type CalendarRange } from './calendar.ts'
+// "Tạo bài tương tự" (Story 8.4): ý tưởng tóm từ caption đã đăng — thuần, không gọi AI.
+export { SIMILAR_IDEA_MAX, similarIdea } from './similar.ts'
 export { PUBLISHING_STUCK_MS, REQUEUE_OVERDUE_MS, requeueTargets, type RequeueDeps, type RequeueResult } from './requeue.ts'
 // Ảnh bài (AD-14): kiểm bytes trước khi tải lên kho công khai, ghi `media_assets` sau.
 export { POST_IMAGE_VALIDATION, recordMediaAsset, toGeneratedImageDto, toMediaAssetDto, validatePostImage } from './media.ts'

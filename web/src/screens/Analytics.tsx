@@ -1,7 +1,8 @@
 // Hiệu suất `/hieu-suat` (Story 8.2, UX Flow 5): KPI + so với kỳ trước, tương tác theo nền tảng, so sánh từng trang và
 // bài tốt nhất — số thật từ `GET /performance` (lib/performance.ts), lọc theo Phạm vi ở thanh trên. Story 8.3: KPI "Tin
 // nhắn" + khối "Hiệu quả AI" (tin AI trả lời, tỉ lệ chuyển người, thời gian phản hồi, bài AI vs tự viết) cùng response.
-// "Tạo bài tương tự" điền sẵn đủ ở Story 8.4.
+// Story 8.4: "Tạo bài tương tự" mở Soạn bài với ý tưởng server tóm từ caption gốc + đích là trang của bài
+// (`similarPostLink`); chưa gọi AI tới khi chủ shop bấm "Tạo bằng AI" ở đó.
 import { ArrowDown, ArrowUp, Bot, ExternalLink, Eye, Heart, ImageOff, MessageCircle, Percent, RefreshCw, Timer, UserPlus, Users } from 'lucide-react'
 import { useMemo, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
@@ -29,6 +30,7 @@ import {
 } from '../components/ui'
 import { compact, formatNumber, pages, type Page } from '../data/mock'
 import { useApp } from '../lib/app-context'
+import { similarPostLink } from '../lib/composer'
 import { reconnectInput, usePages, useStartConnect } from '../lib/connections'
 import { errorMessageOf } from '../lib/error-messages'
 import {
@@ -219,7 +221,7 @@ export default function Analytics() {
                       post={p}
                       page={pageMap.get(p.pageId)}
                       aiLocked={!openAiKeySet}
-                      onSimilar={() => navigate(`/soan-bai?idea=${encodeURIComponent(p.title ?? '')}`)}
+                      onSimilar={() => navigate(similarPostLink(p))}
                     />
                   ))}
                 </ul>

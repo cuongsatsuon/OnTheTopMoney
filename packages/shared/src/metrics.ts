@@ -107,7 +107,9 @@ export type PagePerformanceDto = z.infer<typeof PagePerformanceDto>
 
 /**
  * Một bài tốt nhất — mỗi target (bài trên một trang) một dòng; số liệu = snapshot mới nhất (tổng trọn đời). `ai` cùng
- * luật Lịch nội dung (slot chiến dịch / caption AI / ảnh AI). `title` = đầu caption (trống → `null`).
+ * luật Lịch nội dung (slot chiến dịch / caption AI / ảnh AI). `title` = đầu caption (trống → `null`). `idea` (Story 8.4)
+ * = ý tưởng tóm từ caption của chính target (bỏ hashtag / link / emoji, cắt theo câu; không gọi AI) — "Tạo bài tương tự"
+ * điền sẵn vào Soạn bài; không còn chữ → `null`.
  */
 export const TopPostDto = z.object({
   targetId: z.uuid(),
@@ -115,6 +117,7 @@ export const TopPostDto = z.object({
   pageId: z.uuid(),
   publishedAt: IsoDateTime,
   title: z.string().nullable(),
+  idea: z.string().nullable(),
   permalink: z.string().nullable(),
   thumbnailUrl: z.string().nullable(),
   ai: z.boolean(),

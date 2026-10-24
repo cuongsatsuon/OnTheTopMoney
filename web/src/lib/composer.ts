@@ -7,6 +7,8 @@
 // Story 6.3: sinh 4 ảnh AI (`POST /media-assets/generate` → 4 ô đang sinh), trạng thái ô đọc lại qua
 // `GET /media-assets/generated` khi SSE báo `media_asset.created|failed` (khoá query gốc `media_assets`); lưới ảnh dựng
 // bằng `imageTiles` (ô chờ / ô lỗi / ảnh, rồi kho ảnh của bài).
+// Story 8.4: "Tạo bài tương tự" từ Hiệu suất mở `/soan-bai?idea=<ý tưởng>&trang=<pageId>` (`similarPostLink`) — bài mới
+// chọn đúng trang đó làm đích (`startSelection`), chỉ nạp state, AI chạy khi chủ shop bấm "Tạo bằng AI".
 import {
   ComposeCaptionsResponse,
   GeneratedImagesResponse,
@@ -43,6 +45,10 @@ import type { AiLock } from './openai'
 
 /** Tham số URL của nháp đang mở (`/soan-bai?bai=<postId>`). */
 export const POST_PARAM = 'bai'
+/** Ý tưởng điền sẵn cho bài mới (`/soan-bai?idea=…`). */
+export const IDEA_PARAM = 'idea'
+/** Trang đích chọn sẵn cho bài mới (`/soan-bai?trang=<pageId>`) — "Tạo bài tương tự" (Story 8.4). */
+export const TARGET_PAGE_PARAM = 'trang'
 
 const PLATFORM_NAME: Record<Platform, string> = { facebook: 'Facebook', instagram: 'Instagram', threads: 'Threads' }
 
@@ -72,6 +78,27 @@ export function initialSelection(scope: Scope, pages: readonly PageDto[]): strin
   if (scope.kind === 'group') return pages.filter((p) => p.groupId === scope.id && isSelectable(p)).map((p) => p.id)
   if (scope.kind === 'page') return pages.filter((p) => p.id === scope.id && isSelectable(p)).map((p) => p.id)
   return []
+}
+
+/** Link mở Soạn bài cho "Tạo bài tương tự": ý tưởng tóm từ caption gốc (server) + trang của bài; ý tưởng `null` → bỏ. */
+export function similarPostLink(post: { idea: string | null; pageId: string }): string {
+  const q = new URLSearchParams()
+  if (post.idea) q.set(IDEA_PARAM, post.idea)
+  q.set(TARGET_PAGE_PARAM, post.pageId)
+  return `/soan-bai?${q}`
+}
+
+export const SOURCE_PAGE_UNAVAILABLE = 'Trang của bài gốc đã mất kết nối hoặc đã gỡ — chọn trang đích khác.'
+
+/**
+ * Chọn sẵn cho bài mới: có `?trang=` và trang đó chọn được → chỉ trang đó (bỏ Phạm vi); không có / mất kết nối → theo
+ * Phạm vi + `unavailable` (báo trên ô "Đăng lên"); không có `?trang=` → theo Phạm vi.
+ */
+export function startSelection(scope: Scope, pages: readonly PageDto[], pageParam: string | null): { ids: string[]; unavailable: boolean } {
+  if (!pageParam) return { ids: initialSelection(scope, pages), unavailable: false }
+  const page = pages.find((p) => p.id === pageParam)
+  if (page && isSelectable(page)) return { ids: [page.id], unavailable: false }
+  return { ids: initialSelection(scope, pages), unavailable: true }
 }
 
 /** Bấm ô của nhóm: đã chọn đủ các trang chọn được → bỏ cả nhóm; ngược lại → thêm các trang còn thiếu. */

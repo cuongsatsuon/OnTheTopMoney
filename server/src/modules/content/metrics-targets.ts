@@ -3,10 +3,12 @@
 // Story 8.2 (màn Hiệu suất): `listPublishedInRange` (id bài đã đăng trong kỳ — đếm bài theo trang, ứng viên "bài tốt
 // nhất") và `describePublishedTargets` (chi tiết vài bài đã chọn, cùng luật `ai` / tiêu đề với Lịch nội dung).
 // Story 8.3: `listPublishedInRange` trả thêm cờ `ai` (cùng luật) — "Hiệu quả AI" so bài AI tạo với bài tự viết.
+// Story 8.4: `describePublishedTargets` trả thêm `idea` (tóm caption, `similar.ts`) cho "Tạo bài tương tự".
 import type { PostSource } from '@ottm/shared'
 import { and, desc, eq, gte, inArray, isNotNull, lt, sql } from 'drizzle-orm'
 import type { DbExecutor } from '../../platform/db/index.ts'
 import { calendarTitle } from './calendar.ts'
+import { similarIdea } from './similar.ts'
 import { mediaAssets, postTargetMedia, postTargets, posts } from './schema.ts'
 
 /** Tối đa bài mỗi trang mỗi lượt thu [ASSUMPTION] — 3 bài/ngày × 30 ngày = 90, dư cho trang đăng dày. */
@@ -87,6 +89,8 @@ export interface PublishedTargetInfo {
   pageId: string
   publishedAt: Date
   title: string | null
+  /** Ý tưởng tóm từ caption của target này (`similarIdea`) — `null` khi không còn chữ. */
+  idea: string | null
   permalink: string | null
   thumbnailUrl: string | null
   ai: boolean
@@ -121,6 +125,7 @@ export async function describePublishedTargets(db: DbExecutor, targetIds: readon
     pageId: r.pageId,
     publishedAt: r.publishedAt!,
     title: calendarTitle(r.caption),
+    idea: similarIdea(r.caption),
     permalink: r.permalink,
     thumbnailUrl: r.thumbnail,
     ai: r.ai,

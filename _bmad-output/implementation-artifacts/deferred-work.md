@@ -316,3 +316,9 @@
 - source_spec: `spec-8-3-hieu-qua-ai.md`
   summary: Khối "Hiệu quả AI" chưa so với kỳ trước (chỉ KPI "Tin nhắn" có %); thời gian phản hồi là trung bình — vài lượt chậm (lỗi gửi lại, OpenAI chậm) kéo số lên.
   evidence: AC 8.3 không nêu so kỳ trước. `aiReplyStats` (`server/src/modules/inbox/stats.ts`) nhận khoảng bất kỳ — gọi thêm cho kỳ trước nếu cần; có thể trả thêm trung vị / p95 (NFR1) từ cùng tập mẫu.
+- source_spec: `spec-8-4-tao-bai-tuong-tu.md`
+  summary: Kiểm bằng trình duyệt luồng "Tạo bài tương tự" với phiên chủ shop + bài đã đăng có số liệu:
+    - `/hieu-suat` › "Bài hiệu quả nhất" › "Tạo bài tương tự" → Soạn bài chỉ chọn trang của bài (nhóm của trang mở sẵn), ô ý tưởng đã tóm (không hashtag / link / emoji); tab Mạng không có `POST /posts/compose` / `POST /media-assets/generate` tới khi bấm "Tạo bằng AI";
+    - trang của bài đã mất kết nối → chọn theo Phạm vi + dòng "Trang của bài gốc đã mất kết nối hoặc đã gỡ…" (mất khi tự chọn trang); "Lưu nháp" xoá `idea` / `trang` khỏi URL;
+    - chất lượng ý tưởng tóm bằng luật (`content/similar.ts`, `SIMILAR_IDEA_MAX` 300 [ASSUMPTION]) trên caption thật nhiều dòng / nhiều emoji — nếu hay mất ý chính thì cân nhắc tóm bằng AI ngay lúc bấm "Tạo bằng AI" (vẫn không gọi AI khi mở).
+  evidence: Chỉ có test API (Postgres thật, OpenAI giả — `server/test/content-compose.test.ts`, `analytics-performance.test.ts`, `content-similar.test.ts`) và test helper web (`web/src/lib/composer.test.ts`); chưa chạy UI (dev không có mật khẩu mẫu).
