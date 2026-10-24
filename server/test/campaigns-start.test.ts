@@ -444,15 +444,19 @@ describe('sau khi bắt đầu', () => {
 /* ---------- Danh sách ---------- */
 
 describe('GET /campaigns', () => {
-  it('theo phạm vi: nháp (tổng bài theo kế hoạch) + đang chạy (đã đăng, chờ duyệt, bài kế, trend 7 ngày, số ngày); scope sai 400, lạ 404', async () => {
+  it('theo phạm vi: nháp (tổng bài theo kế hoạch) + đang chạy (đã đăng, chờ duyệt, bài kế, tương tác 7 ngày, số ngày); scope sai 400, lạ 404', async () => {
     const a = await page('facebook')
     const b = await page('threads')
     const run = await previewed([{ pageId: a.id, frequency: null }], { name: 'Đang chạy' })
     await started(run.id)
     const draft = await created(body([{ pageId: b.id, frequency: '2_per_day' }], { name: 'Nháp', postTimes: ['08:00', '20:00'], durationDays: 7 }))
-    // Một bài đã đăng hôm qua (giờ VN) → trend[5] = 1.
+    // Story 8.5: một bài đã đăng hôm qua (giờ VN), snapshot tương tác hôm qua 5 → hôm nay 12 → trend [.., 5, 7]; chiến dịch
+    // mới chạy (chưa đủ 14 ngày) → không so kỳ trước.
     const [first] = await slotRows(run.id)
     await handle.sql`update post_targets set status = 'published', published_at = ${new Date(Date.now() - DAY).toISOString()} where id = ${first!.id}`
+    const vnDay = (back: number) => new Date(Date.now() + 7 * 3_600_000 - back * DAY).toISOString().slice(0, 10)
+    await handle.sql`insert into post_metrics (post_target_id, page_id, metric_date, engagement, fetched_at)
+      values (${first!.id}, ${a.id}, ${vnDay(1)}, 5, now()), (${first!.id}, ${a.id}, ${vnDay(0)}, 12, now())`
 
     const list = async (qs = '') => {
       const res = await api('GET', `/api/v1/campaigns${qs}`)
@@ -464,7 +468,9 @@ describe('GET /campaigns', () => {
     expect(all[0]).toMatchObject({ status: 'draft', postsTotal: 14, postsDone: 0, postsPending: 0, nextPost: null, daysDone: 0, startedAt: null })
     const running = all[1]!
     expect(running).toMatchObject({ status: 'running', postsTotal: 30, postsDone: 1, postsPending: 6, daysDone: 0 })
-    expect(running.trend).toEqual([0, 0, 0, 0, 0, 1, 0])
+    expect(running.trend).toEqual([0, 0, 0, 0, 0, 5, 7])
+    expect(running.engagement7d).toEqual({ current: 12, previous: null })
+    expect(all[0]!.engagement7d).toEqual({ current: null, previous: null })
     expect(running.nextPost).toBe((await slotRows(run.id))[1]!.slot_at.toISOString())
 
     expect((await list(`?scope=page:${a.id}`)).map((c) => c.id)).toEqual([run.id])

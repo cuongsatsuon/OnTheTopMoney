@@ -101,16 +101,16 @@ development_status:
   7-6-chiến-dịch-tự-tạm-dừng-khi-có-sự-cố: review
   epic-7-retrospective: optional
 
-  epic-8: in-progress
+  epic-8: review
   8-1-thu-thập-số-liệu-trang-và-bài: review
   8-2-màn-hiệu-suất-theo-phạm-vi: review
   8-3-hiệu-quả-ai: review
   8-4-tạo-bài-tương-tự: review
-  8-5-tổng-quan-với-việc-cần-xử-lý-thật: in-progress
+  8-5-tổng-quan-với-việc-cần-xử-lý-thật: review
   epic-8-retrospective: optional
 
-  epic-9: backlog
-  9-1-trang-chính-sách-và-callback-xoá-dữ-liệu-của-meta: backlog
+  epic-9: in-progress
+  9-1-trang-chính-sách-và-callback-xoá-dữ-liệu-của-meta: in-progress
   9-2-xoá-khách-và-dữ-liệu-theo-yêu-cầu: backlog
   9-3-dọn-dữ-liệu-theo-thời-hạn: backlog
   9-4-hồ-sơ-app-review-và-chuyển-live: backlog

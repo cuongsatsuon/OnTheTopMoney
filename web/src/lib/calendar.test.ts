@@ -9,15 +9,18 @@ import {
   isGroupOverdue,
   addMonths,
   calendarCounts,
+  calendarHref,
   calendarKey,
   calendarTitle,
   canCancel,
   canDrag,
   dayLabel,
+  dayParamOf,
   dropAt,
   filterItems,
   groupCalendarItems,
   groupCalls,
+  groupKeyOfTarget,
   groupPages,
   groupTitle,
   groupStatusText,
@@ -264,5 +267,21 @@ describe('chiến dịch tạm dừng trên lịch (Story 7.5)', () => {
     const [published] = groupCalendarItems([item(5, { campaignId: c, source: 'campaign', status: 'published', held: true })])
     expect(isGroupHeld(published!)).toBe(false)
     expect(groupStatusText(published!, NOW)).toBe('Đã đăng')
+  })
+})
+
+describe('mở thẳng một bài từ Tổng quan (Story 8.5)', () => {
+  it('link theo ngày VN của giờ đăng; tham số ngày sai dạng bị bỏ; tìm ô chứa target', () => {
+    expect(calendarHref(id(101), SAT)).toBe(`/lich?bai=${id(101)}&ngay=2026-10-31`)
+    // 23:30 UTC 31/10 = 06:30 VN 01/11 → ngày VN, không phải ngày UTC.
+    expect(calendarHref(id(101), '2026-10-31T23:30:00.000Z')).toBe(`/lich?bai=${id(101)}&ngay=2026-11-01`)
+    expect(dayParamOf('2026-10-31')).toBe('2026-10-31')
+    expect(dayParamOf('31/10/2026')).toBeNull()
+    expect(dayParamOf('2026-13-45')).toBeNull()
+    expect(dayParamOf(null)).toBeNull()
+    const groups = groupCalendarItems([item(1), item(2, { postId: id(2), scheduledAt: '2026-10-30T12:00:00.000Z' })])
+    expect(groupKeyOfTarget(groups, id(102))).toBe(groups[0]!.key)
+    expect(groupKeyOfTarget(groups, id(101))).toBe(groups[1]!.key)
+    expect(groupKeyOfTarget(groups, id(999))).toBeNull()
   })
 })

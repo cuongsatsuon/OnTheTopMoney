@@ -33,6 +33,7 @@ import { registerNotifications } from './notifications.ts'
 import { registerOAuth } from './oauth.ts'
 import { registerOnboarding } from './onboarding.ts'
 import { registerOpenAiSettings } from './openai-settings.ts'
+import { registerOverview } from './overview.ts'
 import { registerPages } from './pages.ts'
 import { registerPerformance } from './performance.ts'
 import { registerPosts } from './posts.ts'
@@ -172,6 +173,8 @@ export function buildApp({ sql, db, logger, http = {}, loginLimiter, health, eve
   registerSearch(app, { db })
   // Hiệu suất (Story 8.2): chỉ đọc số liệu `analytics` đã thu (không gọi Meta theo request).
   registerPerformance(app, { db, ...(clock ? { now: clock } : {}) })
+  // Tổng quan (Story 8.5): read-model ghép việc cần xử lý từ các module + số liệu chính của `analytics`.
+  registerOverview(app, { db, ...(clock ? { now: clock } : {}) })
   // Màn chào 4 bước (Story 5.7): trạng thái dẫn xuất từ trang, khoá OpenAI (cần `cipher`), hồ sơ, cấu hình AI, tin AI.
   registerOnboarding(app, { db, cipher: ai?.cipher ?? null })
   // Viết thử bằng AI (Story 3.4) + Gợi ý bằng AI ở Hộp thư (Story 4.8) + Thử AI trả lời (Story 5.3) + caption Soạn bài

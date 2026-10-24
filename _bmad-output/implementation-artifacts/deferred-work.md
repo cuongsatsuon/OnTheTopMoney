@@ -50,9 +50,6 @@
   summary: Dead-letter + thông báo (critical) cho `webhook.route` hết retry — comment ở `queues.ts` từng hứa làm ở 4.2.
   evidence: 4.2 giữ `webhook.route` không critical (spec chỉ yêu cầu banner sức khoẻ, không tạo thông báo). Mục hỏng vẫn ghi `failed` + "Xử lý lại" ở nhật ký. Làm khi mở rộng trung tâm thông báo (cần NotificationType/prefs).
 - source_spec: `spec-4-2-dang-ky-webhook-va-suc-khoe.md`
-  summary: API sức khoẻ webhook coi trạng thái cũ là cũ khi `webhook_health.checked_at` quá ~2 chu kỳ cron (worker/cron chết).
-  evidence: `getWebhookHealth` tin dòng cron bất kể `checked_at`; worker chết thì trạng thái `ok` giữ mãi.
-- source_spec: `spec-4-2-dang-ky-webhook-va-suc-khoe.md`
   summary: Cho đăng ký lại webhook một trang lỗi (nút ở Cài đặt/Chi tiết trang hoặc cron thử lại FAILED/REJECTED).
   evidence: Chạy bù chỉ chọn trang chưa có lỗi; hiện trang FAILED chỉ phục hồi bằng kết nối lại OAuth.
 - source_spec: `spec-4-2-dang-ky-webhook-va-suc-khoe.md`
@@ -240,9 +237,6 @@
     - trang mất kết nối giữa lúc lưu và lúc bắt đầu → về bước 2 kèm câu dưới trang; chế độ "Tự đăng" → bài xem trước lên lịch xanh.
   evidence: Chỉ có test API (Postgres thật, `server/test/campaigns-start.test.ts`) và test helper web (`web/src/lib/campaigns.test.ts`, `calendar.test.ts`); chưa chạy UI (dev không có mật khẩu mẫu).
 - source_spec: `spec-7-3-bat-dau-chien-dich.md`
-  summary: `trend` của thẻ chiến dịch là số bài đã đăng mỗi ngày (7 ngày), không phải tương tác — nhãn thẻ đổi thành "Bài đã đăng 7 ngày". UX gốc là "Tương tác 7 ngày ±x%".
-  evidence: Chưa có số liệu tương tác (`post_metrics` — Story 8.1). Khi có: `content.campaignProgress` (hoặc read-model) ghép tương tác theo ngày từ `analytics`, đổi lại nhãn + % thay đổi.
-- source_spec: `spec-7-3-bat-dau-chien-dich.md`
   summary: `Group.activeCampaigns` (Trang & Nhóm, Chi tiết nhóm) và `pages.affectedByMove().campaigns` vẫn là dữ liệu mẫu / rỗng.
   evidence: Story 7.5 đã làm lý do tạm dừng trên thẻ + nút Tạm dừng / Tiếp tục ở `/chien-dich` và Tổng quan (`campaigns.pause_reason`). Read-model `app/read-models/campaigns.ts` là chỗ ghép `Group.activeCampaigns` khi Trang & Nhóm bỏ dữ liệu mẫu; cảnh báo chuyển nhóm cần chiến dịch gắn nhãn nhóm (`campaigns.group_id`).
 - source_spec: `spec-7-4-sinh-cuon-chieu-va-hang-doi-duyet.md`
@@ -322,3 +316,18 @@
     - trang của bài đã mất kết nối → chọn theo Phạm vi + dòng "Trang của bài gốc đã mất kết nối hoặc đã gỡ…" (mất khi tự chọn trang); "Lưu nháp" xoá `idea` / `trang` khỏi URL;
     - chất lượng ý tưởng tóm bằng luật (`content/similar.ts`, `SIMILAR_IDEA_MAX` 300 [ASSUMPTION]) trên caption thật nhiều dòng / nhiều emoji — nếu hay mất ý chính thì cân nhắc tóm bằng AI ngay lúc bấm "Tạo bằng AI" (vẫn không gọi AI khi mở).
   evidence: Chỉ có test API (Postgres thật, OpenAI giả — `server/test/content-compose.test.ts`, `analytics-performance.test.ts`, `content-similar.test.ts`) và test helper web (`web/src/lib/composer.test.ts`); chưa chạy UI (dev không có mật khẩu mẫu).
+- source_spec: `spec-8-5-tong-quan.md`
+  summary: Kiểm bằng trình duyệt Tổng quan `/` với phiên chủ shop + worker:
+    - KPI / biểu đồ đổi theo Phạm vi và 7 / 30 / 90 ngày, "AI đã trả lời X%", trang mới kết nối → "Cần thêm vài ngày dữ liệu";
+    - "Cần bạn xử lý": tin khách mới / AI chuyển người hiện trong ≤3 giây (SSE), "Mở hộp thư" mở tab "Cần xử lý", bấm hội thoại mở đúng khách; bài lỗi → "Đăng lại" + link mở đúng ngăn trên Lịch (`/lich?bai=&ngay=`); trang mất kết nối / sắp hết hạn → "Kết nối lại" mở OAuth đúng trang; webhook ngừng / hạn mức AI / chiến dịch tự dừng / bài chờ duyệt dẫn đúng màn;
+    - bài sắp đăng, thẻ chiến dịch (Tạm dừng / Tiếp tục, lý do), bảng trang (AI trả lời chỉ xem); `/chien-dich` dòng "Tương tác 7 ngày ±x%".
+  evidence: Chỉ có test API (Postgres thật, `server/test/overview.test.ts`, `campaigns-start.test.ts`, `webhook-health.test.ts`) và test helper web (`web/src/lib/overview.test.ts`, `realtime.test.ts`, `calendar.test.ts`, `inbox.test.ts`, `campaigns.test.ts`); chưa chạy UI (dev không có mật khẩu mẫu).
+- source_spec: `spec-8-5-tong-quan.md`
+  summary: Bảng "Trang đã kết nối" ở Tổng quan bỏ cột "Người theo dõi" (số mẫu) — `analytics` chỉ thu `followers_delta` theo ngày, không thu tổng người theo dõi của trang.
+  evidence: `page_daily_metrics` không có cột tổng; Meta có `followers_count` (FB / IG) / `followers_count` Threads. Hướng làm: thêm vào lượt `analytics.page_metrics` (một giá trị mỗi ngày) rồi trả trong `GET /pages` hoặc read-model.
+- source_spec: `spec-8-5-tong-quan.md`
+  summary: Tương tác 7 ngày của thẻ chiến dịch dồn cả mức trọn đời của bài vào ngày snapshot đầu tiên khi bài cũ chỉ bắt đầu có số liệu trong cửa sổ 14 ngày (lúc mới bật thu 8.1 / trang mới cấp quyền thống kê) — gai một ngày trên sparkline.
+  evidence: `analytics/engagement.ts` (chưa có mức trước → cả mức là phần tăng, đúng cho bài mới đăng). Hướng làm: truyền `published_at` từ `content` và chỉ tính cả mức khi bài đăng trong cửa sổ.
+- source_spec: `spec-8-5-tong-quan.md`
+  summary: Tổng quan refetch cả `GET /overview` (~15 câu: hội thoại, bài lỗi / sắp đăng, chiến dịch + `engagementGains`, sức khoẻ webhook, hạn mức AI) cho MỖI hint `message` / `conversation` / `contact` — tin / bình luận dồn dập (livestream) thì server tính đủ một lượt cho mỗi tin (client huỷ request đang bay nhưng server vẫn chạy).
+  evidence: `ENTITY_ALSO_INVALIDATES` + `handleHint` (`invalidateQueries`, mặc định `cancelRefetch`) ở `web/src/lib/realtime.ts` (review lượt 1). Hướng làm: gom hint theo gốc khoá — throttle có lượt cuối (vd. 1 giây, vẫn ≤3 giây của AC) cho `['overview', …]`, hoặc `cancelRefetch: false` + đánh dấu "cần tải lại" khi lượt đang bay xong.

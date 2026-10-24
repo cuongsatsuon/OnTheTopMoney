@@ -53,6 +53,7 @@ import { CALENDAR_ROOT_KEY, todayKey } from './calendar'
 import { aiErrorText, imageFailureText } from './composer'
 import { errorMessageOf } from './error-messages'
 import { serverScope } from './inbox'
+import { deltaPct } from './performance'
 import { defaultScheduleInput, isoToVnInput } from './publish'
 
 /** Tham số URL của nháp đang mở (`/chien-dich/tao?id=<campaignId>`). */
@@ -530,8 +531,17 @@ export function nextPostLabel(c: Pick<CampaignSummaryDto, 'status' | 'nextPost'>
   return c.nextPost ? relativeVnTime(c.nextPost, now) : 'Chưa có bài sắp đăng'
 }
 
-/** Tổng bài đã đăng trong `trend` (7 ngày gần nhất). */
-export const trendTotal = (trend: readonly number[]) => trend.reduce((n, v) => n + v, 0)
+/**
+ * Dòng dưới sparkline của thẻ (Story 8.5): "Tương tác 7 ngày: 1.234 · +12%" (% chỉ khi server có kỳ trước — chiến dịch
+ * chạy đủ 14 ngày); chưa bài nào có số liệu → "Chưa có số liệu tương tác".
+ */
+export function engagementText(c: Pick<CampaignSummaryDto, 'engagement7d'>): string {
+  const { current } = c.engagement7d
+  if (current === null) return 'Chưa có số liệu tương tác'
+  const pct = deltaPct(c.engagement7d)
+  const delta = pct === undefined ? '' : ` · ${pct >= 0 ? '+' : ''}${pct.toLocaleString('vi-VN')}%`
+  return `Tương tác 7 ngày: ${current.toLocaleString('vi-VN')}${delta}`
+}
 
 /** Số chiến dịch theo trạng thái + tổng (tab ở `/chien-dich`). */
 export function campaignCounts(items: readonly Pick<CampaignSummaryDto, 'status'>[]): Record<CampaignStatus | 'all', number> {

@@ -1,6 +1,6 @@
 // Story 4.2 — sức khoẻ webhook: `computeHealthStatus` (biên 08:00 / 08:30 / 22:00 / 30 phút, giờ VN),
 // cron `runHealthCheck` (chuyển trạng thái phát `webhook.stalled|recovered` đúng một lần, cùng transaction) và
-// `GET /api/v1/webhooks/health` (sản phẩm + trang đăng ký lỗi, chỉ trang chưa gỡ).
+// `GET /api/v1/webhooks/health` (sản phẩm + trang đăng ký lỗi, chỉ trang chưa gỡ). Story 8.5: dòng cron cũ → tính lại.
 import { WebhookHealthResponse, type EventName } from '@ottm/shared'
 import type { FastifyInstance } from 'fastify'
 import type { PgBoss } from 'pg-boss'
@@ -257,6 +257,20 @@ describe('GET /api/v1/webhooks/health', () => {
       { product: 'threads', status: 'waiting_first', lastEventAt: null },
     ])
     expect(body.pageSubscriptionErrors).toEqual([{ pageId: fb, name: expect.any(String), platform: 'facebook', errorCode: 'PERMISSION_DENIED' }])
+  })
+
+  it('Story 8.5: dòng cron cũ (worker chết) → tính lại tại chỗ; dòng còn mới → giữ trạng thái cron', async () => {
+    await insertPage('facebook')
+    await insertEvent('meta', ago(fixedNow, 40))
+    // Cron cuối chạy lúc 09:40 (khi đó im mới 0 phút → `ok`), quá `HEALTH_STALE_AFTER_MS` → API tự tính: im 40 phút → stalled.
+    await run(ago(fixedNow, 20))
+    expect((await healthRow('meta'))!.status).toBe('ok')
+    const stale = WebhookHealthResponse.parse((await get(await cookie())).json())
+    expect(stale.products[0]).toMatchObject({ product: 'meta', status: 'stalled' })
+    // Cron 10 phút trước (≤ 15 phút) → tin dòng cron dù tính tại chỗ ra khác.
+    await handle.sql`update webhook_health set checked_at = ${ago(fixedNow, 10).toISOString()}, status = 'ok' where product = 'meta'`
+    const recent = WebhookHealthResponse.parse((await get(await cookie())).json())
+    expect(recent.products[0]).toMatchObject({ product: 'meta', status: 'ok' })
   })
 
   it('chưa có dòng cron → tính tại chỗ', async () => {

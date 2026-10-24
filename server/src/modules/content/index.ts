@@ -32,6 +32,7 @@ export { POST_IMAGE_VALIDATION, recordMediaAsset, toGeneratedImageDto, toMediaAs
 export { AI_STOP_CODES, COMPOSE_CONCURRENCY, composeCaptionForPage, composeCaptions, type ComposeBrief, type ComposeDeps } from './compose.ts'
 // Slot chiến dịch (Story 7.2, AD-13, AD-15): tạo / dọn slot theo kế hoạch của `campaigns`, sinh caption + ảnh, đọc xem trước.
 // Story 7.4: lease khi sinh, cửa sổ cuốn chiếu (`listSlotsToGenerate({until})`), hàng đợi "Bài chờ duyệt", nháp kẹt.
+// Story 8.5: `countPendingSlots` — số bài chờ duyệt cho Tổng quan.
 export {
   SLOT_GENERATE_LEASE_MS,
   SlotGenerateRetryableError,
@@ -40,6 +41,7 @@ export {
   generateSlot,
   getCampaignSlot,
   listCampaignSlots,
+  countPendingSlots,
   listPendingSlots,
   listSlotsToGenerate,
   pruneCampaignSlots,
@@ -95,6 +97,9 @@ export {
   type PublishedRef,
   type PublishedTargetInfo,
 } from './metrics-targets.ts'
+
+// Tổng quan (Story 8.5): bài đăng lỗi + bài sắp đăng gom theo bài (read-model `app/read-models/overview.ts`).
+export { listFailedPosts, listUpcomingPosts, type OverviewPostsInput } from './overview.ts'
 
 /** Chỉ để `analytics` khai khoá ngoại `post_metrics.post_target_id` (Drizzle cần đối tượng bảng); không truy vấn trực tiếp. */
 export { postTargets as postTargetsTable } from './schema.ts'

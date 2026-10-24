@@ -16,7 +16,7 @@ import {
   type ParsedSaveCampaignRequest,
   type PauseReason,
 } from '@ottm/shared'
-import { asc, eq, sql } from 'drizzle-orm'
+import { asc, eq, inArray, sql } from 'drizzle-orm'
 import type { DbExecutor } from '../../platform/db/index.ts'
 import { AppError } from '../../platform/errors/index.ts'
 import { getGroup, getPage } from '../pages/index.ts'
@@ -110,28 +110,42 @@ export async function updateCampaignDraft(tx: DbExecutor, id: string, input: Par
 
 /** Một chiến dịch (mọi trạng thái); `null` khi không có. Trang đã gỡ vẫn trả — wizard tự lọc theo `GET /pages`. */
 export async function getCampaign(db: DbExecutor, id: string): Promise<CampaignDto | null> {
-  const [row] = await db.select().from(campaigns).where(eq(campaigns.id, id))
-  if (!row) return null
-  const topics = await db.select().from(campaignTopics).where(eq(campaignTopics.campaignId, id)).orderBy(asc(campaignTopics.position))
-  const pages = await db.select().from(campaignPages).where(eq(campaignPages.campaignId, id)).orderBy(asc(campaignPages.position))
-  return {
-    id: row.id,
-    name: row.name,
-    goal: row.goal as CampaignGoal,
-    status: row.status as CampaignStatus,
-    mode: row.mode as CampaignMode,
-    startDate: row.startDate,
-    durationDays: row.durationDays,
-    groupId: row.groupId,
-    defaultFrequency: row.defaultFrequency as CampaignFrequency,
-    pages: pages.map((p) => ({ pageId: p.pageId, frequency: p.frequency as CampaignFrequency | null })),
-    topics: topics.map((t) => ({ name: t.name, share: t.share })),
-    postTimes: row.postTimes,
-    imageRatio: row.imageRatio,
-    startedAt: row.startedAt?.toISOString() ?? null,
-    pauseReason: (row.pauseReason as PauseReason | null) ?? null,
-    pausedAt: row.pausedAt?.toISOString() ?? null,
-    createdAt: row.createdAt.toISOString(),
-    updatedAt: row.updatedAt.toISOString(),
-  }
+  return (await getCampaigns(db, [id]))[0] ?? null
+}
+
+/** Nhiều chiến dịch theo thứ tự `ids` (id không có thì bỏ) — ba câu cố định (Story 8.5: danh sách / Tổng quan không N+1). */
+export async function getCampaigns(db: DbExecutor, ids: readonly string[]): Promise<CampaignDto[]> {
+  if (!ids.length) return []
+  const [rows, topics, pages] = await Promise.all([
+    db.select().from(campaigns).where(inArray(campaigns.id, [...ids])),
+    db.select().from(campaignTopics).where(inArray(campaignTopics.campaignId, [...ids])).orderBy(asc(campaignTopics.position)),
+    db.select().from(campaignPages).where(inArray(campaignPages.campaignId, [...ids])).orderBy(asc(campaignPages.position)),
+  ])
+  const byId = new Map(rows.map((r) => [r.id, r]))
+  return ids.flatMap((id): CampaignDto[] => {
+    const row = byId.get(id)
+    if (!row) return []
+    return [
+      {
+        id: row.id,
+        name: row.name,
+        goal: row.goal as CampaignGoal,
+        status: row.status as CampaignStatus,
+        mode: row.mode as CampaignMode,
+        startDate: row.startDate,
+        durationDays: row.durationDays,
+        groupId: row.groupId,
+        defaultFrequency: row.defaultFrequency as CampaignFrequency,
+        pages: pages.filter((p) => p.campaignId === id).map((p) => ({ pageId: p.pageId, frequency: p.frequency as CampaignFrequency | null })),
+        topics: topics.filter((t) => t.campaignId === id).map((t) => ({ name: t.name, share: t.share })),
+        postTimes: row.postTimes,
+        imageRatio: row.imageRatio,
+        startedAt: row.startedAt?.toISOString() ?? null,
+        pauseReason: (row.pauseReason as PauseReason | null) ?? null,
+        pausedAt: row.pausedAt?.toISOString() ?? null,
+        createdAt: row.createdAt.toISOString(),
+        updatedAt: row.updatedAt.toISOString(),
+      },
+    ]
+  })
 }

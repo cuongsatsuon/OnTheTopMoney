@@ -161,16 +161,23 @@ export async function listPendingSlots(
   opts: { campaignIds: readonly string[]; pageIds: readonly string[] | null; limit: number },
 ): Promise<(CampaignSlotDto & { campaignId: string })[]> {
   if (!opts.campaignIds.length || (opts.pageIds !== null && !opts.pageIds.length)) return []
-  return readSlots(
-    db,
-    and(
-      inArray(postTargets.campaignId, [...opts.campaignIds]),
-      eq(postTargets.status, 'pending_approval' satisfies PostTargetStatus),
-      eq(postTargets.held, false),
-      opts.pageIds === null ? undefined : inArray(postTargets.pageId, [...opts.pageIds]),
-    ),
-    { byScheduled: true, limit: opts.limit },
+  return readSlots(db, pendingSlotsWhere(opts), { byScheduled: true, limit: opts.limit })
+}
+
+/** Điều kiện chung của hàng đợi "Bài chờ duyệt" và số đếm của nó. */
+const pendingSlotsWhere = (opts: { campaignIds: readonly string[]; pageIds: readonly string[] | null }) =>
+  and(
+    inArray(postTargets.campaignId, [...opts.campaignIds]),
+    eq(postTargets.status, 'pending_approval' satisfies PostTargetStatus),
+    eq(postTargets.held, false),
+    opts.pageIds === null ? undefined : inArray(postTargets.pageId, [...opts.pageIds]),
   )
+
+/** Story 8.5: số bài trong hàng đợi "Bài chờ duyệt" (cùng tập `listPendingSlots`, không giới hạn) — Tổng quan. */
+export async function countPendingSlots(db: DbExecutor, opts: { campaignIds: readonly string[]; pageIds: readonly string[] | null }): Promise<number> {
+  if (!opts.campaignIds.length || (opts.pageIds !== null && !opts.pageIds.length)) return 0
+  const [row] = await db.select({ n: sql<number>`count(*)::int` }).from(postTargets).where(pendingSlotsWhere(opts))
+  return row?.n ?? 0
 }
 
 /** Chiến dịch của một target (`null` = không có target / không phải slot) — route kiểm slot thuộc chiến dịch. */

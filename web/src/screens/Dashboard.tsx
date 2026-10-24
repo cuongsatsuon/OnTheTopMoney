@@ -1,8 +1,19 @@
-import { ArrowRight, CalendarClock, Clock, Eye, Heart, MessageCircle, Pause, Play, RotateCcw, UserPlus } from 'lucide-react'
+// Tổng quan `/` (Story 8.5): mọi phần đọc server theo Phạm vi — không còn dữ liệu mẫu.
+// - Số liệu chính (`GET /overview/metrics`, cùng nguồn + kỳ với Hiệu suất): KPI tiếp cận / tương tác / tin nhắn ("AI đã trả
+//   lời X%") / người theo dõi mới + % kỳ trước, biểu đồ tương tác theo nền tảng (7 / 30 / 90 ngày).
+// - Việc cần xử lý (`GET /overview`): cảnh báo theo mức gấp (`attentionItems` — hạn mức AI, webhook, trang, chiến dịch tự
+//   dừng, bài lỗi, bài chờ duyệt), rồi hội thoại "Cần xử lý" chờ lâu nhất. Mỗi mục dẫn tới đúng chỗ xử lý; "Kết nối lại" /
+//   "Đăng lại" bấm ngay tại chỗ. Hint realtime làm cũ `['overview', …]` → refetch ngay (lib/realtime.ts).
+// - Bài sắp đăng (mở đúng bài trên Lịch), chiến dịch đang chạy (Tạm dừng / Tiếp tục ngay, lý do tạm dừng — Story 7.5),
+//   bảng trang (trạng thái kết nối thật, AI trả lời đọc từ cấu hình thật).
+import { AlertTriangle, ArrowRight, CalendarClock, ChevronRight, Clock, Eye, Heart, MessageCircle, Pause, Play, RefreshCw, RotateCcw, UserPlus } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { useQueryClient } from '@tanstack/react-query'
+import type { OverviewPostDto, PageDto, PerformanceRange } from '@ottm/shared'
 import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { Content } from '../components/AppShell'
+import { Skeleton } from '../components/Skeleton'
 import {
   AiBadge,
   Button,
@@ -19,155 +30,149 @@ import {
   Progress,
   Segmented,
   StatusChip,
-  Switch,
   cn,
   platformColor,
   platformLabel,
 } from '../components/ui'
-import {
-  compact,
-  contactById,
-  conversations,
-  engagement30d,
-  formatNumber,
-  pageById,
-  pages,
-  posts,
-  type Platform,
-  type Post,
-} from '../data/mock'
+import { compact, formatNumber } from '../data/mock'
 import { useApp } from '../lib/app-context'
-import { activeCampaigns as activeOf, campaignPct, goalOf, lifecycleToast, nextPostLabel, pausedNote, resumeErrorText, useCampaignLifecycle, useCampaigns } from '../lib/campaigns'
+import { useAutoreplyOverview } from '../lib/autoreply'
+import { calendarHref } from '../lib/calendar'
+import { campaignPct, goalOf, lifecycleToast, nextPostLabel, pausedNote, relativeVnTime, resumeErrorText, useCampaignLifecycle } from '../lib/campaigns'
+import { needsReconnect, reconnectInput, uiPageOf, usePages, useStartConnect } from '../lib/connections'
 import { errorMessageOf } from '../lib/error-messages'
-import { needsReconnect } from '../lib/connections'
-
-type Range = '7d' | '30d' | 'month'
-
-const RANGES: { id: Range; label: string }[] = [
-  { id: '7d', label: '7 ngày' },
-  { id: '30d', label: '30 ngày' },
-  { id: 'month', label: 'Tháng này' },
-]
-
-/** Số ngày trong khoảng (hôm nay là 19/10 nên "Tháng này" = 19 ngày). */
-const RANGE_DAYS: Record<Range, number> = { '7d': 7, '30d': 30, month: 19 }
-
-/** Số liệu 30 ngày của toàn bộ trang; các khoảng khác và phạm vi khác được quy đổi theo tỉ lệ. */
-const BASE_30D = { reach: 486_200, engagement: 38_940, messages: 1_126, followers: 3_420 }
-
-const DELTAS: Record<Range, { reach: number; engagement: number; messages: number; followers: number }> = {
-  '7d': { reach: 6.2, engagement: 9.8, messages: 14.1, followers: 4.3 },
-  '30d': { reach: 12.4, engagement: 18.2, messages: 22.6, followers: -3.1 },
-  month: { reach: 8.7, engagement: 11.5, messages: 17.9, followers: 2.4 },
-}
-
-const PLATFORMS: Platform[] = ['facebook', 'instagram', 'threads']
-
-const TODAY = '2026-10-19'
-const WEEKDAYS = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7']
-
-function whenLabel(post: Post) {
-  const d = new Date(`${post.date}T00:00:00`)
-  const diff = Math.round((d.getTime() - new Date(`${TODAY}T00:00:00`).getTime()) / 86_400_000)
-  const day = diff === 0 ? 'Hôm nay' : diff === 1 ? 'Mai' : `${WEEKDAYS[d.getDay()]}, ${d.getDate()}/${d.getMonth() + 1}`
-  return `${day} ${post.time}`
-}
+import { contactLabel, durationLabel, inboxHref, previewText, reasonText, useNow } from '../lib/inbox'
+import {
+  OVERVIEW_ROOT_KEY,
+  aiRepliedHint,
+  attentionItems,
+  needsHumanText,
+  postLabel,
+  retryCall,
+  useOverview,
+  useOverviewMetrics,
+  type AttentionItem,
+} from '../lib/overview'
+import { INSUFFICIENT_DATA_TEXT, PERFORMANCE_RANGE_OPTIONS, deltaPct, formatDay, formatMetric, hasSeriesData } from '../lib/performance'
+import { transitionErrorMessage, useTransitionTargets } from '../lib/publish'
 
 export default function Dashboard() {
-  const { scope, scopedPages, scopeLabel, inScope, notify } = useApp()
-  const [range, setRange] = useState<Range>('30d')
-  const [autoReply, setAutoReply] = useState<Record<string, boolean>>(() => Object.fromEntries(pages.map((p) => [p.id, p.autoReply])))
-  // Story 7.3: chiến dịch thật theo Phạm vi (đang chạy + tạm dừng) kèm tiến độ từ read-model. Story 7.5: Tạm dừng /
-  // Tiếp tục ngay trên thẻ (không xác nhận), dòng lý do khi tạm dừng.
-  const campaignList = useCampaigns(scope)
+  const { scope, scopedPages, scopeLabel, notify } = useApp()
+  const qc = useQueryClient()
+  const now = useNow()
+  const [range, setRange] = useState<PerformanceRange>('30d')
+  const metrics = useOverviewMetrics(scope, range)
+  const overview = useOverview(scope)
+  const pagesQuery = usePages()
+  const autoreply = useAutoreplyOverview()
   const lifecycle = useCampaignLifecycle()
+  const transition = useTransitionTargets()
+  const startConnect = useStartConnect()
+
+  const pages = useMemo(() => pagesQuery.data ?? [], [pagesQuery.data])
+  const pageById = useMemo(() => new Map(pages.map((p) => [p.id, p])), [pages])
+  const pageName = (id: string) => pageById.get(id)?.name ?? 'Trang đã gỡ'
+  const aiOn = new Map((autoreply.data?.pages ?? []).map((s) => [s.pageId, s.enabled]))
+  const refreshOverview = () => void qc.invalidateQueries({ queryKey: OVERVIEW_ROOT_KEY })
+
+  // Story 7.5: Tạm dừng / Tiếp tục ngay trên thẻ (không xác nhận).
   const toggleCampaign = (id: string, action: 'pause' | 'resume') =>
     lifecycle.mutate(
       { id, action },
-      { onSuccess: (res) => notify(lifecycleToast(action, res)), onError: (err) => notify(action === 'resume' ? resumeErrorText(err) : errorMessageOf(err)) },
+      {
+        onSuccess: (res) => notify(lifecycleToast(action, res)),
+        onError: (err) => notify(action === 'resume' ? resumeErrorText(err) : errorMessageOf(err)),
+        onSettled: refreshOverview,
+      },
     )
 
-  // Tỉ lệ người theo dõi của phạm vi so với tổng — dùng để quy đổi số liệu mẫu theo phạm vi.
-  const scopeShare = useMemo(() => {
-    const total = pages.reduce((s, p) => s + p.followers, 0)
-    return scopedPages.reduce((s, p) => s + p.followers, 0) / total
-  }, [scopedPages])
+  /* Kết nối lại một trang (Story 2.4): OAuth với đúng trang, về Trang & Nhóm sau khi xong. */
+  const reconnect = (p: Pick<PageDto, 'id' | 'platform'>) => {
+    if (startConnect.isPending) return
+    const input = reconnectInput(p, 'pages')
+    startConnect.mutate(input, { onError: (err) => notify(errorMessageOf(err, input.provider)) })
+  }
 
-  const platformShare = useMemo(() => {
-    const out = {} as Record<Platform, number>
-    for (const pf of PLATFORMS) {
-      const all = pages.filter((p) => p.platform === pf).reduce((s, p) => s + p.followers, 0)
-      const mine = scopedPages.filter((p) => p.platform === pf).reduce((s, p) => s + p.followers, 0)
-      out[pf] = all ? mine / all : 0
-    }
-    return out
-  }, [scopedPages])
+  /* "Đăng lại ngay" mọi trang lỗi của bài. */
+  const retry = (p: OverviewPostDto) =>
+    transition.mutate(retryCall(p), {
+      onSuccess: () => notify(`Đang đăng lại lên ${p.targets.length} trang…`),
+      onError: (err) => notify(transitionErrorMessage(err, pages)),
+      onSettled: refreshOverview,
+    })
 
-  const visiblePlatforms = PLATFORMS.filter((pf) => platformShare[pf] > 0)
+  const m = metrics.data
+  const chartData = useMemo(() => (m?.series ?? []).map((p) => ({ ...p, day: formatDay(p.date) })), [m])
+  const rangeLabel = PERFORMANCE_RANGE_OPTIONS.find((r) => r.id === range)!.label.toLowerCase()
+  const kpiHint = (delta: number | undefined) => (delta === undefined ? undefined : 'so với kỳ trước')
 
-  const chartData = useMemo(
-    () =>
-      engagement30d.slice(-RANGE_DAYS[range]).map((d) => ({
-        day: d.day,
-        facebook: Math.round(d.facebook * platformShare.facebook),
-        instagram: Math.round(d.instagram * platformShare.instagram),
-        threads: Math.round(d.threads * platformShare.threads),
-      })),
-    [range, platformShare],
-  )
-
-  const k = (RANGE_DAYS[range] / 30) * scopeShare
-  const delta = DELTAS[range]
-
-  const handoffs = conversations.filter((c) => c.state === 'handoff' && inScope([c.pageId]))
-  const failedPosts = posts.filter((p) => p.status === 'failed' && inScope(p.pageIds))
-
-  const upcoming = posts
-    .filter((p) => (p.status === 'scheduled' || p.status === 'pending') && inScope(p.pageIds))
-    .sort((a, b) => `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`))
-    .slice(0, 5)
-
-  const activeCampaigns = activeOf(campaignList.data ?? [])
-
-  const rangeLabel = RANGES.find((r) => r.id === range)!.label.toLowerCase()
+  const data = overview.data
+  const attention = data ? attentionItems(data, pageName) : []
+  const nothingToDo = !!data && attention.length === 0 && data.needsHuman.count === 0
 
   return (
     <Content>
       <PageHeader
         title="Tổng quan"
         subtitle={`${scopeLabel} · ${scopedPages.length} trang`}
-        actions={<Segmented options={RANGES} value={range} onChange={setRange} />}
+        actions={<Segmented options={PERFORMANCE_RANGE_OPTIONS} value={range} onChange={setRange} />}
       />
 
-      <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
-        <KpiCard label="Lượt tiếp cận" value={formatNumber(Math.round(BASE_30D.reach * k))} delta={delta.reach} hint="so với kỳ trước" icon={<Eye size={16} />} />
-        <KpiCard label="Tương tác" value={formatNumber(Math.round(BASE_30D.engagement * k))} delta={delta.engagement} hint="so với kỳ trước" icon={<Heart size={16} />} />
-        <KpiCard
-          label="Tin nhắn mới"
-          value={formatNumber(Math.round(BASE_30D.messages * k))}
-          delta={delta.messages}
-          hint="AI đã trả lời 81%"
-          icon={<MessageCircle size={16} />}
-        />
-        <KpiCard label="Người theo dõi mới" value={formatNumber(Math.round(BASE_30D.followers * k))} delta={delta.followers} hint="so với kỳ trước" icon={<UserPlus size={16} />} />
-      </div>
+      {metrics.isPending ? (
+        <div className="grid grid-cols-2 gap-4 xl:grid-cols-4" aria-busy="true">
+          {Array.from({ length: 4 }, (_, i) => (
+            <Skeleton key={i} className="h-[104px] rounded-lg" />
+          ))}
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
+          {(
+            [
+              ['Lượt tiếp cận', m?.kpis.reach, <Eye key="i" size={16} />, undefined],
+              ['Tương tác', m?.kpis.engagement, <Heart key="i" size={16} />, undefined],
+              ['Tin nhắn mới', m?.kpis.messages, <MessageCircle key="i" size={16} />, m ? aiRepliedHint(m) : undefined],
+              ['Người theo dõi mới', m?.kpis.followersDelta, <UserPlus key="i" size={16} />, undefined],
+            ] as const
+          ).map(([label, kpi, icon, hint]) => {
+            const delta = kpi ? deltaPct(kpi) : undefined
+            return <KpiCard key={label} label={label} value={formatMetric(kpi?.current ?? null)} delta={delta} hint={hint ?? kpiHint(delta)} icon={icon} />
+          })}
+        </div>
+      )}
 
       <div className="mt-6 grid grid-cols-1 gap-6 xl:grid-cols-3">
         <Card className="xl:col-span-2">
           <CardHeader title={`Tương tác ${rangeLabel}`} subtitle="Lượt thích, bình luận, chia sẻ theo nền tảng" />
           <div className="h-[280px] px-2 pt-4 pb-2">
-            {visiblePlatforms.length === 0 ? (
+            {metrics.isPending ? (
+              <Skeleton className="h-full rounded-md" />
+            ) : !m ? (
+              <EmptyState
+                title="Không tải được số liệu"
+                action={
+                  <Button icon={<RefreshCw size={15} />} onClick={() => void metrics.refetch()}>
+                    Thử lại
+                  </Button>
+                }
+              >
+                {errorMessageOf(metrics.error)}
+              </EmptyState>
+            ) : m.platforms.length === 0 ? (
               <EmptyState title="Chưa có dữ liệu trong phạm vi này">Chọn phạm vi khác ở thanh trên.</EmptyState>
+            ) : m.insufficientData ? (
+              <EmptyState title={INSUFFICIENT_DATA_TEXT}>Trang mới kết nối chưa đủ 7 ngày — biểu đồ sẽ hiện khi đủ số liệu.</EmptyState>
+            ) : !hasSeriesData(m.series) ? (
+              <EmptyState title="Chưa có số liệu trong khoảng này">Số liệu từ Meta được cập nhật vài giờ một lần.</EmptyState>
             ) : (
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={chartData} margin={{ top: 4, right: 16, bottom: 0, left: 0 }}>
                   <CartesianGrid stroke="#E2E8F0" vertical={false} />
                   <XAxis dataKey="day" tick={{ fontSize: 12, fill: '#64748B' }} tickLine={false} axisLine={false} interval="preserveStartEnd" minTickGap={16} />
                   <YAxis tick={{ fontSize: 12, fill: '#64748B' }} tickLine={false} axisLine={false} width={44} tickFormatter={(v: number) => compact(v)} />
-                  <Tooltip contentStyle={{ borderRadius: 8, borderColor: '#E2E8F0', fontSize: 13 }} />
+                  <Tooltip contentStyle={{ borderRadius: 8, borderColor: '#E2E8F0', fontSize: 13 }} formatter={(v) => formatNumber(Number(v))} />
                   <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 13 }} />
-                  {visiblePlatforms.map((pf) => (
-                    <Line key={pf} type="monotone" dataKey={pf} name={platformLabel[pf]} stroke={platformColor[pf]} strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
+                  {m.platforms.map((pf) => (
+                    <Line key={pf} type="monotone" dataKey={pf} name={platformLabel[pf]} stroke={platformColor[pf]} strokeWidth={2} dot={false} activeDot={{ r: 4 }} connectNulls />
                   ))}
                 </LineChart>
               </ResponsiveContainer>
@@ -178,50 +183,62 @@ export default function Dashboard() {
         <Card>
           <CardHeader
             title="Cần bạn xử lý"
-            subtitle={handoffs.length ? `${handoffs.length} tin nhắn cần bạn xử lý` : undefined}
+            subtitle={data ? needsHumanText(data.needsHuman.count) : undefined}
             action={
-              <Link to="/hop-thu" className="text-[13px] font-medium text-primary hover:underline">
+              <Link to={inboxHref({ tab: 'needs_human' })} className="text-[13px] font-medium text-primary hover:underline">
                 Mở hộp thư
               </Link>
             }
           />
-          {handoffs.length === 0 && failedPosts.length === 0 ? (
+          {overview.isPending ? (
+            <ListSkeleton rows={4} />
+          ) : !data ? (
+            <OverviewError error={overview.error} onRetry={() => void overview.refetch()} />
+          ) : nothingToDo ? (
             <EmptyState title="Không còn việc cần xử lý">AI đang trông giúp bạn.</EmptyState>
           ) : (
             <ul className="divide-y divide-border">
-              {handoffs.map((c) => {
-                const page = pageById(c.pageId)
-                const contact = contactById(c.customerId)
+              {attention.map((it) => (
+                <AttentionRow
+                  key={it.key}
+                  item={it}
+                  busy={transition.isPending || startConnect.isPending}
+                  onReconnect={() => it.page && reconnect(it.page)}
+                  onRetry={() => it.post && retry(it.post)}
+                />
+              ))}
+              {data.needsHuman.items.map((c) => {
+                const dto = pageById.get(c.pageId)
+                const waitingFrom = c.waitingSince ?? c.lastCustomerMessageAt
                 return (
                   <li key={c.id}>
-                    <Link to={`/hop-thu?c=${c.id}`} className="flex items-start gap-3 px-4 py-3 hover:bg-slate-50">
-                      <PageAvatar page={page} size={32} />
+                    <Link to={inboxHref({ tab: 'needs_human', conversationId: c.id })} className="flex items-start gap-3 px-4 py-3 hover:bg-slate-50">
+                      {dto && <PageAvatar page={uiPageOf(dto)} size={32} />}
                       <span className="min-w-0 flex-1">
                         <span className="flex items-center justify-between gap-2">
-                          <span className="truncate font-medium">{contact.name}</span>
-                          <Chip tone="warning" icon={<Clock size={11} />}>
-                            chờ {c.waiting}
-                          </Chip>
+                          <span className="truncate font-medium">{contactLabel(c.contact, dto?.platform)}</span>
+                          {waitingFrom && (
+                            <Chip tone="warning" icon={<Clock size={11} />}>
+                              chờ {durationLabel(waitingFrom, now).toLowerCase()}
+                            </Chip>
+                          )}
                         </span>
-                        <span className="block truncate text-[13px] text-muted-foreground">{c.lastMessage}</span>
-                        {c.handoffReason && <span className="mt-0.5 block truncate text-xs text-muted-foreground">Lý do: {c.handoffReason}</span>}
+                        <span className="block truncate text-[13px] text-muted-foreground">{previewText(c.preview)}</span>
+                        {c.state === 'handoff' && c.stateReason && (
+                          <span className="mt-0.5 block truncate text-xs text-muted-foreground">Lý do: {reasonText(c.stateReason, c.channel)}</span>
+                        )}
                       </span>
                     </Link>
                   </li>
                 )
               })}
-              {failedPosts.map((p) => (
-                <li key={p.id} className="flex items-center gap-3 px-4 py-3">
-                  <img src={p.image} alt="" className="size-8 shrink-0 rounded-sm object-cover" />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate font-medium">{p.title}</span>
-                    <span className="block text-xs text-danger-foreground">Đăng bài lỗi · {whenLabel(p)}</span>
-                  </span>
-                  <Button size="sm" icon={<RotateCcw size={14} />} onClick={() => notify(`Đang đăng lại "${p.title}"`)}>
-                    Đăng lại
-                  </Button>
+              {data.needsHuman.count > data.needsHuman.items.length && (
+                <li>
+                  <Link to={inboxHref({ tab: 'needs_human' })} className="flex items-center justify-center gap-1 px-4 py-2.5 text-[13px] font-medium text-primary hover:bg-slate-50">
+                    Xem tất cả {data.needsHuman.count} tin nhắn <ArrowRight size={13} />
+                  </Link>
                 </li>
-              ))}
+              )}
             </ul>
           )}
         </Card>
@@ -237,56 +254,52 @@ export default function Dashboard() {
             </Link>
           }
         />
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-border text-left text-[13px] text-muted-foreground">
-                <th className="px-4 py-2 font-medium">Trang</th>
-                <th className="px-4 py-2 font-medium">Nhóm</th>
-                <th className="px-4 py-2 text-right font-medium">Người theo dõi</th>
-                <th className="px-4 py-2 font-medium">Trạng thái</th>
-                <th className="px-4 py-2 font-medium">AI trả lời</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border">
-              {scopedPages.map((p) => (
-                <tr key={p.id} className="hover:bg-slate-50">
-                  <td className="px-4 py-2.5">
-                    <Link to={`/trang-nhom/trang/${p.id}`} className="block">
-                      <PageLabel page={p} />
-                    </Link>
-                  </td>
-                  <td className="px-4 py-2.5">
-                    <GroupChip groupId={p.groupId} />
-                  </td>
-                  <td className="tabular px-4 py-2.5 text-right">{formatNumber(p.followers)}</td>
-                  <td className="px-4 py-2.5">
-                    <span className="flex items-center gap-2">
-                      <StatusChip status={p.status} />
-                      {needsReconnect(p.status) && (
-                        // Tổng quan chỉ dẫn sang Trang & Nhóm — nơi kết nối lại đúng trang thật (PageDto).
-                        <Link to="/trang-nhom" className="text-[13px] font-medium text-primary hover:underline">
-                          Kết nối lại
-                        </Link>
-                      )}
-                    </span>
-                  </td>
-                  <td className="px-4 py-2.5">
-                    <Switch
-                      ai
-                      checked={autoReply[p.id]}
-                      label={`AI trả lời cho ${p.name}`}
-                      onChange={(v) => {
-                        setAutoReply((s) => ({ ...s, [p.id]: v }))
-                        notify(v ? `Đã bật AI trả lời cho ${p.name}` : `Đã tắt AI trả lời cho ${p.name}`)
-                      }}
-                    />
-                  </td>
+        {scopedPages.length === 0 ? (
+          <EmptyState title="Chưa có trang nào trong phạm vi này" action={<Link to="/trang-nhom" className="text-sm font-medium text-primary hover:underline">Kết nối trang</Link>} />
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border text-left text-[13px] text-muted-foreground">
+                  <th className="px-4 py-2 font-medium">Trang</th>
+                  <th className="px-4 py-2 font-medium">Nhóm</th>
+                  <th className="px-4 py-2 font-medium">Trạng thái</th>
+                  <th className="px-4 py-2 font-medium">AI trả lời</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {scopedPages.map((p) => (
+                  <tr key={p.id} className="hover:bg-slate-50">
+                    <td className="px-4 py-2.5">
+                      <Link to={`/trang-nhom/trang/${p.id}`} className="block">
+                        <PageLabel page={p} />
+                      </Link>
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <GroupChip groupId={p.groupId} />
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <span className="flex items-center gap-2">
+                        <StatusChip status={p.status} />
+                        {needsReconnect(p.status) && (
+                          <button type="button" className="text-[13px] font-medium text-primary hover:underline disabled:opacity-50" disabled={startConnect.isPending} onClick={() => reconnect(p)}>
+                            Kết nối lại
+                          </button>
+                        )}
+                      </span>
+                    </td>
+                    <td className="px-4 py-2.5">
+                      {/* Chỉ xem — bật / tắt ở AI trả lời tự động (có xác nhận, kiểm khoá OpenAI). */}
+                      <Link to={`/ai-tra-loi?muc=page:${p.id}`} className="hover:opacity-80">
+                        {aiOn.get(p.id) ? <Chip tone="ai">AI đang bật</Chip> : <Chip>AI tắt</Chip>}
+                      </Link>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </Card>
 
       <div className="mt-6 grid grid-cols-1 gap-6 xl:grid-cols-2">
@@ -299,31 +312,44 @@ export default function Dashboard() {
               </Link>
             }
           />
-          {upcoming.length === 0 ? (
+          {overview.isPending ? (
+            <ListSkeleton rows={3} />
+          ) : !data ? (
+            <OverviewError error={overview.error} onRetry={() => void overview.refetch()} />
+          ) : data.upcoming.length === 0 ? (
             <EmptyState icon={<CalendarClock size={20} />} title="Chưa có bài nào sắp đăng" action={<Link to="/soan-bai" className="text-sm font-medium text-primary hover:underline">Tạo bài viết</Link>} />
           ) : (
             <ul className="divide-y divide-border">
-              {upcoming.map((p) => (
-                <li key={p.id} className="flex items-center gap-3 px-4 py-3">
-                  <img src={p.image} alt="" className="size-12 shrink-0 rounded-md border border-border object-cover" />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="truncate font-medium">{p.title}</span>
-                      {p.ai && <AiBadge />}
-                    </div>
-                    <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
-                      <span className="flex items-center gap-1">
-                        {p.pageIds.map((id) => (
-                          <PlatformIcon key={id} platform={pageById(id).platform} size={14} />
-                        ))}
+              {data.upcoming.map((p) => (
+                <li key={`${p.postId}|${p.scheduledAt}`}>
+                  <Link to={calendarHref(p.targets[0]!.id, p.scheduledAt)} className="flex items-center gap-3 px-4 py-3 hover:bg-slate-50">
+                    {p.thumbnailUrl ? (
+                      <img src={p.thumbnailUrl} alt="" className="size-12 shrink-0 rounded-md border border-border object-cover" />
+                    ) : (
+                      <span className="flex size-12 shrink-0 items-center justify-center rounded-md border border-border bg-slate-50 text-muted-foreground">
+                        <CalendarClock size={18} />
                       </span>
-                      <span className="truncate">{p.pageIds.map((id) => pageById(id).name).join(', ')}</span>
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="truncate font-medium">{postLabel(p)}</span>
+                        {p.ai && <AiBadge />}
+                      </div>
+                      <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+                        <span className="flex items-center gap-1">
+                          {p.targets.map((t) => {
+                            const pf = pageById.get(t.pageId)?.platform
+                            return pf ? <PlatformIcon key={t.id} platform={pf} size={14} /> : null
+                          })}
+                        </span>
+                        <span className="truncate">{p.targets.map((t) => pageName(t.pageId)).join(', ')}</span>
+                      </div>
                     </div>
-                  </div>
-                  <div className="shrink-0 text-right">
-                    <div className="tabular text-[13px] font-medium">{whenLabel(p)}</div>
-                    <div className="mt-0.5">{p.status === 'pending' ? <Chip tone="warning">Chờ duyệt</Chip> : <Chip tone="primary">Đã lên lịch</Chip>}</div>
-                  </div>
+                    <div className="shrink-0 text-right">
+                      <div className="tabular text-[13px] font-medium">{relativeVnTime(p.scheduledAt, now.getTime())}</div>
+                      <div className="mt-0.5">{p.status === 'pending_approval' ? <Chip tone="warning">Chờ duyệt</Chip> : <Chip tone="primary">Đã lên lịch</Chip>}</div>
+                    </div>
+                  </Link>
                 </li>
               ))}
             </ul>
@@ -339,13 +365,17 @@ export default function Dashboard() {
               </Link>
             }
           />
-          {activeCampaigns.length === 0 ? (
+          {overview.isPending ? (
+            <ListSkeleton rows={2} />
+          ) : !data ? (
+            <OverviewError error={overview.error} onRetry={() => void overview.refetch()} />
+          ) : data.campaigns.length === 0 ? (
             <EmptyState title="Chưa có chiến dịch nào" action={<Link to="/chien-dich/tao" className="text-sm font-medium text-primary hover:underline">Tạo chiến dịch</Link>}>
               Để AI tự đăng bài đều đặn cho trang của bạn.
             </EmptyState>
           ) : (
             <ul className="divide-y divide-border">
-              {activeCampaigns.map((c) => {
+              {data.campaigns.map((c) => {
                 const running = c.status === 'running'
                 const pct = campaignPct(c)
                 return (
@@ -378,7 +408,7 @@ export default function Dashboard() {
                       <span>
                         {c.postsDone}/{c.postsTotal} bài · ngày {c.daysDone}/{c.durationDays}
                       </span>
-                      <span>{running ? `Bài tiếp: ${nextPostLabel(c)}` : 'Đang tạm dừng'}</span>
+                      <span>{running ? `Bài tiếp: ${nextPostLabel(c, now.getTime())}` : 'Đang tạm dừng'}</span>
                     </div>
                   </li>
                 )
@@ -394,5 +424,74 @@ export default function Dashboard() {
         </Link>
       </div>
     </Content>
+  )
+}
+
+/** Một việc cần xử lý: biểu tượng + chữ (không chỉ bằng màu), link tới chỗ xử lý; trang / bài lỗi có nút ngay tại chỗ. */
+function AttentionRow({ item, busy, onReconnect, onRetry }: { item: AttentionItem; busy: boolean; onReconnect: () => void; onRetry: () => void }) {
+  const icon = (
+    <span className={cn('mt-0.5 shrink-0 rounded-full p-1.5', item.tone === 'danger' ? 'bg-danger-soft text-danger-foreground' : 'bg-warning-soft text-warning-foreground')}>
+      <AlertTriangle size={14} aria-hidden />
+    </span>
+  )
+  const text = (
+    <span className="min-w-0 flex-1">
+      <span className="block truncate font-medium">{item.title}</span>
+      <span className={cn('block truncate text-xs', item.tone === 'danger' ? 'text-danger-foreground' : 'text-muted-foreground')}>{item.detail}</span>
+    </span>
+  )
+  if (item.page || item.post) {
+    return (
+      <li className="flex items-start gap-3 px-4 py-3">
+        {icon}
+        <Link to={item.href} className="min-w-0 flex-1 hover:underline">
+          {text}
+        </Link>
+        {item.page ? (
+          <Button size="sm" icon={<RefreshCw size={14} />} disabled={busy} onClick={onReconnect}>
+            Kết nối lại
+          </Button>
+        ) : (
+          <Button size="sm" icon={<RotateCcw size={14} />} disabled={busy} onClick={onRetry}>
+            Đăng lại
+          </Button>
+        )}
+      </li>
+    )
+  }
+  return (
+    <li>
+      <Link to={item.href} className="flex items-start gap-3 px-4 py-3 hover:bg-slate-50">
+        {icon}
+        {text}
+        <ChevronRight size={16} className="mt-1 shrink-0 text-muted-foreground" aria-hidden />
+      </Link>
+    </li>
+  )
+}
+
+/** Skeleton đúng bố cục danh sách của thẻ. */
+function ListSkeleton({ rows }: { rows: number }) {
+  return (
+    <div className="space-y-3 px-4 py-3" aria-busy="true">
+      {Array.from({ length: rows }, (_, i) => (
+        <Skeleton key={i} className="h-10 rounded-md" />
+      ))}
+    </div>
+  )
+}
+
+function OverviewError({ error, onRetry }: { error: unknown; onRetry: () => void }) {
+  return (
+    <EmptyState
+      title="Không tải được việc cần xử lý"
+      action={
+        <Button icon={<RefreshCw size={15} />} onClick={onRetry}>
+          Thử lại
+        </Button>
+      }
+    >
+      {errorMessageOf(error)}
+    </EmptyState>
   )
 }

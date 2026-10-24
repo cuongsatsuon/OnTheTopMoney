@@ -2,7 +2,7 @@
 // chỉ export từ file này.
 // Gọi `pages` (base), `content` (bài đã đăng có id nền tảng), `connections` (token, quyền đã cấp, mất kết nối) và
 // `adapters/meta` (hạng `background`) theo bảng mũi tên AD-1. Không module nào gọi `analytics`; màn Hiệu suất / Tổng quan
-// (Story 8.2+) đọc qua hàm export ở đây, không bao giờ gọi Meta theo request.
+// (Story 8.2+) và thẻ chiến dịch (8.5) đọc qua hàm export ở đây, không bao giờ gọi Meta theo request.
 export const MODULE = 'analytics'
 
 // Bảng ánh xạ metric Meta → chỉ số chuẩn (chỗ duy nhất biết tên metric gốc).
@@ -43,3 +43,5 @@ export { runPageMetricsCron, runPostMetricsCron, type MetricsCronDeps } from './
 export { pageMetricsState, performanceOverview, performanceWindow, type PerformanceWindow } from './performance.ts'
 // Story 8.3: "Hiệu quả AI" + KPI "Tin nhắn" (ghép vào `performanceOverview`).
 export { aiEfficiency, messagesKpi } from './ai-efficiency.ts'
+// Story 8.5: tương tác tăng theo ngày của bài (thẻ chiến dịch — read-model `app/read-models/campaigns.ts`).
+export { engagementGains, type EngagementGains } from './engagement.ts'

@@ -15,6 +15,7 @@ import { ScopeParam } from './scope.ts'
 import { MediaAssetDto, POST_CAPTION_MAX, POST_TARGETS_MAX } from './content.ts'
 import { CampaignFrequency, CampaignGoal, CampaignMode, CampaignStatus, PauseReason, PostTargetStatus, type Platform } from './enums.ts'
 import { ErrorCode } from './errors.ts'
+import { MetricComparison } from './metrics.ts'
 
 const IsoDateTime = z.iso.datetime({ offset: false })
 
@@ -304,7 +305,7 @@ export type ParsedCampaignSlotActionRequest = z.output<typeof CampaignSlotAction
  * AD-15: "giờ đã qua hoặc còn dưới 2 phút → `SCHEDULE_IN_PAST`"). Slot kế hoạch đã qua mốc này lúc bắt đầu thì không tạo.
  */
 export const CAMPAIGN_SLOT_MIN_LEAD_MS = 2 * 60_000
-/** Số ngày của `trend` (bài đã đăng mỗi ngày VN, cũ → hôm nay). */
+/** Số ngày của `trend` (tương tác tăng mỗi ngày VN, cũ → hôm nay). */
 export const CAMPAIGN_TREND_DAYS = 7
 
 /**
@@ -318,7 +319,9 @@ export type StartCampaignRequest = z.infer<typeof StartCampaignRequest>
  * Chiến dịch kèm tiến độ dẫn xuất (AD-18, ghép ở `app/read-models/campaigns.ts`) cho thẻ ở `/chien-dich` và Tổng quan:
  * - `postsTotal`: nháp = số bài theo kế hoạch; đã bắt đầu = slot chưa huỷ. `postsDone` = đã đăng.
  * - `postsPending`: bài chờ duyệt (đã bắt đầu). `nextPost`: giờ đăng dự kiến sớm nhất còn tới (ISO), `null` khi không có.
- * - `trend`: `CAMPAIGN_TREND_DAYS` số — bài đã đăng mỗi ngày VN, cũ → hôm nay (chưa có số liệu tương tác — Epic 8).
+ * - `trend`: `CAMPAIGN_TREND_DAYS` số — tương tác TĂNG mỗi ngày VN của bài đã đăng (cũ → hôm nay; Story 8.5 — từ snapshot
+ *   `post_metrics`, giảm tính 0). `engagement7d`: tổng `trend` / tổng 7 ngày liền trước; `current = null` khi chưa bài nào có
+ *   số liệu, `previous = null` khi chiến dịch chưa chạy đủ 14 ngày (nháp → cả hai `null`).
  * - `daysDone`: số ngày chiến dịch đã qua (0 khi nháp / ngày đầu; `done` = `durationDays`).
  */
 export const CampaignSummaryDto = CampaignDto.extend({
@@ -327,6 +330,7 @@ export const CampaignSummaryDto = CampaignDto.extend({
   postsPending: z.number().int().nonnegative(),
   nextPost: IsoDateTime.nullable(),
   trend: z.array(z.number().int().nonnegative()).length(CAMPAIGN_TREND_DAYS),
+  engagement7d: MetricComparison,
   daysDone: z.number().int().nonnegative(),
 })
 export type CampaignSummaryDto = z.infer<typeof CampaignSummaryDto>

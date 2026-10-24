@@ -14,7 +14,7 @@ import { desc, eq, inArray, sql } from 'drizzle-orm'
 import { bossDbFor, type DbExecutor } from '../../platform/db/index.ts'
 import { AppError } from '../../platform/errors/index.ts'
 import { startCampaignSlots, type StartSlotsResult, type TransitionDeps } from '../content/index.ts'
-import { assertDraftValid, getCampaign } from './drafts.ts'
+import { assertDraftValid, getCampaign, getCampaigns } from './drafts.ts'
 import { campaignPlan, toSlotPlan } from './preview.ts'
 import { campaignPages, campaigns } from './schema.ts'
 
@@ -79,10 +79,8 @@ export async function listCampaigns(db: DbExecutor, pageIds: readonly string[] |
   if (pageIds !== null && pageIds.length === 0) return []
   const inScope = pageIds === null ? undefined : inArray(campaigns.id, db.selectDistinct({ id: campaignPages.campaignId }).from(campaignPages).where(inArray(campaignPages.pageId, [...pageIds])))
   const rows = await db.select({ id: campaigns.id }).from(campaigns).where(inScope).orderBy(desc(campaigns.createdAt), desc(campaigns.id))
-  const out: CampaignDto[] = []
-  for (const r of rows) {
-    const c = await getCampaign(db, r.id)
-    if (c) out.push(c)
-  }
-  return out
+  return getCampaigns(
+    db,
+    rows.map((r) => r.id),
+  )
 }

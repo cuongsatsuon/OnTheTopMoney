@@ -44,6 +44,9 @@ import {
   durationLabel,
   flattenMessages,
   handoffNote,
+  inboxHref,
+  inboxTabOf,
+  INBOX_TAB_PARAM,
   listTimeLabel,
   messageTimeLabel,
   postLine,
@@ -338,5 +341,18 @@ describe('Gợi ý bằng AI (Story 4.8)', () => {
     expect(remainingViolations('đang giảm giá, vào http://evil.com', v)).toEqual(v.slice(0, 2))
     expect(remainingViolations('đã sửa hết', v)).toEqual([])
     expect(remainingViolations('x'.repeat(101), v)).toEqual([v[2]])
+  })
+})
+
+describe('link Hộp thư theo tab (Story 8.5)', () => {
+  it('`?tab=` mở đúng tab, lạ / thiếu → Tất cả; link kèm hội thoại', () => {
+    expect(inboxTabOf('needs_human')).toBe('needs_human')
+    expect(inboxTabOf('done')).toBe('done')
+    expect(inboxTabOf('xyz')).toBe('all')
+    expect(inboxTabOf(null)).toBe('all')
+    expect(inboxHref()).toBe('/hop-thu')
+    expect(inboxHref({ tab: 'needs_human' })).toBe(`/hop-thu?${INBOX_TAB_PARAM}=needs_human`)
+    expect(inboxHref({ tab: 'needs_human', conversationId: 'c1' })).toBe('/hop-thu?tab=needs_human&c=c1')
+    expect(inboxHref({ tab: 'all', conversationId: 'c1' })).toBe('/hop-thu?c=c1')
   })
 })

@@ -13,6 +13,7 @@ import {
   ListConversationsResponse,
   ConversationCountResponse,
   ConversationDto,
+  INBOX_TABS,
   ListMessagesResponse,
   MessageDto,
   SuggestReplyResponse,
@@ -378,6 +379,23 @@ export function handoffNote(
   if (conv.state !== 'handoff' || !conv.stateReason) return null
   const waiting = conv.waitingSince ? ` · khách chờ ${durationLabel(conv.waitingSince, now)}` : ''
   return `${reasonText(conv.stateReason, conv.channel)}${waiting}`
+}
+
+/** Story 8.5: `/hop-thu?tab=<InboxTab>` mở thẳng một tab (link "N tin nhắn cần bạn xử lý" của Tổng quan). */
+export const INBOX_TAB_PARAM = 'tab'
+
+/** Tab từ tham số URL; thiếu / lạ → "Tất cả". */
+export function inboxTabOf(raw: string | null): InboxTab {
+  return (INBOX_TABS as readonly string[]).includes(raw ?? '') ? (raw as InboxTab) : 'all'
+}
+
+/** Link Hộp thư: tab (mặc định "Tất cả") + hội thoại đang mở. */
+export function inboxHref(opts: { tab?: InboxTab; conversationId?: string } = {}): string {
+  const qs = new URLSearchParams()
+  if (opts.tab && opts.tab !== 'all') qs.set(INBOX_TAB_PARAM, opts.tab)
+  if (opts.conversationId) qs.set('c', opts.conversationId)
+  const q = qs.toString()
+  return q ? `/hop-thu?${q}` : '/hop-thu'
 }
 
 /** Nhãn tab Hộp thư. */

@@ -67,7 +67,7 @@ import {
   stepHasErrors,
   targetPages,
   topicSum,
-  trendTotal,
+  engagementText,
   validateCampaign,
   type CampaignForm,
   type PageOptions,
@@ -325,6 +325,7 @@ describe('bắt đầu chiến dịch + danh sách (Story 7.3)', () => {
       postsPending: 6,
       nextPost: '2026-10-25T04:30:00.000Z',
       trend: [0, 0, 0, 0, 0, 0, 0],
+      engagement7d: { current: null, previous: null },
       daysDone: 0,
       ...over,
     })
@@ -396,7 +397,14 @@ describe('bắt đầu chiến dịch + danh sách (Story 7.3)', () => {
     expect(nextPostLabel(summary({ nextPost: null }), NOW)).toBe('Chưa có bài sắp đăng')
     expect(nextPostLabel(summary({ status: 'draft', startedAt: null }), NOW)).toBe('Chưa bắt đầu')
     expect(nextPostLabel(summary({ status: 'paused' }), NOW)).toBe('Đang tạm dừng')
-    expect(trendTotal([0, 1, 0, 2, 0, 0, 1])).toBe(4)
+  })
+
+  it('Story 8.5: dòng tương tác 7 ngày của thẻ — chưa có số liệu / chưa đủ kỳ so / tăng / giảm', () => {
+    expect(engagementText(summary({}))).toBe('Chưa có số liệu tương tác')
+    expect(engagementText(summary({ engagement7d: { current: 1234, previous: null } }))).toBe('Tương tác 7 ngày: 1.234')
+    expect(engagementText(summary({ engagement7d: { current: 112, previous: 100 } }))).toBe('Tương tác 7 ngày: 112 · +12%')
+    expect(engagementText(summary({ engagement7d: { current: 75, previous: 100 } }))).toBe('Tương tác 7 ngày: 75 · -25%')
+    expect(engagementText(summary({ engagement7d: { current: 0, previous: 0 } }))).toBe('Tương tác 7 ngày: 0')
   })
 
   it('đếm tab; Tổng quan chỉ lấy đang chạy + tạm dừng; khoá danh sách theo phạm vi; SSE campaign.* làm cũ', () => {

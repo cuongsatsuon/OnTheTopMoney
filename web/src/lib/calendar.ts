@@ -155,6 +155,26 @@ export function groupCalendarItems(items: readonly CalendarItemDto[]): CalendarG
   return [...groups.values()].sort((a, b) => a.scheduledAt.localeCompare(b.scheduledAt) || a.key.localeCompare(b.key))
 }
 
+/* ---------- Mở thẳng một bài (Story 8.5 — link từ Tổng quan) ---------- */
+
+/** `/lich?bai=<targetId>&ngay=<YYYY-MM-DD>`: mở lịch ở tháng / tuần chứa ngày đó rồi mở ngăn của bài. */
+export const CALENDAR_TARGET_PARAM = 'bai'
+export const CALENDAR_DAY_PARAM = 'ngay'
+
+/** Link tới đúng bài trên Lịch nội dung (ngày theo giờ VN của giờ đăng). */
+export function calendarHref(targetId: string, scheduledAt: string): string {
+  return `/lich?${new URLSearchParams({ [CALENDAR_TARGET_PARAM]: targetId, [CALENDAR_DAY_PARAM]: isoToVnInput(scheduledAt).date })}`
+}
+
+/** Ngày hợp lệ của tham số `ngay` (sai dạng → `null`, lịch mở như thường). */
+export function dayParamOf(raw: string | null): DayKey | null {
+  return raw && /^\d{4}-\d{2}-\d{2}$/.test(raw) && !Number.isNaN(Date.parse(`${raw}T00:00:00.000Z`)) ? raw : null
+}
+
+/** Khoá ô chứa target (để mở ngăn); không còn trên lịch (đã huỷ / ngoài khoảng) → `null`. */
+export const groupKeyOfTarget = (groups: readonly Pick<CalendarGroup, 'key' | 'items'>[], targetId: string): string | null =>
+  groups.find((g) => g.items.some((it) => it.id === targetId))?.key ?? null
+
 /** Nhóm theo ngày (ô lịch). */
 export function groupsByDay(groups: readonly CalendarGroup[]): Map<DayKey, CalendarGroup[]> {
   const m = new Map<DayKey, CalendarGroup[]>()

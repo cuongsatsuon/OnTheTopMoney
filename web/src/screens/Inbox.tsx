@@ -13,6 +13,7 @@
 // kết tới hồ sơ + lịch sử ở `/khach-hang`; báo khi có gợi ý gộp khách.
 // Story 5.4: AI tự trả lời — chip "AI đang trả lời" kèm chấm "đang gõ" và bong bóng "AI đang trả lời…" cuối khung chat
 // theo `aiTyping` (UX-DR4); tin AI lỗi có "Gửi lại" (= bạn tiếp quản).
+// Story 8.5: `?tab=needs_human` (link "N tin nhắn cần bạn xử lý" của Tổng quan) mở thẳng tab "Cần xử lý".
 import {
   INBOX_TABS,
   type AiViolation,
@@ -56,6 +57,8 @@ import {
   durationLabel,
   flattenMessages,
   handoffNote,
+  inboxTabOf,
+  INBOX_TAB_PARAM,
   isSendRefusal,
   isSendShortcut,
   listTimeLabel,
@@ -97,7 +100,7 @@ const findPage = (id: string): Page | undefined => pageStore.find((p) => p.id ==
 export default function Inbox() {
   const { scope, scopeLabel, notify } = useApp()
   const [params, setParams] = useSearchParams()
-  const [tab, setTab] = useState<InboxTab>('all')
+  const [tab, setTab] = useState<InboxTab>(() => inboxTabOf(params.get(INBOX_TAB_PARAM)))
   const [query, setQuery] = useState('')
   const [panelOpen, setPanelOpen] = useState(false)
   const now = useNow()

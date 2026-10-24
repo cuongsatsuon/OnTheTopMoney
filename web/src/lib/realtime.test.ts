@@ -1,4 +1,4 @@
-import { QueryClient } from '@tanstack/react-query'
+import { QueryClient, QueryObserver } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ME_QUERY_KEY } from './api'
 import {
@@ -140,6 +140,46 @@ describe('createRealtimeClient — Hộp thư (Story 4.3)', () => {
     FakeEventSource.last.emit('ready')
     FakeEventSource.last.emit('conversation.state_changed', { type: 'conversation.state_changed', entity: 'conversation', id: 'c1', pageId: 'p1' })
     for (const key of keys) expect(queryClient.getQueryState(key)?.isInvalidated).toBe(true)
+    client.stop()
+  })
+})
+
+describe('Story 8.5 — Tổng quan theo realtime', () => {
+  it('hint liên quan → refetch ngay việc cần xử lý đang mở; số liệu chính và chấm "đang gõ" không kéo theo', async () => {
+    const { client, queryClient } = setup()
+    const fetchOverview = vi.fn(async () => 'o')
+    const fetchMetrics = vi.fn(async () => 'm')
+    const observers = [
+      new QueryObserver(queryClient, { queryKey: ['overview', 'all'], queryFn: fetchOverview }),
+      new QueryObserver(queryClient, { queryKey: ['overview_metrics', 'all', '30d'], queryFn: fetchMetrics }),
+    ]
+    const unsubs = observers.map((o) => o.subscribe(() => {}))
+    client.start()
+    FakeEventSource.last.emit('ready')
+    await vi.advanceTimersByTimeAsync(0)
+    const before = [fetchOverview.mock.calls.length, fetchMetrics.mock.calls.length]
+    const hints = [
+      ['message.received', 'message'],
+      ['conversation.state_changed', 'conversation'],
+      ['post_target.failed', 'post_target'],
+      ['campaign.paused', 'campaign'],
+      ['page.expiring', 'page'],
+      ['webhook.stalled', 'webhook'],
+      ['ai_budget.threshold_reached', 'ai_budget'],
+      ['settings.updated', 'settings'],
+    ] as const
+    for (const [type, entity] of hints) {
+      FakeEventSource.last.emit(type, { type, entity, id: 'x1' })
+      // Không chờ đồng hồ nào: refetch chạy ngay khi hint tới (≤3 giây là thời gian một request REST).
+      await vi.advanceTimersByTimeAsync(0)
+    }
+    expect(fetchOverview).toHaveBeenCalledTimes(before[0]! + hints.length)
+    FakeEventSource.last.emit('conversation.ai_typing', { type: 'conversation.ai_typing', entity: 'conversation', id: 'c1' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(fetchOverview).toHaveBeenCalledTimes(before[0]! + hints.length)
+    expect(fetchMetrics).toHaveBeenCalledTimes(before[1]!)
+    expect(hintInvalidates('overview_metrics', 'message')).toBe(false)
+    unsubs.forEach((u) => u())
     client.stop()
   })
 })

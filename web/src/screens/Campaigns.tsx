@@ -1,5 +1,5 @@
 // Chiến dịch nuôi page `/chien-dich` (Story 7.3): danh sách chiến dịch thật theo Phạm vi (`GET /campaigns?scope=`) — tab
-// trạng thái, KPI, thẻ tiến độ (ngày, bài đã đăng / tổng, bài tiếp theo, bài đã đăng 7 ngày). Nháp mở lại wizard
+// trạng thái, KPI, thẻ tiến độ (ngày, bài đã đăng / tổng, bài tiếp theo, tương tác 7 ngày — Story 8.5). Nháp mở lại wizard
 // (`/chien-dich/tao?id=`).
 // Story 7.5: Tạm dừng / Tiếp tục bấm là chạy (không xác nhận), thẻ tạm dừng ghi lý do theo `pauseReason`; Xoá (cả nháp)
 // hỏi xác nhận — bài chưa đăng bị huỷ, bài đã đăng giữ nguyên trên trang.
@@ -31,6 +31,7 @@ import {
   campaignPct,
   deleteConfirmText,
   deletedToast,
+  engagementText,
   goalOf,
   isOverdue,
   lifecycleToast,
@@ -41,7 +42,6 @@ import {
   resumeErrorText,
   slotTime,
   slotWhen,
-  trendTotal,
   useCampaignLifecycle,
   useCampaigns,
   useDeleteCampaign,
@@ -245,7 +245,7 @@ function CampaignCard({ c, pages }: { c: CampaignSummaryDto; pages: readonly Pag
         {c.status !== 'draft' && (
           <div className="text-right">
             <Sparkline data={c.trend} />
-            <div className="text-[11px] text-muted-foreground">Bài đã đăng 7 ngày: {trendTotal(c.trend)}</div>
+            <div className="text-[11px] text-muted-foreground">{engagementText(c)}</div>
           </div>
         )}
       </div>

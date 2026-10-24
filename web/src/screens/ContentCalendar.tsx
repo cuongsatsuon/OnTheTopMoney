@@ -7,10 +7,11 @@
 // Story 7.4: bài chiến dịch chờ duyệt có "Duyệt" ngay trong ngăn (cùng route hành động slot với "Bài chờ duyệt"); quá giờ
 // hoặc server trả `SCHEDULE_IN_PAST` → hỏi giờ mới; ô quá giờ ghi "Quá giờ".
 // Story 7.5: bài của chiến dịch tạm dừng ghi "Tạm dừng" trên ô + ghi chú trong ngăn (đăng lại khi chiến dịch tiếp tục).
+// Story 8.5: `?bai=<targetId>&ngay=<YYYY-MM-DD>` (link từ Tổng quan) mở lịch ở tháng / tuần của ngày đó rồi mở ngăn của bài.
 import type { CalendarItemDto, PageDto, Platform, PostTargetStatus } from '@ottm/shared'
 import { AlertTriangle, CalendarX, Check, ChevronLeft, ChevronRight, Clock, ExternalLink, Loader2, Megaphone, Pause, Pencil, Plus, RotateCcw, Send, Trash2 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { Content } from '../components/AppShell'
 import { AiBadge, Button, Card, Chip, Drawer, Input, Modal, PageHeader, PlatformIcon, Segmented, Select, cn } from '../components/ui'
 import { useApp } from '../lib/app-context'
@@ -20,14 +21,18 @@ import {
   addDays,
   addMonths,
   approveCalls,
+  CALENDAR_DAY_PARAM,
+  CALENDAR_TARGET_PARAM,
   calendarCounts,
   calendarTitle,
   canApproveGroup,
   canCancel,
   canDrag,
+  dayParamOf,
   filterItems,
   groupCalendarItems,
   groupCalls,
+  groupKeyOfTarget,
   groupPages,
   groupTitle,
   groupsByDay,
@@ -107,9 +112,12 @@ export default function ContentCalendar() {
   }, [pages])
 
   const today = todayKey()
+  const [params] = useSearchParams()
+  const linkTarget = params.get(CALENDAR_TARGET_PARAM)
+  const linkDay = dayParamOf(params.get(CALENDAR_DAY_PARAM))
   const [view, setView] = useState<CalendarView>('month')
-  const [month, setMonth] = useState(() => monthOf(today))
-  const [monday, setMonday] = useState(() => mondayOf(today))
+  const [month, setMonth] = useState(() => monthOf(linkDay ?? today))
+  const [monday, setMonday] = useState(() => mondayOf(linkDay ?? today))
   const [filter, setFilter] = useState<CalendarFilter>({ platform: 'all', status: 'all' })
   const [expandedDay, setExpandedDay] = useState<DayKey | null>(null)
   const [dragKey, setDragKey] = useState<string | null>(null)
@@ -128,6 +136,18 @@ export default function ContentCalendar() {
   const byDay = useMemo(() => groupsByDay(groups), [groups])
   const counts = calendarCounts(groups)
   const open = groups.find((g) => g.key === openKey) ?? null
+
+  // Link `?bai=` mở ngăn đúng một lần khi dữ liệu của khoảng đó về (không phải dữ liệu giữ chỗ của khoảng cũ). Bài không
+  // còn trên lịch (đã xoá / đã đổi ngày ra ngoài) → chỉ mở lịch. Chỉnh state lúc render (mẫu "state theo prop" của React).
+  const [linkHandled, setLinkHandled] = useState<string | null>(null)
+  if (linkTarget && linkTarget !== linkHandled && calendar.data && !calendar.isPlaceholderData) {
+    const key = groupKeyOfTarget(groups, linkTarget)
+    // Dữ liệu cache cũ của khoảng này (đang tải lại) có thể chưa có bài vừa tạo → chờ lượt tải xong rồi mới bỏ link.
+    if (key || !calendar.isFetching) {
+      setLinkHandled(linkTarget)
+      if (key) setOpenKey(key)
+    }
+  }
 
   /* --- Điều hướng --- */
   const shift = (dir: 1 | -1) => {

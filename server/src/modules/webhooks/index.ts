@@ -39,6 +39,7 @@ export {
 // Story 4.2: sức khoẻ webhook (cron `webhooks.health` + API).
 export {
   HEALTH_WINDOW_END_HOUR,
+  HEALTH_STALE_AFTER_MS,
   HEALTH_WINDOW_START_HOUR,
   STALL_AFTER_MS,
   computeHealthStatus,

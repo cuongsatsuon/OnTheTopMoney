@@ -25,6 +25,11 @@ export const HEALTH_WINDOW_START_HOUR = 8
 export const HEALTH_WINDOW_END_HOUR = 22
 /** Im lặng quá chừng này (trong khung giờ, có trang active) → `stalled`. */
 export const STALL_AFTER_MS = 30 * MINUTE_MS
+/**
+ * Dòng cron cũ hơn chừng này (3 chu kỳ 5 phút) → worker / cron coi như đã chết: API tính lại trạng thái tại chỗ thay vì
+ * giữ mãi `ok` cũ (Story 8.5 — Tổng quan cảnh báo webhook; việc hoãn từ 4.2). Sự kiện `webhook.stalled` vẫn chỉ cron phát.
+ */
+export const HEALTH_STALE_AFTER_MS = 15 * MINUTE_MS
 
 /** Mốc 00:00 giờ VN của ngày chứa `now` (dạng epoch ms). */
 function vnDayStart(now: Date): number {
@@ -120,7 +125,8 @@ export async function runHealthCheck(deps: HealthCheckDeps): Promise<ProductHeal
 }
 
 /**
- * `GET /api/v1/webhooks/health`: trạng thái do cron ghi (chưa có dòng → tính tại chỗ), `lastEventAt` đọc trực
+ * `GET /api/v1/webhooks/health`: trạng thái do cron ghi (chưa có dòng / dòng cũ hơn `HEALTH_STALE_AFTER_MS` → tính tại
+ * chỗ), `lastEventAt` đọc trực
  * tiếp để "Nhận tin gần nhất" không trễ theo chu kỳ cron; kèm trang (chưa gỡ) đăng ký webhook lỗi.
  */
 export async function getWebhookHealth(db: Db, now: Date = new Date()): Promise<WebhookHealthResponse> {
@@ -130,7 +136,8 @@ export async function getWebhookHealth(db: Db, now: Date = new Date()): Promise<
   for (const product of WEBHOOK_PRODUCTS) {
     const lastEventAt = await lastEventAtOf(db, product)
     const row = byProduct.get(product)
-    let status = row
+    const fresh = row && now.getTime() - row.checkedAt.getTime() <= HEALTH_STALE_AFTER_MS
+    let status = fresh
       ? (row.status as WebhookHealthStatus)
       : computeHealthStatus({ now, lastEventAt, hasActivePages: await hasActivePagesFor(db, product) })
     // Tin đã về lại sau lần cron cuối → không giữ `stalled` thêm tới 5 phút (banner tắt ngay; sự kiện

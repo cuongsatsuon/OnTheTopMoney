@@ -53,18 +53,24 @@ export function entityMatches(root: unknown, entity: string): boolean {
  *   `['campaigns', …]` (chính thực thể) + Lịch nội dung `['post_targets', …]`.
  * - Story 7.6: `page` (gỡ trang / rời nhóm nhãn huỷ hàng loạt bài chưa đăng, không phát sự kiện từng bài) → Lịch nội dung
  *   `['post_targets', …]`.
+ * - Story 8.5: việc cần xử lý của Tổng quan `['overview', …]` — tin mới / hội thoại đổi trạng thái / tên khách (`message`,
+ *   `conversation`, `contact`), bài lỗi / đăng / huỷ (`post_target`), chiến dịch tạm dừng (`campaign`), trang mất kết nối /
+ *   sắp hết hạn / gỡ / đổi nhóm (`page`, `group`), webhook ngừng / nhận lại (`webhook`), hạn mức AI (`ai_budget`,
+ *   `settings`). Số liệu chính `['overview_metrics', …]` là số cron — không làm cũ theo sự kiện.
  */
 export const ENTITY_ALSO_INVALIDATES: Readonly<Record<string, readonly string[]>> = {
   openai_key: ['settings', 'onboarding'],
-  settings: ['ai_budget', 'onboarding'],
-  message: ['conversation', 'contact', 'onboarding', 'webhook'],
-  contact: ['conversation', 'message', 'search'],
-  page: ['search', 'onboarding', 'campaign', 'post_target'],
-  group: ['search'],
-  conversation: ['message', 'contact'],
+  settings: ['ai_budget', 'onboarding', 'overview'],
+  message: ['conversation', 'contact', 'onboarding', 'webhook', 'overview'],
+  contact: ['conversation', 'message', 'search', 'overview'],
+  page: ['search', 'onboarding', 'campaign', 'post_target', 'overview'],
+  group: ['search', 'overview'],
+  conversation: ['message', 'contact', 'overview'],
   // Story 6.4: target đăng xong / lỗi → bài đang mở ở Soạn bài `['posts', id]`. Story 7.2: bài xem trước chiến dịch.
-  post_target: ['post', 'campaign'],
-  campaign: ['post_target'],
+  post_target: ['post', 'campaign', 'overview'],
+  campaign: ['post_target', 'overview'],
+  webhook: ['overview'],
+  ai_budget: ['overview'],
 }
 
 /**
