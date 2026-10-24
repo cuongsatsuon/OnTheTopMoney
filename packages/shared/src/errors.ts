@@ -47,6 +47,8 @@ export const ERROR_CODES = [
   'PUBLISH_REJECTED',
   'PUBLISH_FAILED',
   'PUBLISH_UNKNOWN',
+  /** Story 7.5: bài của chiến dịch đang tạm dừng (`held`) — không lên lịch / đăng lại / duyệt được tới khi tiếp tục. */
+  'CAMPAIGN_PAUSED',
   // Ảnh (AD-14)
   'IMAGE_REJECTED',
   'IMAGE_FAILED',

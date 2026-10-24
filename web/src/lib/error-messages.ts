@@ -43,6 +43,7 @@ export const ERROR_MESSAGES: Record<ErrorCode, string> = {
   PUBLISH_REJECTED: 'Nền tảng từ chối bài viết. Sửa nội dung rồi đăng lại.',
   PUBLISH_FAILED: 'Đăng bài chưa được. Thử đăng lại.',
   PUBLISH_UNKNOWN: 'Chưa rõ bài đã lên hay chưa. Kiểm tra trang trước khi đăng lại.',
+  CAMPAIGN_PAUSED: 'Chiến dịch đang tạm dừng. Tiếp tục chiến dịch rồi thử lại.',
   // Ảnh
   IMAGE_REJECTED: 'Ảnh bị từ chối. Thử ảnh khác.',
   IMAGE_FAILED: 'Tạo ảnh chưa được. Thử lại.',

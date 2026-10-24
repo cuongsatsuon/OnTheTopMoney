@@ -63,6 +63,9 @@ export const EVENTS = {
   'campaign.paused': event(true, { reason: PauseReason }),
   'campaign.resumed': event(true, {}),
   'campaign.completed': event(true, {}),
+  // Story 7.5: chiến dịch đã xoá (bài chưa đăng đã huỷ hàng loạt, không phát `post_target.cancelled` từng bài) — web làm
+  // cũ danh sách chiến dịch + Lịch nội dung.
+  'campaign.deleted': event(true, {}),
   'page.connected': event(true, {}),
   'page.reconnected': event(true, {}),
   'page.disconnected': event(true, { reason: z.string().optional() }),

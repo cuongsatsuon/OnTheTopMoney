@@ -20,8 +20,10 @@ import {
   groupCalls,
   groupPages,
   groupTitle,
+  groupStatusText,
   groupsByDay,
   isCampaignGroup,
+  isGroupHeld,
   mondayOf,
   monthGrid,
   moveRefusal,
@@ -55,6 +57,7 @@ const item = (n: number, over: Partial<CalendarItemDto> = {}): CalendarItemDto =
   title: 'Ưu đãi cuối tuần',
   topic: null,
   thumbnailUrl: null,
+  held: false,
   ...over,
 })
 
@@ -244,5 +247,22 @@ describe('duyệt bài chiến dịch trên lịch (Story 7.4)', () => {
     const plan = planMove(g!, '2026-10-30', undefined, NOW)
     expect(plan).toEqual({ kind: 'awaiting' })
     expect(moveRefusal(plan)).toBe('Bài chiến dịch chưa duyệt — mở bài để duyệt và chọn giờ đăng')
+  })
+})
+
+describe('chiến dịch tạm dừng trên lịch (Story 7.5)', () => {
+  it('ô gom có bài `held` ghi "Tạm dừng" (thay "Quá giờ"); bài đã đăng không ghi', () => {
+    const c = id(77)
+    const [held] = groupCalendarItems([item(1, { campaignId: c, source: 'campaign', held: true }), item(2, { campaignId: c, source: 'campaign' })])
+    expect(held!.held).toBe(true)
+    expect(isGroupHeld(held!)).toBe(true)
+    expect(groupStatusText(held!, NOW)).toBe('Đã lên lịch · Tạm dừng')
+    const [overdueHeld] = groupCalendarItems([item(3, { campaignId: c, source: 'campaign', status: 'pending_approval', held: true, scheduledAt: '2026-10-24T02:00:00.000Z' })])
+    expect(groupStatusText(overdueHeld!, NOW)).toBe('Chờ duyệt · Tạm dừng')
+    const [overdue] = groupCalendarItems([item(4, { campaignId: c, source: 'campaign', status: 'pending_approval', scheduledAt: '2026-10-24T02:00:00.000Z' })])
+    expect(groupStatusText(overdue!, NOW)).toBe('Chờ duyệt · Quá giờ')
+    const [published] = groupCalendarItems([item(5, { campaignId: c, source: 'campaign', status: 'published', held: true })])
+    expect(isGroupHeld(published!)).toBe(false)
+    expect(groupStatusText(published!, NOW)).toBe('Đã đăng')
   })
 })

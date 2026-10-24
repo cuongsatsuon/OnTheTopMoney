@@ -4,7 +4,9 @@
 //   "Bắt đầu chiến dịch" (7.3) chụp lại khi chuyển `running` (chốt tần suất hiệu lực vào `frequency`).
 // - `group_id` chỉ là nhãn (AD-15): xoá nhóm thì về `null`, chiến dịch giữ nguyên trang.
 // - FK tới `pages` `on delete cascade`: trang chỉ bị xoá cứng khi xoá dữ liệu theo yêu cầu (gỡ trang là soft-delete).
-import { CAMPAIGN_DURATIONS, CAMPAIGN_FREQUENCIES, CAMPAIGN_GOALS, CAMPAIGN_MODES, CAMPAIGN_POST_TIMES_MAX, CAMPAIGN_STATUSES } from '@ottm/shared'
+// - Story 7.5: `pause_reason` + `paused_at` có đúng khi `paused`; `consecutive_failures` (bài đăng lỗi liên tiếp — 7.6 tăng,
+//   "Tiếp tục" đặt về 0). Xoá chiến dịch xoá cứng dòng (slot không có FK tới đây — bài đã đăng giữ nguyên ở `content`).
+import { CAMPAIGN_DURATIONS, CAMPAIGN_FREQUENCIES, CAMPAIGN_GOALS, CAMPAIGN_MODES, CAMPAIGN_POST_TIMES_MAX, CAMPAIGN_STATUSES, PAUSE_REASONS } from '@ottm/shared'
 import { sql } from 'drizzle-orm'
 import { check, date, index, integer, pgTable, primaryKey, text, timestamp, uuid } from 'drizzle-orm/pg-core'
 import { groupsTable, pagesTable } from '../pages/index.ts'
@@ -35,6 +37,12 @@ export const campaigns = pgTable(
     postTimes: text('post_times').array().notNull(),
     /** Story 7.3: lúc bấm "Bắt đầu chiến dịch" — có đúng khi đã rời `draft`. */
     startedAt: timestamp('started_at', { withTimezone: true, precision: 3 }),
+    /** Story 7.5: `PauseReason` — có đúng khi `paused` (`MANUAL` = chủ shop; còn lại do hệ thống — 7.6). */
+    pauseReason: text('pause_reason'),
+    /** Story 7.5: lúc tạm dừng (đi cùng `pause_reason`). */
+    pausedAt: timestamp('paused_at', { withTimezone: true, precision: 3 }),
+    /** Số bài đăng lỗi liên tiếp (Story 7.6 tăng / về 0 khi đăng được; chạm 3 → tự dừng). "Tiếp tục" đặt về 0. */
+    consecutiveFailures: integer('consecutive_failures').notNull().default(0),
     createdAt: timestamp('created_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
   },
@@ -47,6 +55,9 @@ export const campaigns = pgTable(
     check('campaigns_default_frequency_check', sql`${t.defaultFrequency} in (${inList(CAMPAIGN_FREQUENCIES)})`),
     check('campaigns_image_ratio_check', sql`${t.imageRatio} between 0 and 100`),
     check('campaigns_started_at_check', sql`(${t.status} = 'draft') = (${t.startedAt} is null)`),
+    check('campaigns_pause_reason_check', sql`(${t.status} = 'paused') = (${t.pauseReason} is not null)`),
+    check('campaigns_pause_reason_value_check', sql`${t.pauseReason} is null or ${t.pauseReason} in (${inList(PAUSE_REASONS)})`),
+    check('campaigns_paused_at_check', sql`(${t.pauseReason} is null) = (${t.pausedAt} is null)`),
     check('campaigns_post_times_check', sql`cardinality(${t.postTimes}) between 1 and ${sql.raw(String(CAMPAIGN_POST_TIMES_MAX))}`),
   ],
 )

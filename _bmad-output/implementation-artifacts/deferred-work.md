@@ -1,3 +1,12 @@
+- source_spec: `spec-7-5-tam-dung-tiep-tuc-xoa.md`
+  summary: Kiểm bằng trình duyệt Tạm dừng / Tiếp tục / Xoá với phiên chủ shop + worker:
+    - `/chien-dich`: Tạm dừng → thẻ "Tạm dừng" + lý do, hàng đợi bỏ bài của chiến dịch đó; Tiếp tục → toast "bỏ n bài lỡ giờ" khi có; trang mất kết nối → câu lỗi theo mã;
+    - Xoá (cả nháp) → hộp xác nhận → thẻ mất, bài đã đăng vẫn trên Lịch;
+    - Tổng quan: nút Tạm dừng / Tiếp tục + dòng lý do; Lịch: ô "· Tạm dừng" + ghi chú trong ngăn.
+  evidence: Chỉ có test API (Postgres thật, `server/test/campaigns-lifecycle.test.ts`) và test helper web (`web/src/lib/campaigns.test.ts`, `calendar.test.ts`); chưa chạy UI (dev không có mật khẩu mẫu).
+- source_spec: `spec-7-5-tam-dung-tiep-tuc-xoa.md`
+  summary: Thao tác hàng loạt của chiến dịch (tạm dừng / tiếp tục huỷ bài lỡ giờ / xoá) không phát `post_target.cancelled` từng bài — chỉ một sự kiện `campaign.paused|resumed|deleted`.
+  evidence: `content/slots-hold.ts`; web làm cũ Lịch theo sự kiện `campaign.*`. Consumer cần từng bài (vd Epic 8 thống kê bài huỷ, 7.6 nếu đếm theo `post_target.*`) phải đọc lại theo `campaign_id` hoặc thêm phát sự kiện theo lô.
 - source_spec: `spec-1-4-kenh-realtime-va-trung-tam-thong-bao.md`
   summary: Phát `job.failed` cả khi lần thử cuối hết hạn (expireInSeconds) hoặc worker chết, không chỉ khi handler ném lỗi.
   evidence: `reportExhausted` chỉ chạy trong `catch` của wrapper (server/src/platform/jobs/boss.ts); hiện chưa queue nào `critical: true`, nên làm ở story đầu tiên khai báo queue quan trọng (vd Story 4.1 `webhook.route`) — dùng dead-letter của pg-boss hoặc cron quét job `failed`.
@@ -216,9 +225,6 @@
   summary: Ước tính chi phí AI thật ở cột Tóm tắt của wizard. Đã bỏ số giả "~700đ/bài"; hướng làm: tính theo model đang chọn bằng `ai.estimateTextCost` / `estimateImageCost` × số bài / số bài có ảnh.
   evidence: Story 7.2 đã có lời gọi `campaign_generate` thật (ghi `ai_usage` với `ref` = target cho caption, `ref` = ô ảnh cho ảnh của slot), nên đo được chi phí thật của 7 bài xem trước. Chưa làm vì AC 7.2 không cần; hướng làm: cộng `ai_usage` theo `ref` của slot xem trước, nhân theo tổng bài / bài có ảnh ở cột Tóm tắt (hoặc ước tính bằng `estimateTextCost` / `estimateImageCost` khi chưa có bài xem trước).
 - source_spec: `spec-7-1-wizard-chien-dich.md`
-  summary: Chưa xoá được chiến dịch nháp (danh sách nháp ở tab "Bản nháp" của `/chien-dich` đã có từ Story 7.3, nút Xoá khoá "Sắp có").
-  evidence: Xoá chiến dịch thuộc Story 7.5 (`content.cancelCampaignTargets`, xác nhận). Nháp có bài xem trước `held` — xoá nháp cần dọn cả slot (bài chưa từng đăng).
-- source_spec: `spec-7-1-wizard-chien-dich.md`
   summary: Trang chọn được (`GET /campaigns/page-options`) không tự cập nhật khi hồ sơ thương hiệu đổi, vì lưu hồ sơ không phát sự kiện realtime. Chỉ `page.*` làm cũ danh sách này.
   evidence: Wizard mở lâu có thể vẫn thấy "Chưa có hồ sơ thương hiệu" dù vừa tạo hồ sơ ở tab khác. Server vẫn kiểm lại khi lưu, nên không lưu sai.
 - source_spec: `spec-7-2-xem-truoc-7-bai.md`
@@ -240,8 +246,8 @@
   summary: `trend` của thẻ chiến dịch là số bài đã đăng mỗi ngày (7 ngày), không phải tương tác — nhãn thẻ đổi thành "Bài đã đăng 7 ngày". UX gốc là "Tương tác 7 ngày ±x%".
   evidence: Chưa có số liệu tương tác (`post_metrics` — Story 8.1). Khi có: `content.campaignProgress` (hoặc read-model) ghép tương tác theo ngày từ `analytics`, đổi lại nhãn + % thay đổi.
 - source_spec: `spec-7-3-bat-dau-chien-dich.md`
-  summary: Lý do tạm dừng trên thẻ chiến dịch và nút Tạm dừng / Tiếp tục ở `/chien-dich` + Tổng quan còn khoá "Sắp có"; thẻ tạm dừng chỉ ghi "Chiến dịch đang tạm dừng". `Group.activeCampaigns` (Trang & Nhóm, Chi tiết nhóm) và `pages.affectedByMove().campaigns` vẫn là dữ liệu mẫu / rỗng.
-  evidence: Chưa có cột `pause_reason` (Story 7.5 / 7.6). Read-model `app/read-models/campaigns.ts` là chỗ ghép `Group.activeCampaigns` khi Trang & Nhóm bỏ dữ liệu mẫu.
+  summary: `Group.activeCampaigns` (Trang & Nhóm, Chi tiết nhóm) và `pages.affectedByMove().campaigns` vẫn là dữ liệu mẫu / rỗng.
+  evidence: Story 7.5 đã làm lý do tạm dừng trên thẻ + nút Tạm dừng / Tiếp tục ở `/chien-dich` và Tổng quan (`campaigns.pause_reason`). Read-model `app/read-models/campaigns.ts` là chỗ ghép `Group.activeCampaigns` khi Trang & Nhóm bỏ dữ liệu mẫu; cảnh báo chuyển nhóm cần chiến dịch gắn nhãn nhóm (`campaigns.group_id`).
 - source_spec: `spec-7-4-sinh-cuon-chieu-va-hang-doi-duyet.md`
   summary: Kiểm bằng trình duyệt hàng đợi "Bài chờ duyệt" `/chien-dich` và nút "Duyệt" trên Lịch với worker + khoá OpenAI:
     - sau lượt cron, bài 3 ngày tới hiện trong hàng đợi; Duyệt / Sửa / Tạo lại / Từ chối, "Duyệt tất cả (n)";

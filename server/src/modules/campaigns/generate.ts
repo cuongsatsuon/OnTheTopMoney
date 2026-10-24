@@ -22,7 +22,7 @@ import { autoApproveCampaignSlots, failStuckSlotImages, listSlotsToGenerate, sta
 import { getPage } from '../pages/index.ts'
 import { getCampaign } from './drafts.ts'
 import { COMPOSE_GOAL, campaignPlan, keyOf } from './preview.ts'
-import { runSlotBatch } from './runner.ts'
+import { campaignIn, runSlotBatch } from './runner.ts'
 import { campaigns } from './schema.ts'
 
 /** Số slot mỗi lượt job [ASSUMPTION]: 9 slot / 3 song song × 2 lời gọi (≤120 giây mỗi lời) vừa hạn 900 giây của queue. */
@@ -97,10 +97,13 @@ export async function runGenerate(
     ...(opts.concurrency ? { concurrency: opts.concurrency } : {}),
     onStop: 'halt',
     autoApprove: campaign.mode === 'auto',
+    // Story 7.5: tạm dừng / xoá giữa lô → dừng trước slot kế (AC: cron sinh nội dung bỏ qua chiến dịch tạm dừng).
+    active: () => campaignIn(deps.db, campaignId, ['running']),
   })
-  if (result.retryCode) throw new GenerateRetryableError(result.retryCode)
-  // Còn slot trong cửa sổ ngoài lô (và lô không dừng vì mã dừng) → lượt sau (stately: xếp sau lượt đang chạy).
-  const more = loaded.todo.length > GENERATE_BATCH && !result.stopCode
+  if (result.retryCode && !result.inactive) throw new GenerateRetryableError(result.retryCode)
+  // Còn slot trong cửa sổ ngoài lô (và lô không dừng vì mã dừng / chiến dịch thôi chạy) → lượt sau (stately: xếp sau lượt
+  // đang chạy).
+  const more = loaded.todo.length > GENERATE_BATCH && !result.stopCode && !result.inactive
   if (more) await deps.jobs.send('campaigns.generate', { campaignId })
   return { generated: result.generated, errors: result.errors, scheduled: result.scheduled, approved, more, stopCode: result.stopCode }
 }

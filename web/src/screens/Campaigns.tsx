@@ -1,6 +1,8 @@
 // Chiến dịch nuôi page `/chien-dich` (Story 7.3): danh sách chiến dịch thật theo Phạm vi (`GET /campaigns?scope=`) — tab
 // trạng thái, KPI, thẻ tiến độ (ngày, bài đã đăng / tổng, bài tiếp theo, bài đã đăng 7 ngày). Nháp mở lại wizard
-// (`/chien-dich/tao?id=`). Tạm dừng / Tiếp tục / Xoá (Story 7.5) khoá "Sắp có".
+// (`/chien-dich/tao?id=`).
+// Story 7.5: Tạm dừng / Tiếp tục bấm là chạy (không xác nhận), thẻ tạm dừng ghi lý do theo `pauseReason`; Xoá (cả nháp)
+// hỏi xác nhận — bài chưa đăng bị huỷ, bài đã đăng giữ nguyên trên trang.
 // Story 7.4: hàng đợi "Bài chờ duyệt" thật (`GET /campaigns/pending-slots?scope=`): Duyệt / Sửa / Tạo lại / Từ chối qua cùng
 // route hành động slot với Lịch nội dung; bài quá giờ (hoặc server trả `SCHEDULE_IN_PAST`) → ô chọn giờ mới; "Duyệt tất
 // cả" chỉ duyệt bài không lỗi, chưa quá giờ, tuần tự (lỗi giữa chừng → "Đã xong k/n bài").
@@ -12,7 +14,7 @@ import type { CampaignSlotActionRequest, CampaignStatus, CampaignSummaryDto, Pag
 import { AiLockHint } from '../components/AiLockHint'
 import { Content } from '../components/AppShell'
 import { ScreenSkeleton, Skeleton } from '../components/Skeleton'
-import { AiBadge, Button, Card, CardHeader, Chip, EmptyState, GroupChip, Input, KpiCard, PageAvatar, PageHeader, PageLabel, Progress, Tabs, Textarea } from '../components/ui'
+import { AiBadge, Button, Card, CardHeader, Chip, EmptyState, GroupChip, Input, KpiCard, Modal, PageAvatar, PageHeader, PageLabel, Progress, Tabs, Textarea } from '../components/ui'
 import { formatVnd, useAiBudget } from '../lib/ai-budget'
 import { useApp } from '../lib/app-context'
 import { partialRunMessage } from '../lib/calendar'
@@ -27,15 +29,22 @@ import {
   bulkApprovable,
   campaignCounts,
   campaignPct,
+  deleteConfirmText,
+  deletedToast,
   goalOf,
   isOverdue,
+  lifecycleToast,
   needsNewTime,
   nextPostLabel,
+  pausedNote,
   pendingNote,
+  resumeErrorText,
   slotTime,
   slotWhen,
   trendTotal,
+  useCampaignLifecycle,
   useCampaigns,
+  useDeleteCampaign,
   usePendingSlots,
   useSlotAction,
 } from '../lib/campaigns'
@@ -167,6 +176,16 @@ export default function Campaigns() {
 
 function CampaignCard({ c, pages }: { c: CampaignSummaryDto; pages: readonly PageDto[] }) {
   const navigate = useNavigate()
+  const { notify } = useApp()
+  const lifecycle = useCampaignLifecycle()
+  const remove = useDeleteCampaign()
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const busy = lifecycle.isPending || remove.isPending
+  const toggle = (action: 'pause' | 'resume') =>
+    lifecycle.mutate(
+      { id: c.id, action },
+      { onSuccess: (res) => notify(lifecycleToast(action, res)), onError: (err) => notify(action === 'resume' ? resumeErrorText(err) : errorMessageOf(err)) },
+    )
   const pct = campaignPct(c)
   const own = c.pages.map((p) => pages.find((x) => x.id === p.pageId)).filter((p): p is PageDto => !!p)
   return (
@@ -193,7 +212,7 @@ function CampaignCard({ c, pages }: { c: CampaignSummaryDto; pages: readonly Pag
       {c.status === 'paused' && (
         <div className="mt-3 flex items-center gap-2 rounded-md border border-amber-200 bg-warning-soft px-3 py-2 text-[13px] text-amber-900">
           <AlertTriangle size={14} className="shrink-0" />
-          <span className="flex-1">Chiến dịch đang tạm dừng</span>
+          <span className="flex-1">{pausedNote(c)}</span>
         </div>
       )}
 
@@ -233,12 +252,12 @@ function CampaignCard({ c, pages }: { c: CampaignSummaryDto; pages: readonly Pag
 
       <div className="mt-4 flex items-center gap-2 border-t border-border pt-3">
         {c.status === 'running' && (
-          <Button size="sm" icon={<Pause size={14} />} disabled title="Sắp có">
+          <Button size="sm" icon={<Pause size={14} />} disabled={busy} onClick={() => toggle('pause')}>
             Tạm dừng
           </Button>
         )}
         {c.status === 'paused' && (
-          <Button size="sm" icon={<Play size={14} />} disabled title="Sắp có">
+          <Button size="sm" variant="primary" icon={<Play size={14} />} disabled={busy} onClick={() => toggle('resume')}>
             Tiếp tục
           </Button>
         )}
@@ -252,10 +271,50 @@ function CampaignCard({ c, pages }: { c: CampaignSummaryDto; pages: readonly Pag
             Xem lịch
           </Button>
         )}
-        <Button size="sm" variant="ghost" className="ml-auto text-danger hover:bg-red-50 hover:text-danger" icon={<Trash2 size={14} />} disabled title="Sắp có">
+        <Button
+          size="sm"
+          variant="ghost"
+          className="ml-auto text-danger hover:bg-red-50 hover:text-danger"
+          icon={<Trash2 size={14} />}
+          disabled={busy}
+          onClick={() => setConfirmDelete(true)}
+        >
           Xoá
         </Button>
       </div>
+
+      <Modal
+        open={confirmDelete}
+        onClose={() => setConfirmDelete(false)}
+        title={c.status === 'draft' ? 'Xoá bản nháp?' : 'Xoá chiến dịch?'}
+        width={440}
+        footer={
+          <>
+            <Button onClick={() => setConfirmDelete(false)}>Huỷ</Button>
+            <Button
+              variant="danger"
+              icon={<Trash2 size={14} />}
+              disabled={remove.isPending}
+              onClick={() =>
+                remove.mutate(
+                  { id: c.id, name: c.name },
+                  {
+                    onSuccess: (res) => {
+                      setConfirmDelete(false)
+                      notify(deletedToast(c.name, res))
+                    },
+                    onError: (err) => notify(errorMessageOf(err)),
+                  },
+                )
+              }
+            >
+              Xoá chiến dịch
+            </Button>
+          </>
+        }
+      >
+        <p className="text-sm">{deleteConfirmText(c)}</p>
+      </Modal>
     </Card>
   )
 }

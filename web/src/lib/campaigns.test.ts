@@ -57,6 +57,11 @@ import {
   slotPhase,
   slotWhen,
   splitEven,
+  deleteConfirmText,
+  deletedToast,
+  lifecycleToast,
+  pausedNote,
+  resumeErrorText,
   startCampaignErrors,
   startedToast,
   stepHasErrors,
@@ -148,7 +153,7 @@ describe('body và nạp lại nháp', () => {
       mode: 'review',
     })
     expect(SaveCampaignRequest.safeParse(body).success).toBe(true)
-    const dto = CampaignDto.parse({ ...body, id: id(99), status: 'draft', startedAt: null, createdAt: '2026-10-24T03:00:00.000Z', updatedAt: '2026-10-24T03:00:00.000Z' })
+    const dto = CampaignDto.parse({ ...body, id: id(99), status: 'draft', startedAt: null, pauseReason: null, pausedAt: null, createdAt: '2026-10-24T03:00:00.000Z', updatedAt: '2026-10-24T03:00:00.000Z' })
     const again = formFromCampaign(dto)
     expect(buildCampaignBody(again, activePages(again, PAGES, OPTIONS), again.name)).toEqual(body)
   })
@@ -157,7 +162,7 @@ describe('body và nạp lại nháp', () => {
     const f = form({ targetMode: 'pages', picked: [SOLO.id] })
     const body = buildCampaignBody(f, activePages(f, PAGES, OPTIONS), 'Tên')
     expect(body.groupId).toBeNull()
-    const dto = CampaignDto.parse({ ...body, mode: 'review', id: id(98), status: 'draft', startedAt: null, createdAt: '2026-10-24T03:00:00.000Z', updatedAt: '2026-10-24T03:00:00.000Z' })
+    const dto = CampaignDto.parse({ ...body, mode: 'review', id: id(98), status: 'draft', startedAt: null, pauseReason: null, pausedAt: null, createdAt: '2026-10-24T03:00:00.000Z', updatedAt: '2026-10-24T03:00:00.000Z' })
     expect(formFromCampaign(dto)).toMatchObject({ targetMode: 'pages', picked: [SOLO.id], groupId: null })
   })
 })
@@ -311,6 +316,8 @@ describe('bắt đầu chiến dịch + danh sách (Story 7.3)', () => {
       id: id(90),
       status: 'running',
       startedAt: '2026-10-24T03:00:00.000Z',
+      pauseReason: null,
+      pausedAt: null,
       createdAt: '2026-10-23T03:00:00.000Z',
       updatedAt: '2026-10-24T03:00:00.000Z',
       postsTotal: 30,
@@ -321,6 +328,33 @@ describe('bắt đầu chiến dịch + danh sách (Story 7.3)', () => {
       daysDone: 0,
       ...over,
     })
+
+  it('Story 7.5: lý do tạm dừng trên thẻ, toast tạm dừng / tiếp tục (bài lỡ giờ), câu lỗi tiếp tục theo mã, xác nhận + toast xoá', () => {
+    expect(pausedNote(summary({ status: 'paused', pauseReason: 'MANUAL', pausedAt: '2026-10-24T03:00:00.000Z' }))).toBe(
+      'Bạn đã tạm dừng chiến dịch — không bài nào được đăng cho tới khi tiếp tục.',
+    )
+    expect(pausedNote(summary({ status: 'paused', pauseReason: 'PAGE_DISCONNECTED', pausedAt: '2026-10-24T03:00:00.000Z' }))).toBe(
+      'Tự tạm dừng: trang trong chiến dịch mất kết nối. Kết nối lại rồi tiếp tục.',
+    )
+    expect(pausedNote(summary({ status: 'paused' }))).toBe('Chiến dịch đang tạm dừng.')
+    const paused = summary({ status: 'paused', pauseReason: 'MANUAL', pausedAt: '2026-10-24T03:00:00.000Z' })
+    expect(lifecycleToast('pause', { campaign: paused, changed: true, missed: 0 })).toBe('Đã tạm dừng “Nuôi page 30 ngày” — không bài nào được đăng cho tới khi tiếp tục')
+    expect(lifecycleToast('pause', { campaign: paused, changed: false, missed: 0 })).toBe('“Nuôi page 30 ngày” đã tạm dừng từ trước')
+    expect(lifecycleToast('resume', { campaign: summary(), changed: true, missed: 3 })).toBe('Đã tiếp tục “Nuôi page 30 ngày” — bỏ 3 bài lỡ giờ trong lúc dừng')
+    expect(lifecycleToast('resume', { campaign: summary(), changed: true, missed: 0 })).toBe('Đã tiếp tục “Nuôi page 30 ngày”')
+    expect(lifecycleToast('resume', { campaign: summary(), changed: false, missed: 0 })).toBe('“Nuôi page 30 ngày” đang chạy')
+    expect(resumeErrorText(new ApiError('PAGE_DISCONNECTED', 409, 'x'))).toContain('vẫn mất kết nối')
+    expect(resumeErrorText(new ApiError('CONFIG_MISSING', 409, 'x'))).toContain('hồ sơ thương hiệu')
+    expect(resumeErrorText(new ApiError('AI_BUDGET_EXCEEDED', 409, 'x'))).toContain('Hạn mức AI tháng này vẫn hết')
+    expect(resumeErrorText(new ApiError('VERSION_CONFLICT', 409, 'x'))).toBe('Dữ liệu vừa được thay đổi ở nơi khác. Tải lại để xem bản mới nhất.')
+    expect(deleteConfirmText(summary())).toContain('Bài đã đăng vẫn giữ nguyên trên trang')
+    expect(deleteConfirmText(summary({ status: 'draft', startedAt: null }))).toBe('Nháp “Nuôi page 30 ngày” và các bài xem trước sẽ bị xoá. Không hoàn tác được.')
+    expect(deletedToast('Nuôi page', { cancelled: 28, kept: 2 })).toBe('Đã xoá “Nuôi page” — huỷ 28 bài chưa đăng, giữ 2 bài đã đăng')
+    expect(deletedToast('Nháp', { cancelled: 7, kept: 0 })).toBe('Đã xoá “Nháp” — huỷ 7 bài chưa đăng')
+    // SSE `campaign.deleted` làm cũ danh sách chiến dịch + Lịch như các sự kiện `campaign.*` khác.
+    expect(hintInvalidates('campaigns', 'campaign', 'campaign.deleted')).toBe(true)
+    expect(hintInvalidates('post_targets', 'campaign', 'campaign.deleted')).toBe(true)
+  })
 
   it('toast: bắt đầu "0/N bài trên Lịch" / đã bắt đầu từ trước', () => {
     expect(startedToast({ campaign: summary(), alreadyStarted: false })).toBe('Đã bắt đầu “Nuôi page 30 ngày” — 30 bài trên Lịch nội dung')

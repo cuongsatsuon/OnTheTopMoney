@@ -37,7 +37,8 @@ import {
   type Post,
 } from '../data/mock'
 import { useApp } from '../lib/app-context'
-import { activeCampaigns as activeOf, campaignPct, goalOf, nextPostLabel, useCampaigns } from '../lib/campaigns'
+import { activeCampaigns as activeOf, campaignPct, goalOf, lifecycleToast, nextPostLabel, pausedNote, resumeErrorText, useCampaignLifecycle, useCampaigns } from '../lib/campaigns'
+import { errorMessageOf } from '../lib/error-messages'
 import { needsReconnect } from '../lib/connections'
 
 type Range = '7d' | '30d' | 'month'
@@ -76,8 +77,15 @@ export default function Dashboard() {
   const { scope, scopedPages, scopeLabel, inScope, notify } = useApp()
   const [range, setRange] = useState<Range>('30d')
   const [autoReply, setAutoReply] = useState<Record<string, boolean>>(() => Object.fromEntries(pages.map((p) => [p.id, p.autoReply])))
-  // Story 7.3: chiến dịch thật theo Phạm vi (đang chạy + tạm dừng) kèm tiến độ từ read-model.
+  // Story 7.3: chiến dịch thật theo Phạm vi (đang chạy + tạm dừng) kèm tiến độ từ read-model. Story 7.5: Tạm dừng /
+  // Tiếp tục ngay trên thẻ (không xác nhận), dòng lý do khi tạm dừng.
   const campaignList = useCampaigns(scope)
+  const lifecycle = useCampaignLifecycle()
+  const toggleCampaign = (id: string, action: 'pause' | 'resume') =>
+    lifecycle.mutate(
+      { id, action },
+      { onSuccess: (res) => notify(lifecycleToast(action, res)), onError: (err) => notify(action === 'resume' ? resumeErrorText(err) : errorMessageOf(err)) },
+    )
 
   // Tỉ lệ người theo dõi của phạm vi so với tổng — dùng để quy đổi số liệu mẫu theo phạm vi.
   const scopeShare = useMemo(() => {
@@ -355,11 +363,16 @@ export default function Dashboard() {
                           </span>
                         </div>
                       </div>
-                      {/* Tạm dừng / Tiếp tục: Story 7.5. */}
-                      <Button size="sm" icon={running ? <Pause size={14} /> : <Play size={14} />} disabled title="Sắp có">
+                      <Button
+                        size="sm"
+                        icon={running ? <Pause size={14} /> : <Play size={14} />}
+                        disabled={lifecycle.isPending}
+                        onClick={() => toggleCampaign(c.id, running ? 'pause' : 'resume')}
+                      >
                         {running ? 'Tạm dừng' : 'Tiếp tục'}
                       </Button>
                     </div>
+                    {!running && <div className="mt-2 rounded-md bg-warning-soft px-2.5 py-1.5 text-xs text-amber-900">{pausedNote(c)}</div>}
                     <Progress value={pct} className={cn('mt-3', !running && 'opacity-60')} />
                     <div className="tabular mt-1.5 flex justify-between text-xs text-muted-foreground">
                       <span>

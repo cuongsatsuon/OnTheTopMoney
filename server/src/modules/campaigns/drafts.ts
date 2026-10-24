@@ -14,6 +14,7 @@ import {
   type CampaignPageBlockReason,
   type CampaignStatus,
   type ParsedSaveCampaignRequest,
+  type PauseReason,
 } from '@ottm/shared'
 import { asc, eq, sql } from 'drizzle-orm'
 import type { DbExecutor } from '../../platform/db/index.ts'
@@ -128,6 +129,8 @@ export async function getCampaign(db: DbExecutor, id: string): Promise<CampaignD
     postTimes: row.postTimes,
     imageRatio: row.imageRatio,
     startedAt: row.startedAt?.toISOString() ?? null,
+    pauseReason: (row.pauseReason as PauseReason | null) ?? null,
+    pausedAt: row.pausedAt?.toISOString() ?? null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   }

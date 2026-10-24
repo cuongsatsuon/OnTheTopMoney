@@ -6,8 +6,9 @@
 // chạy nhiều request (ô gom nhiều bài) mà lỗi giữa chừng → báo đã xong bao nhiêu bài.
 // Story 7.4: bài chiến dịch chờ duyệt có "Duyệt" ngay trong ngăn (cùng route hành động slot với "Bài chờ duyệt"); quá giờ
 // hoặc server trả `SCHEDULE_IN_PAST` → hỏi giờ mới; ô quá giờ ghi "Quá giờ".
+// Story 7.5: bài của chiến dịch tạm dừng ghi "Tạm dừng" trên ô + ghi chú trong ngăn (đăng lại khi chiến dịch tiếp tục).
 import type { CalendarItemDto, PageDto, Platform, PostTargetStatus } from '@ottm/shared'
-import { AlertTriangle, CalendarX, Check, ChevronLeft, ChevronRight, Clock, ExternalLink, Loader2, Megaphone, Pencil, Plus, RotateCcw, Send, Trash2 } from 'lucide-react'
+import { AlertTriangle, CalendarX, Check, ChevronLeft, ChevronRight, Clock, ExternalLink, Loader2, Megaphone, Pause, Pencil, Plus, RotateCcw, Send, Trash2 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { Content } from '../components/AppShell'
@@ -31,7 +32,10 @@ import {
   groupTitle,
   groupsByDay,
   isCampaignGroup,
+  isGroupHeld,
   isGroupOverdue,
+  groupStatusText,
+  HELD_NOTE,
   mondayOf,
   monthGrid,
   monthOf,
@@ -472,7 +476,9 @@ function GroupDrawer({
   // Mốc "bây giờ" lúc mở ngăn (ngăn mở ngắn; server vẫn kiểm giờ đã qua).
   const [now] = useState(() => Date.now())
   // Story 7.4: bài chiến dịch chờ duyệt; quá giờ (hoặc server vừa trả `SCHEDULE_IN_PAST`) → hỏi giờ mới.
-  const approvable = canApproveGroup(group)
+  // Story 7.5: chiến dịch tạm dừng → không đổi giờ / duyệt / đăng lại (server trả 409 `CAMPAIGN_PAUSED`); xoá vẫn được.
+  const held = isGroupHeld(group)
+  const approvable = canApproveGroup(group) && !held
   const overdue = approvable && isGroupOverdue(group, now)
   const [askTime, setAskTime] = useState(overdue)
   // Ô ngày giờ (giờ VN): bài đã lên lịch / chờ duyệt còn giờ → giờ hiện tại của bài; bài lỗi / quá giờ → 19:00 tới gần nhất.
@@ -486,7 +492,7 @@ function GroupDrawer({
   const target = post.data?.targets.find((t) => t.id === first.id)
   const image = target?.media[0]?.url ?? group.thumbnailUrl
   const pageById = new Map(pages.map((p) => [p.id, p]))
-  const editable = group.status === 'scheduled' || group.status === 'failed' || (approvable && askTime)
+  const editable = !held && (group.status === 'scheduled' || group.status === 'failed' || (approvable && askTime))
   const n = group.items.length
   const approveAt = askTime ? at : null
   // Hậu kiểm chặn → sửa ở Chiến dịch trước khi duyệt (server cũng trả 422).
@@ -511,7 +517,7 @@ function GroupDrawer({
                 Mở ở Soạn bài
               </Button>
             )}
-            {group.status === 'scheduled' && (
+            {group.status === 'scheduled' && !held && (
               <>
                 {!isCampaignGroup(group) && (
                   <Button size="sm" icon={<CalendarX size={14} />} disabled={busy} onClick={() => onRun(groupCalls(group, 'unschedule'), `Đã bỏ lịch ${n} trang — bài về nháp ở Soạn bài`)}>
@@ -552,7 +558,7 @@ function GroupDrawer({
                 </Button>
               </>
             )}
-            {group.status === 'failed' && (
+            {group.status === 'failed' && !held && (
               <>
                 <Button size="sm" icon={<RotateCcw size={14} />} disabled={busy || !!whenIssue} onClick={() => at && onRun(groupCalls(group, 'retry', at), `Sẽ đăng lại ${n} trang lúc ${formatVnDateTime(at)}`)}>
                   Đăng lại lúc này
@@ -572,7 +578,24 @@ function GroupDrawer({
             {CALENDAR_STATUS_LABEL[group.status]}
           </Chip>
           {group.ai && <AiBadge />}
+          {held && (
+            <Chip tone="warning" icon={<Pause size={11} />}>
+              Tạm dừng
+            </Chip>
+          )}
         </div>
+
+        {held && (
+          <div role="status" className="flex gap-2.5 rounded-md border border-amber-200 bg-warning-soft p-3 text-[13px] text-amber-900">
+            <Pause size={16} className="mt-0.5 shrink-0" />
+            <div className="flex-1">
+              {HELD_NOTE}{' '}
+              <button type="button" className="font-medium underline" onClick={onOpenCampaigns}>
+                Mở Chiến dịch
+              </button>
+            </div>
+          </div>
+        )}
 
         {group.status === 'failed' && (
           <div role="alert" className="flex gap-2.5 rounded-md border border-red-200 bg-red-50 p-3 text-[13px] text-red-800">
@@ -712,7 +735,7 @@ function Pill({
   onOpen: () => void
 }) {
   const draggable = canDrag(group)
-  const statusText = CALENDAR_STATUS_LABEL[group.status] + (canApproveGroup(group) && isGroupOverdue(group) ? ' · Quá giờ' : '')
+  const statusText = groupStatusText(group)
   const platforms = [...new Set(groupPages(group, pages).map((p) => p.platform))] as Platform[]
   const title = groupTitle(group)
   return (

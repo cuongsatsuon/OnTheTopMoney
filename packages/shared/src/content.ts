@@ -351,6 +351,8 @@ export const CalendarItemDto = z.object({
   /** Story 7.3: ý tưởng / chủ đề của bài — slot chiến dịch chưa viết (`planned`, caption rỗng) hiện "AI sẽ viết · <chủ đề>". */
   topic: z.string().nullable(),
   thumbnailUrl: z.url().nullable(),
+  /** Story 7.5: bài bị giữ không đăng (chiến dịch tạm dừng) — Lịch ghi "Tạm dừng". */
+  held: z.boolean(),
 })
 export type CalendarItemDto = z.infer<typeof CalendarItemDto>
 

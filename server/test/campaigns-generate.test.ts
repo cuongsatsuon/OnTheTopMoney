@@ -197,7 +197,7 @@ describe('cron campaigns.generate_window + job campaigns.generate', () => {
     const c = await running([{ pageId: fb, frequency: null }])
     const other = await draft([{ pageId: fb, frequency: null }], { name: 'Nháp' })
     const paused = await running([{ pageId: fb, frequency: null }], { name: 'Tạm dừng' })
-    await handle.sql`update campaigns set status = 'paused' where id = ${paused.id}`
+    await handle.sql`update campaigns set status = 'paused', pause_reason = 'MANUAL', paused_at = now() where id = ${paused.id}`
     await handle.sql`delete from pgboss.job where name = 'campaigns.preview'`
 
     expect(await runGenerateWindow({ db: handle.db, events, jobs })).toEqual({ stuckImages: 0, generate: 1, preview: 0 })

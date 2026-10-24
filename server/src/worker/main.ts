@@ -8,7 +8,7 @@ import { QUEUES, createBoss, createJobSender, ensureQueues, isCriticalQueue, sta
 import { createSecretCipher } from '../adapters/crypto/index.ts'
 import { createMediaStores } from '../adapters/media/index.ts'
 import { gcReservations, handleAiEvent } from '../modules/ai/index.ts'
-import { handleGenerateJob, handlePreviewJob, runGenerateWindow } from '../modules/campaigns/index.ts'
+import { handleGenerateJob, handlePreviewJob, runCompleteCheck, runGenerateWindow } from '../modules/campaigns/index.ts'
 import { handleRunJob, handleTriageEvent } from '../modules/autoreply/index.ts'
 import {
   cleanupExpiredOAuth,
@@ -236,6 +236,11 @@ try {
         const result = await runGenerateWindow({ db: dbHandle.db, events, jobs, log: logger.child({ component: 'campaigns_window' }) })
         if (result.stuckImages > 0 || result.preview > 0) logger.warn(result, 'campaigns: vá slot kẹt')
         else logger.debug(result, 'campaigns.generate_window')
+      },
+      // Story 7.5: hằng giờ chuyển chiến dịch không còn slot mở sang `done` (phát `campaign.completed`).
+      'campaigns.complete_check': async () => {
+        const done = await runCompleteCheck({ db: dbHandle.db, events })
+        if (done > 0) logger.info({ done }, 'campaigns: chiến dịch đã xong')
       },
       // Story 6.3: xoá ảnh bài không gắn vào bài nào quá 7 ngày (dòng + file Cloudinary).
       'content.media_gc': async () => {

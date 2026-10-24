@@ -8,10 +8,12 @@
 // (`CampaignSummaryDto`, ghép ở read-model của server — AD-18) cho `/chien-dich` và Tổng quan.
 // Story 7.4: sinh cuốn chiếu (`CAMPAIGN_GENERATE_WINDOW_MS`), hàng đợi "Bài chờ duyệt" (`PendingSlotDto`) và các hành động
 // duyệt / từ chối dùng chung cho hàng đợi và Lịch nội dung (một endpoint — AD-13).
+// Story 7.5: tạm dừng / tiếp tục (`CampaignActionResponse`, lý do `pauseReason` trên thẻ) và xoá chiến dịch
+// (`DeleteCampaignResponse` — bài đã đăng / đang đăng giữ nguyên).
 import { z } from 'zod'
 import { ScopeParam } from './scope.ts'
 import { MediaAssetDto, POST_CAPTION_MAX, POST_TARGETS_MAX } from './content.ts'
-import { CampaignFrequency, CampaignGoal, CampaignMode, CampaignStatus, PostTargetStatus, type Platform } from './enums.ts'
+import { CampaignFrequency, CampaignGoal, CampaignMode, CampaignStatus, PauseReason, PostTargetStatus, type Platform } from './enums.ts'
 import { ErrorCode } from './errors.ts'
 
 const IsoDateTime = z.iso.datetime({ offset: false })
@@ -214,6 +216,10 @@ export const CampaignDto = z.object({
   imageRatio: z.number().int(),
   /** Story 7.3: lúc bấm "Bắt đầu chiến dịch"; `null` khi còn nháp. */
   startedAt: IsoDateTime.nullable(),
+  /** Story 7.5: lý do tạm dừng — có đúng khi `paused` (`MANUAL` = chủ shop tự dừng; còn lại do hệ thống — 7.6). */
+  pauseReason: PauseReason.nullable(),
+  /** Story 7.5: lúc tạm dừng; `null` khi không `paused`. */
+  pausedAt: IsoDateTime.nullable(),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 })
@@ -360,3 +366,29 @@ export type PendingSlotsQuery = z.input<typeof PendingSlotsQuery>
 /** → 200, theo giờ đăng tăng dần (bài quá giờ trước). `truncated` = còn bài ngoài `PENDING_SLOTS_MAX`. */
 export const PendingSlotsResponse = z.object({ items: z.array(PendingSlotDto), truncated: z.boolean() })
 export type PendingSlotsResponse = z.infer<typeof PendingSlotsResponse>
+
+/* ---------- Tạm dừng, tiếp tục, xoá (Story 7.5) ---------- */
+
+/** Body `POST /api/v1/campaigns/:id/pause` và `/resume` (không tham số — bấm là chạy, không xác nhận). */
+export const CampaignActionRequest = z.object({}).strict()
+export type CampaignActionRequest = z.infer<typeof CampaignActionRequest>
+
+/**
+ * `POST /api/v1/campaigns/:id/pause|resume` → 200. `changed` = có đổi trạng thái (bấm lại khi đã dừng / đã chạy →
+ * `false`, không đổi gì). `missed` = số bài vừa huỷ `MISSED_WHILE_PAUSED` khi tiếp tục (giờ đăng đã qua trong lúc dừng
+ * — không đăng dồn); luôn 0 với tạm dừng. Tiếp tục khi lý do tự dừng vẫn còn → 409 với mã = lý do
+ * (`PAGE_DISCONNECTED` / `CONFIG_MISSING` / `AI_BUDGET_EXCEEDED`).
+ */
+export const CampaignActionResponse = z.object({
+  campaign: CampaignSummaryDto,
+  changed: z.boolean(),
+  missed: z.number().int().nonnegative(),
+})
+export type CampaignActionResponse = z.infer<typeof CampaignActionResponse>
+
+/**
+ * `DELETE /api/v1/campaigns/:id` → 200 (mọi trạng thái, gồm nháp). `cancelled` = bài chưa đăng vừa huỷ
+ * (`CAMPAIGN_DELETED`); `kept` = bài đã đăng hoặc đang đăng giữ nguyên trên trang.
+ */
+export const DeleteCampaignResponse = z.object({ cancelled: z.number().int().nonnegative(), kept: z.number().int().nonnegative() })
+export type DeleteCampaignResponse = z.infer<typeof DeleteCampaignResponse>

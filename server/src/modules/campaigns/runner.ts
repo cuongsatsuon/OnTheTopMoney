@@ -4,8 +4,19 @@
 // - `mark` (xem trước): slot chưa bắt đầu nhận cùng mã, không gọi AI — bước 4 hiện lý do ngay.
 // - `halt` (cuốn chiếu): dừng lô, slot chưa bắt đầu giữ `planned` để lượt sau tự viết khi gỡ chặn (không vượt hạn mức).
 // Lỗi tạm của OpenAI ở slot nào đó không chặn slot khác; bên gọi ném sau khi lô xong để pg-boss thử lại.
-import type { ComposeGoal, ErrorCode } from '@ottm/shared'
+// Story 7.5: `active()` kiểm trước mỗi slot (chiến dịch vừa tạm dừng / xoá giữa lô → dừng, không gọi AI thêm); slot đang
+// viết dở thì viết xong (bài `held` không được "Tự đăng" duyệt luôn).
+import type { CampaignStatus, ComposeGoal, ErrorCode } from '@ottm/shared'
+import { eq } from 'drizzle-orm'
+import type { DbExecutor } from '../../platform/db/index.ts'
 import { AI_STOP_CODES, SlotGenerateRetryableError, failSlot, generateSlot, type SlotGenerateDeps } from '../content/index.ts'
+import { campaigns } from './schema.ts'
+
+/** Chiến dịch còn tồn tại và ở một trong `statuses` (đọc không khoá — kiểm giữa lô sinh). */
+export async function campaignIn(db: DbExecutor, campaignId: string, statuses: readonly CampaignStatus[]): Promise<boolean> {
+  const [row] = await db.select({ status: campaigns.status }).from(campaigns).where(eq(campaigns.id, campaignId))
+  return !!row && statuses.includes(row.status as CampaignStatus)
+}
 
 /** Số slot sinh song song trong một lượt [ASSUMPTION] — như Soạn bài (`COMPOSE_CONCURRENCY`). */
 export const SLOT_CONCURRENCY = 3
@@ -19,6 +30,8 @@ export interface SlotBatchResult {
   stopCode: ErrorCode | null
   /** Có lỗi tạm ở lượt chưa phải cuối — bên gọi ném để retry. */
   retryCode: ErrorCode | null
+  /** Story 7.5: lô dừng giữa chừng vì `active()` trả `false` (chiến dịch tạm dừng / đã xoá). */
+  inactive: boolean
 }
 
 export async function runSlotBatch(
@@ -31,17 +44,23 @@ export async function runSlotBatch(
     concurrency?: number
     onStop: 'mark' | 'halt'
     autoApprove?: boolean
+    /** Chiến dịch còn nhận sinh nội dung không — kiểm trước mỗi slot. */
+    active?: () => Promise<boolean>
   },
 ): Promise<SlotBatchResult> {
-  const out: SlotBatchResult = { generated: 0, errors: 0, scheduled: 0, stopCode: null, retryCode: null }
+  const out: SlotBatchResult = { generated: 0, errors: 0, scheduled: 0, stopCode: null, retryCode: null, inactive: false }
   let fatal: unknown = null
   let next = 0
   const worker = async () => {
-    while (next < todo.length && fatal === null) {
+    while (next < todo.length && fatal === null && !out.inactive) {
       if (out.stopCode && opts.onStop === 'halt') return
       const slot = todo[next++]!
       if (opts.signal?.aborted) return
       try {
+        if (opts.active && !(await opts.active())) {
+          out.inactive = true
+          return
+        }
         if (out.stopCode) {
           if (await failSlot(deps, slot.id, out.stopCode)) out.errors++
           continue

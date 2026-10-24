@@ -12,15 +12,21 @@
 // - Story 7.4: `GET /campaigns/pending-slots?scope=` hàng đợi "Bài chờ duyệt" (read-model `read-models/campaign-queue.ts`);
 //   route hành động slot nhận thêm Duyệt / Từ chối cho chiến dịch đã bắt đầu (cùng endpoint cho hàng đợi và Lịch nội
 //   dung) và trả `{slot}` thay vì cả danh sách xem trước.
+// - Story 7.5: `POST /campaigns/:id/pause` / `/resume` (không xác nhận — bấm là chạy; tiếp tục khi lý do tự dừng còn → 409
+//   mã = lý do) và `DELETE /campaigns/:id` (FE hỏi xác nhận; bài đã đăng / đang đăng giữ nguyên). MỘT transaction mỗi lệnh,
+//   cần `jobs` + `events`.
 import {
+  CampaignActionRequest,
   CampaignListQuery,
   CampaignPageOptionsResponse,
   CampaignSlotActionRequest,
   PendingSlotsQuery,
   SaveCampaignRequest,
   StartCampaignRequest,
+  type CampaignActionResponse,
   type CampaignDto,
   type CampaignListResponse,
+  type DeleteCampaignResponse,
   type CampaignPreviewResponse,
   type CampaignSlotActionResponse,
   type PendingSlotsResponse,
@@ -31,10 +37,13 @@ import { z } from 'zod'
 import {
   applySlotAction,
   createCampaignDraft,
+  deleteCampaign,
   getCampaign,
   getPreview,
   listCampaigns,
   listPageOptions,
+  pauseCampaign,
+  resumeCampaign,
   startCampaign,
   syncPreviewSlots,
   updateCampaignDraft,
@@ -118,6 +127,29 @@ export function registerCampaigns(app: FastifyInstance, deps: CampaignsDeps): vo
       const input = CampaignSlotActionRequest.parse(req.body ?? {})
       const slot = await db.transaction((tx) => applySlotAction(tx, { jobs, events, ...(deps.now ? { now: deps.now } : {}) }, id, targetId, input))
       return { slot }
+    })
+
+    const summary = async (id: string) => (await campaignSummaries(db, [(await getCampaign(db, id))!], now()))[0]!
+
+    app.post('/api/v1/campaigns/:id/pause', async (req): Promise<CampaignActionResponse> => {
+      const { id } = IdParams.parse(req.params)
+      CampaignActionRequest.parse(req.body ?? {})
+      const at = now()
+      const result = await db.transaction((tx) => pauseCampaign(tx, { jobs, events }, id, 'MANUAL', at))
+      return { campaign: await summary(id), ...result }
+    })
+
+    app.post('/api/v1/campaigns/:id/resume', async (req): Promise<CampaignActionResponse> => {
+      const { id } = IdParams.parse(req.params)
+      CampaignActionRequest.parse(req.body ?? {})
+      const at = now()
+      const result = await db.transaction((tx) => resumeCampaign(tx, { jobs, events }, id, at))
+      return { campaign: await summary(id), ...result }
+    })
+
+    app.delete('/api/v1/campaigns/:id', async (req): Promise<DeleteCampaignResponse> => {
+      const { id } = IdParams.parse(req.params)
+      return db.transaction((tx) => deleteCampaign(tx, { events }, id))
     })
   }
 

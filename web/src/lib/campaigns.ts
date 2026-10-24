@@ -11,15 +11,19 @@
 // Story 7.4: hàng đợi "Bài chờ duyệt" (`GET /campaigns/pending-slots?scope=`) + Duyệt / Từ chối / Sửa / Tạo lại qua
 // CÙNG route hành động slot với bước 4 và Lịch nội dung (route trả `{slot}` — vá cache xem trước, làm cũ danh sách / Lịch).
 // Bài quá giờ (hoặc còn dưới 2 phút) → "Quá giờ — chọn giờ mới"; server trả `SCHEDULE_IN_PAST` thì FE cũng hỏi giờ mới.
+// Story 7.5: Tạm dừng / Tiếp tục (`POST /campaigns/:id/pause|resume`, không xác nhận) + lý do tạm dừng trên thẻ; Xoá
+// (`DELETE /campaigns/:id`, có xác nhận — bài đã đăng giữ nguyên). Tiếp tục khi lý do tự dừng còn → câu theo mã.
 // Phần thuần tách khỏi hook để test được (campaigns.test.ts).
 import {
   CAMPAIGN_SLOT_MIN_LEAD_MS,
+  CampaignActionResponse,
   CampaignDto,
   CampaignListResponse,
   CampaignPageOptionsResponse,
   CampaignPreviewResponse,
   CampaignSlotActionResponse,
   PendingSlotsResponse,
+  DeleteCampaignResponse,
   SaveCampaignRequest,
   StartCampaignResponse,
   type PendingSlotDto,
@@ -40,12 +44,14 @@ import {
   type CampaignTopic,
   type GroupDto,
   type PageDto,
+  type PauseReason,
   type Scope,
 } from '@ottm/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiFetch, isApiError } from './api'
 import { CALENDAR_ROOT_KEY, todayKey } from './calendar'
 import { aiErrorText, imageFailureText } from './composer'
+import { errorMessageOf } from './error-messages'
 import { serverScope } from './inbox'
 import { defaultScheduleInput, isoToVnInput } from './publish'
 
@@ -629,3 +635,73 @@ export const needsNewTime = (err: unknown): boolean => isApiError(err) && err.co
 
 /** Toast sau khi duyệt một bài. */
 export const approvedToast = (slot: Pick<PendingSlotDto, 'scheduledAt' | 'slotAt'>, now = Date.now()): string => `Đã duyệt — bài sẽ đăng ${relativeVnTime(slotTime(slot), now)}`
+
+/* ---------- Tạm dừng, tiếp tục, xoá (Story 7.5) ---------- */
+
+/** Lý do tạm dừng trên thẻ chiến dịch (`MANUAL` = chủ shop tự dừng; còn lại do hệ thống — kèm việc cần làm). */
+export const PAUSE_REASON_TEXT: Record<PauseReason, string> = {
+  MANUAL: 'Bạn đã tạm dừng chiến dịch — không bài nào được đăng cho tới khi tiếp tục.',
+  PAGE_DISCONNECTED: 'Tự tạm dừng: trang trong chiến dịch mất kết nối. Kết nối lại rồi tiếp tục.',
+  AI_BUDGET_EXCEEDED: 'Tự tạm dừng: đã dùng hết hạn mức AI tháng này. Tăng hạn mức rồi tiếp tục.',
+  PUBLISH_FAILURES: 'Tự tạm dừng: nhiều bài đăng lỗi liên tiếp. Kiểm tra Lịch nội dung rồi tiếp tục.',
+  CONFIG_MISSING: 'Tự tạm dừng: trang trong chiến dịch chưa có hồ sơ thương hiệu. Tạo hồ sơ rồi tiếp tục.',
+}
+
+/** Dòng lý do của thẻ đang tạm dừng (dữ liệu cũ thiếu lý do → câu chung). */
+export const pausedNote = (c: Pick<CampaignSummaryDto, 'pauseReason'>): string => (c.pauseReason ? PAUSE_REASON_TEXT[c.pauseReason] : 'Chiến dịch đang tạm dừng.')
+
+/** Toast sau Tạm dừng / Tiếp tục (bấm lại → trạng thái đã như vậy từ trước; tiếp tục có bài lỡ giờ → nói số bài đã bỏ). */
+export function lifecycleToast(action: 'pause' | 'resume', res: CampaignActionResponse): string {
+  const name = `“${res.campaign.name}”`
+  if (!res.changed) return action === 'pause' ? `${name} đã tạm dừng từ trước` : `${name} đang chạy`
+  if (action === 'pause') return `Đã tạm dừng ${name} — không bài nào được đăng cho tới khi tiếp tục`
+  return res.missed > 0 ? `Đã tiếp tục ${name} — bỏ ${res.missed} bài lỡ giờ trong lúc dừng` : `Đã tiếp tục ${name}`
+}
+
+/** Câu lỗi khi tiếp tục bị từ chối vì lý do tự dừng vẫn còn; lỗi khác theo bảng chung. */
+export function resumeErrorText(err: unknown): string {
+  if (isApiError(err)) {
+    if (err.code === 'PAGE_DISCONNECTED') return 'Trang trong chiến dịch vẫn mất kết nối — kết nối lại ở Trang & Nhóm rồi tiếp tục.'
+    if (err.code === 'CONFIG_MISSING') return 'Trang trong chiến dịch vẫn chưa có hồ sơ thương hiệu — tạo hồ sơ rồi tiếp tục.'
+    if (err.code === 'AI_BUDGET_EXCEEDED') return 'Hạn mức AI tháng này vẫn hết — tăng hạn mức ở Cài đặt rồi tiếp tục.'
+  }
+  return errorMessageOf(err)
+}
+
+/** Nội dung hộp xác nhận xoá. */
+export function deleteConfirmText(c: Pick<CampaignSummaryDto, 'name' | 'status'>): string {
+  if (c.status === 'draft') return `Nháp “${c.name}” và các bài xem trước sẽ bị xoá. Không hoàn tác được.`
+  return `“${c.name}” sẽ bị xoá; các bài chưa đăng bị huỷ khỏi Lịch nội dung. Bài đã đăng vẫn giữ nguyên trên trang. Không hoàn tác được.`
+}
+
+/** Toast sau khi xoá. */
+export function deletedToast(name: string, res: DeleteCampaignResponse): string {
+  const kept = res.kept > 0 ? `, giữ ${res.kept} bài đã đăng` : ''
+  return `Đã xoá “${name}” — huỷ ${res.cancelled} bài chưa đăng${kept}`
+}
+
+/** Tạm dừng / Tiếp tục: xong → làm cũ danh sách chiến dịch + hàng đợi + Lịch (bài vừa giữ / thả / huỷ vì lỡ giờ). */
+export function useCampaignLifecycle() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, action }: { id: string; action: 'pause' | 'resume' }) =>
+      apiFetch(`/campaigns/${id}/${action}`, { method: 'POST', body: {}, schema: CampaignActionResponse }),
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: ['campaigns'] })
+      void qc.invalidateQueries({ queryKey: CALENDAR_ROOT_KEY })
+    },
+  })
+}
+
+/** Xoá chiến dịch (đã xác nhận): bỏ cache của chiến dịch đó, làm cũ danh sách + hàng đợi + Lịch. */
+export function useDeleteCampaign() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id }: { id: string; name: string }) => apiFetch(`/campaigns/${id}`, { method: 'DELETE', schema: DeleteCampaignResponse }),
+    onSuccess: (_res, vars) => qc.removeQueries({ queryKey: campaignKey(vars.id) }),
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: ['campaigns'] })
+      void qc.invalidateQueries({ queryKey: CALENDAR_ROOT_KEY })
+    },
+  })
+}

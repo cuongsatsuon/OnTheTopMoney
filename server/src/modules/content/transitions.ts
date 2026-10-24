@@ -141,7 +141,14 @@ export async function transitionTarget(
 ): Promise<void> {
   const now = deps.now?.() ?? new Date()
   const [target] = await tx
-    .select({ id: postTargets.id, pageId: postTargets.pageId, campaignId: postTargets.campaignId, status: postTargets.status, version: postTargets.version })
+    .select({
+      id: postTargets.id,
+      pageId: postTargets.pageId,
+      campaignId: postTargets.campaignId,
+      status: postTargets.status,
+      held: postTargets.held,
+      version: postTargets.version,
+    })
     .from(postTargets)
     .where(eq(postTargets.id, targetId))
     .for('update')
@@ -151,6 +158,12 @@ export async function transitionTarget(
       message: 'Trạng thái bài vừa đổi',
       details: { targetId, status: target.status, version: target.version },
     })
+  }
+
+  // Story 7.5: bài `held` (chiến dịch tạm dừng) không tới `scheduled` được — job đăng sẽ bỏ qua, và "Đăng lại ngay" / duyệt
+  // giờ gần sẽ thành `MISSED_WHILE_PAUSED` lúc tiếp tục. Sửa / tạo lại / từ chối / xoá vẫn được.
+  if (target.held && (TO_SCHEDULED.includes(transition.action as TargetAction) || transition.action === 'approve')) {
+    throw new AppError('CAMPAIGN_PAUSED', 409, { message: 'Chiến dịch của bài đang tạm dừng', details: { targetId, campaignId: target.campaignId } })
   }
 
   if (transition.action === 'cancel' || transition.action === 'reject') {

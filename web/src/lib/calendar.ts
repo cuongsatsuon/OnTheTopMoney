@@ -3,6 +3,7 @@
 // (AD-13): kéo bài đã lên lịch = `reschedule`, kéo bài lỗi = `retry` vào giờ mới, "Bỏ lịch" = `unschedule`, "Xoá" =
 // `cancel` — không có đường ghi riêng. Story 7.4: bài chiến dịch chờ duyệt duyệt ngay trên lịch qua CÙNG route hành động
 // slot của "Bài chờ duyệt" (`POST /campaigns/:id/slots/:targetId/transition`, `approve`); quá giờ → hỏi giờ mới.
+// Story 7.5: bài của chiến dịch tạm dừng (`held`) ghi "Tạm dừng" trên ô và trong ngăn.
 // Lưới tính theo ngày giờ VN (UTC+7 cố định) bất kể múi giờ trình duyệt; khoá ngày `YYYY-MM-DD`.
 // Phần thuần tách khỏi hook để test được (calendar.test.ts).
 import {
@@ -108,6 +109,8 @@ export interface CalendarGroup {
   /** Story 7.3: chủ đề — slot chiến dịch chưa viết hiện "AI sẽ viết · <chủ đề>". */
   topic: string | null
   thumbnailUrl: string | null
+  /** Story 7.5: có bài bị giữ không đăng (chiến dịch tạm dừng). */
+  held: boolean
 }
 
 /**
@@ -128,6 +131,7 @@ export function groupCalendarItems(items: readonly CalendarItemDto[]): CalendarG
       g.title ??= it.title
       g.topic ??= it.topic
       g.thumbnailUrl ??= it.thumbnailUrl
+      g.held ||= it.held
       continue
     }
     const vn = isoToVnInput(it.scheduledAt)
@@ -145,6 +149,7 @@ export function groupCalendarItems(items: readonly CalendarItemDto[]): CalendarG
       title: it.title,
       topic: it.topic,
       thumbnailUrl: it.thumbnailUrl,
+      held: it.held,
     })
   }
   return [...groups.values()].sort((a, b) => a.scheduledAt.localeCompare(b.scheduledAt) || a.key.localeCompare(b.key))
@@ -205,7 +210,8 @@ export function dragAction(status: PostTargetStatus): Extract<TargetAction, 'res
   return null
 }
 
-export const canDrag = (g: Pick<CalendarGroup, 'status'>): boolean => dragAction(g.status) !== null
+/** Story 7.5: bài `held` (chiến dịch tạm dừng) không kéo được — server trả 409 `CAMPAIGN_PAUSED`. */
+export const canDrag = (g: Pick<CalendarGroup, 'status' | 'held'>): boolean => dragAction(g.status) !== null && !g.held
 
 /** Xoá được (`cancel`): mọi trạng thái trước `publishing` và bài lỗi. */
 export const canCancel = (status: PostTargetStatus): boolean => ['planned', 'draft', 'pending_approval', 'scheduled', 'failed'].includes(status)
@@ -273,6 +279,17 @@ export const canApproveGroup = (g: Pick<CalendarGroup, 'status' | 'campaignId'>)
 
 /** Quá giờ (đã qua / còn dưới 2 phút) — duyệt phải chọn giờ mới. */
 export const isGroupOverdue = (g: Pick<CalendarGroup, 'scheduledAt'>, now = Date.now()): boolean => Date.parse(g.scheduledAt) <= now + CAMPAIGN_SLOT_MIN_LEAD_MS
+
+/** Bài chưa đăng xong bị giữ vì chiến dịch tạm dừng (bài đã đăng / đã huỷ không ghi). */
+export const isGroupHeld = (g: Pick<CalendarGroup, 'held' | 'status'>): boolean => g.held && g.status !== 'published' && g.status !== 'cancelled'
+
+/** Chữ trạng thái của ô: "Chờ duyệt · Quá giờ", "Đã lên lịch · Tạm dừng"… */
+export function groupStatusText(g: Pick<CalendarGroup, 'status' | 'campaignId' | 'scheduledAt' | 'held'>, now = Date.now()): string {
+  if (isGroupHeld(g)) return `${CALENDAR_STATUS_LABEL[g.status]} · Tạm dừng`
+  return CALENDAR_STATUS_LABEL[g.status] + (canApproveGroup(g) && isGroupOverdue(g, now) ? ' · Quá giờ' : '')
+}
+
+export const HELD_NOTE = 'Chiến dịch đang tạm dừng — bài này chưa đăng cho tới khi bạn tiếp tục chiến dịch. Bài lỡ giờ trong lúc dừng sẽ bị bỏ.'
 
 export interface ApproveCall {
   campaignId: string

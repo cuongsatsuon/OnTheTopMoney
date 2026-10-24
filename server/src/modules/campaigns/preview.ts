@@ -42,7 +42,7 @@ import {
 } from '../content/index.ts'
 import { getPage } from '../pages/index.ts'
 import { getCampaign } from './drafts.ts'
-import { SLOT_CONCURRENCY, runSlotBatch } from './runner.ts'
+import { SLOT_CONCURRENCY, campaignIn, runSlotBatch } from './runner.ts'
 import { campaigns } from './schema.ts'
 
 /** Số slot sinh song song trong một lượt [ASSUMPTION] — như Soạn bài (`COMPOSE_CONCURRENCY`). */
@@ -134,11 +134,13 @@ export async function runPreview(
     signal: opts.signal,
     concurrency: opts.concurrency ?? PREVIEW_CONCURRENCY,
     onStop: 'mark',
+    // Story 7.5: nháp bị xoá giữa lượt → dừng (vừa "Bắt đầu" thì viết tiếp — 7.4).
+    active: () => campaignIn(deps.db, campaignId, ['draft', 'running']),
   })
   // Story 7.4: chiến dịch vừa "Bắt đầu" giữa lượt → lượt cuốn chiếu duyệt bài vừa viết xong ("Tự đăng") và viết tiếp.
   const [after] = await deps.db.select({ status: campaigns.status }).from(campaigns).where(eq(campaigns.id, campaignId))
   if (after?.status === ('running' satisfies CampaignStatus)) await deps.jobs.send('campaigns.generate', { campaignId })
-  if (result.retryCode) throw new PreviewRetryableError(result.retryCode)
+  if (result.retryCode && !result.inactive) throw new PreviewRetryableError(result.retryCode)
   return { generated: result.generated, errors: result.errors }
 }
 

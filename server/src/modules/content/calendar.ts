@@ -55,6 +55,7 @@ export async function listCalendar(db: DbExecutor, range: CalendarRange): Promis
       source: posts.source,
       topic: posts.topic,
       campaignId: postTargets.campaignId,
+      held: postTargets.held,
     })
     .from(postTargets)
     .innerJoin(posts, eq(posts.id, postTargets.postId))
@@ -88,6 +89,8 @@ export async function listCalendar(db: DbExecutor, range: CalendarRange): Promis
       title: calendarTitle(r.caption),
       topic: r.topic,
       thumbnailUrl: r.thumbnail,
+      // Story 7.5: chiến dịch tạm dừng giữ bài lại — Lịch ghi "Tạm dừng".
+      held: r.held,
     }),
   )
   return { items, truncated: rows.length > CALENDAR_ITEMS_MAX }

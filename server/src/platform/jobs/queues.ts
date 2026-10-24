@@ -76,6 +76,8 @@ export interface QueuePayloads {
   /** Story 7.4: một lượt sinh cuốn chiếu của chiến dịch đang chạy (stately theo `campaignId`). */
   'campaigns.generate': { campaignId: string }
   'campaigns.generate_window': Record<string, never>
+  /** Story 7.5: hằng giờ chuyển chiến dịch không còn slot mở sang `done`. */
+  'campaigns.complete_check': Record<string, never>
   /** Story 4.5: tin của chính trang chưa khớp tin nào của app — bản chuẩn hoá (dạng JSON) để thử khớp lại. */
   'inbox.echo_match': {
     pageId: string
@@ -423,6 +425,16 @@ export const QUEUES = {
     concurrency: 1,
     expireInSeconds: 120,
     cron: { expression: '0 * * * *', tz: CRON_TZ },
+  },
+  // Module `campaigns` (Story 7.5, AD-15): hằng giờ (phút 5, lệch lượt sinh cuốn chiếu) chuyển chiến dịch `running|paused`
+  // không còn slot `planned|pending_approval|scheduled|publishing` sang `done` + `campaign.completed`. Idempotent (kiểm lại
+  // dưới khoá dòng); cron chạy lại giờ sau → retry 1.
+  'campaigns.complete_check': {
+    policy: 'standard',
+    retryLimit: 1,
+    concurrency: 1,
+    expireInSeconds: 120,
+    cron: { expression: '5 * * * *', tz: CRON_TZ },
   },
 } as const satisfies { [N in keyof QueuePayloads]: QueueDef }
 

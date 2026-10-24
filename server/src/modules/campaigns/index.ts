@@ -1,7 +1,8 @@
 // Module `campaigns` (AD-1, AD-15 — Story 7.1): sở hữu `campaigns`, `campaign_topics`, `campaign_pages`. Public API chỉ
 // export từ file này.
 // Gọi `pages` (base), `profiles` (hồ sơ thương hiệu hiệu lực — trang chọn được), `content` (slot — Story 7.2; `content`
-// gọi tiếp `ai`; Story 7.4 kiểm khoá / hạn mức AI trước lô sinh cuốn chiếu) theo bảng mũi tên AD-1. Không module nào gọi `campaigns`; `content` báo ngược chiều qua sự kiện.
+// gọi tiếp `ai`; Story 7.4 kiểm khoá / hạn mức AI trước lô sinh cuốn chiếu; Story 7.5 kiểm hạn mức trước khi tiếp tục)
+// theo bảng mũi tên AD-1. Không module nào gọi `campaigns`; `content` báo ngược chiều qua sự kiện.
 export const MODULE = 'campaigns'
 
 // Nháp wizard bước 1–3 (Story 7.1): lưu / thay / đọc cấu hình.
@@ -37,3 +38,14 @@ export {
   type GenerateWindowDeps,
   type GenerateWindowResult,
 } from './generate.ts'
+// Tạm dừng / tiếp tục / xoá (Story 7.5): một cặp hàm dùng chung cho chủ shop (`MANUAL`) và hệ thống (7.6); cron
+// `campaigns.complete_check` chuyển chiến dịch hết slot sang `done`.
+export {
+  deleteCampaign,
+  pauseCampaign,
+  resumeCampaign,
+  runCompleteCheck,
+  type CompleteCheckDeps,
+  type LifecycleDeps,
+  type LifecycleResult,
+} from './lifecycle.ts'
