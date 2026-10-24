@@ -55,7 +55,8 @@ const PAUSE_REASON_TEXT: Record<Exclude<PauseReason, 'MANUAL'>, string> = {
   PAGE_DISCONNECTED: 'Trang trong chiến dịch mất kết nối. Kết nối lại rồi tiếp tục chiến dịch.',
   AI_BUDGET_EXCEEDED: 'Đã dùng hết hạn mức AI tháng này. Tăng hạn mức rồi tiếp tục chiến dịch.',
   PUBLISH_FAILURES: 'Nhiều bài đăng lỗi liên tiếp. Kiểm tra lịch nội dung rồi tiếp tục chiến dịch.',
-  CONFIG_MISSING: 'Chiến dịch còn thiếu cấu hình. Hoàn tất cài đặt rồi tiếp tục.',
+  CONFIG_MISSING: 'Trang trong chiến dịch chưa có hồ sơ thương hiệu. Tạo hồ sơ rồi tiếp tục chiến dịch.',
+  OPENAI_KEY_UNAVAILABLE: 'Khoá OpenAI chưa dùng được nên AI không viết tiếp bài. Cập nhật khoá ở Cài đặt rồi tiếp tục chiến dịch.',
 }
 
 const VN_DATE = new Intl.DateTimeFormat('vi-VN', {
@@ -93,6 +94,18 @@ export function draftFor(envelope: EventEnvelope, isCriticalQueue: (queue: strin
       entity: 'page',
       entityId: expiring.id,
       pageId: expiring.pageId ?? expiring.id,
+    }
+  }
+  // Story 7.6: trang mất kết nối (chiến dịch dùng trang đó tự tạm dừng — thông báo `campaign_paused` riêng).
+  const disconnected = payloadOf(envelope, 'page.disconnected')
+  if (disconnected) {
+    return {
+      type: 'page_disconnected',
+      title: 'Trang mất kết nối',
+      body: 'App không nhận tin và không đăng bài được cho trang này. Kết nối lại ở Trang & Nhóm.',
+      entity: 'page',
+      entityId: disconnected.id,
+      pageId: disconnected.pageId ?? disconnected.id,
     }
   }
   const failed = payloadOf(envelope, 'post_target.failed')
@@ -153,7 +166,10 @@ function stableFields(envelope: EventEnvelope): string[] {
     case 'post_target.failed':
       return [String(p.errorCode)]
     case 'campaign.paused':
-      return [String(p.reason)]
+      // Lý do + lúc vào `paused`: dừng lại lần sau vẫn báo; lý do hệ thống đè `MANUAL` (cùng `pausedAt`) cũng báo.
+      return [String(p.reason), String(p.pausedAt)]
+    case 'page.disconnected':
+      return [String(p.disconnectedAt ?? p.reason)]
     case 'job.failed':
       return [String(p.queue), String(p.jobId)]
     default:

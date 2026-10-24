@@ -117,7 +117,8 @@ const NOTIFY_ITEMS: { id: NotificationType; label: string; hint: string }[] = [
   { id: 'ai_handoff', label: 'AI chuyển hội thoại cho bạn', hint: 'Báo ngay khi có tin cần bạn xử lý.' },
   { id: 'token_expiring', label: 'Token sắp hết hạn', hint: 'Báo trước 7 ngày để bạn kết nối lại kịp.' },
   { id: 'publish_failed', label: 'Đăng bài lỗi', hint: 'Báo khi một bài không đăng được lên trang.' },
-  { id: 'campaign_paused', label: 'Chiến dịch tạm dừng', hint: 'Báo khi chiến dịch tự dừng vì mất kết nối hoặc hết hạn mức AI.' },
+  { id: 'campaign_paused', label: 'Chiến dịch tạm dừng', hint: 'Báo khi chiến dịch tự dừng vì mất kết nối, hết hạn mức AI, thiếu khoá / hồ sơ hoặc đăng lỗi liên tiếp.' },
+  { id: 'page_disconnected', label: 'Trang mất kết nối', hint: 'Báo khi một trang không còn nhận tin và đăng bài được — cần kết nối lại.' },
   { id: 'system_error', label: 'Việc chạy nền bị lỗi', hint: 'Báo khi một việc chạy nền quan trọng thử lại nhiều lần vẫn lỗi.' },
 ]
 

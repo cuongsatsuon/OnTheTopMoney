@@ -408,7 +408,7 @@ describe('tiếp tục', () => {
     const futureScheduled = await approved(c.id, rows[3]!.id)
     await setStatus(rows[4]!.id, 'failed')
     await written(rows[5]!.id) // chờ duyệt, còn tương lai
-    await handle.sql`update campaigns set consecutive_failures = 2 where id = ${c.id}`
+    await handle.sql`update campaigns set consecutive_failures = 2, failure_target_ids = array['t1', 't2'] where id = ${c.id}`
     actionOf(await pause(c.id))
     await handle.sql`delete from pgboss.job where name in ('publish.target', 'campaigns.generate')`
 

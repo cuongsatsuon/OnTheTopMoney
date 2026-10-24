@@ -14,7 +14,7 @@
 //   dung) và trả `{slot}` thay vì cả danh sách xem trước.
 // - Story 7.5: `POST /campaigns/:id/pause` / `/resume` (không xác nhận — bấm là chạy; tiếp tục khi lý do tự dừng còn → 409
 //   mã = lý do) và `DELETE /campaigns/:id` (FE hỏi xác nhận; bài đã đăng / đang đăng giữ nguyên). MỘT transaction mỗi lệnh,
-//   cần `jobs` + `events`.
+//   cần `jobs` + `events`. Story 7.6: tiếp tục kiểm cả khoá OpenAI (cần `cipher`).
 import {
   CampaignActionRequest,
   CampaignListQuery,
@@ -49,6 +49,7 @@ import {
   updateCampaignDraft,
 } from '../modules/campaigns/index.ts'
 import { resolveScope } from '../modules/pages/index.ts'
+import type { SecretCipher } from '../adapters/crypto/index.ts'
 import type { Db } from '../platform/db/index.ts'
 import { AppError } from '../platform/errors/index.ts'
 import type { EventPublisher } from '../platform/events/index.ts'
@@ -64,6 +65,8 @@ export interface CampaignsDeps {
   /** Thiếu → lưu nháp vẫn dựng bài xem trước nhưng không enqueue `campaigns.preview`; thiếu cả `events` → không có route hành động slot. */
   jobs?: JobSender | undefined
   events?: EventPublisher | undefined
+  /** Story 7.6: kiểm khoá OpenAI dùng được khi tiếp tục chiến dịch dừng vì `OPENAI_KEY_UNAVAILABLE`. */
+  cipher?: SecretCipher | null | undefined
   /** Đồng hồ (test cố định "hôm nay" khi kiểm ngày bắt đầu). */
   now?: () => Date
 }
@@ -143,7 +146,7 @@ export function registerCampaigns(app: FastifyInstance, deps: CampaignsDeps): vo
       const { id } = IdParams.parse(req.params)
       CampaignActionRequest.parse(req.body ?? {})
       const at = now()
-      const result = await db.transaction((tx) => resumeCampaign(tx, { jobs, events }, id, at))
+      const result = await db.transaction((tx) => resumeCampaign(tx, { jobs, events, cipher: deps.cipher ?? null }, id, at))
       return { campaign: await summary(id), ...result }
     })
 

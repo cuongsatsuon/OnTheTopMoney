@@ -2,7 +2,8 @@
 // export từ file này.
 // Gọi `pages` (base), `profiles` (hồ sơ thương hiệu hiệu lực — trang chọn được), `content` (slot — Story 7.2; `content`
 // gọi tiếp `ai`; Story 7.4 kiểm khoá / hạn mức AI trước lô sinh cuốn chiếu; Story 7.5 kiểm hạn mức trước khi tiếp tục)
-// theo bảng mũi tên AD-1. Không module nào gọi `campaigns`; `content` báo ngược chiều qua sự kiện.
+// theo bảng mũi tên AD-1. Không module nào gọi `campaigns`; `content` báo ngược chiều qua sự kiện (Story 7.6: consumer
+// `events.campaigns` tự tạm dừng khi có sự cố).
 export const MODULE = 'campaigns'
 
 // Nháp wizard bước 1–3 (Story 7.1): lưu / thay / đọc cấu hình.
@@ -42,6 +43,7 @@ export {
 // `campaigns.complete_check` chuyển chiến dịch hết slot sang `done`.
 export {
   deleteCampaign,
+  pauseBySystem,
   pauseCampaign,
   resumeCampaign,
   runCompleteCheck,
@@ -49,3 +51,6 @@ export {
   type LifecycleDeps,
   type LifecycleResult,
 } from './lifecycle.ts'
+// Tự tạm dừng khi có sự cố (Story 7.6): consumer `events.campaigns` — trang mất kết nối / bị gỡ / rời nhóm nhãn, hạn mức AI
+// 100%, chuỗi bài đăng lỗi.
+export { PUBLISH_FAILURES_MAX, handleCampaignsEvent, type CampaignsEventDeps, type CampaignsEventResult } from './auto-pause.ts'

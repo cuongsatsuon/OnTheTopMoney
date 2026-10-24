@@ -122,6 +122,8 @@ describe('createRealtimeClient — Hộp thư (Story 4.3)', () => {
     expect(hintInvalidates('contacts', 'conversation')).toBe(true)
     expect(hintInvalidates('messages', 'contact')).toBe(true)
     expect(hintInvalidates('contacts', 'page')).toBe(false)
+    // Story 7.6: gỡ trang / rời nhóm nhãn huỷ hàng loạt bài chưa đăng (không có sự kiện từng bài) → Lịch tải lại.
+    expect(hintInvalidates('post_targets', 'page')).toBe(true)
   })
 
   it('conversation.state_changed (Tiếp quản ở tab khác) → làm cũ danh sách theo tab, badge, chi tiết và khung chat (Story 4.6)', async () => {

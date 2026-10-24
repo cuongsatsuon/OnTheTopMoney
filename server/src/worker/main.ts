@@ -8,7 +8,7 @@ import { QUEUES, createBoss, createJobSender, ensureQueues, isCriticalQueue, sta
 import { createSecretCipher } from '../adapters/crypto/index.ts'
 import { createMediaStores } from '../adapters/media/index.ts'
 import { gcReservations, handleAiEvent } from '../modules/ai/index.ts'
-import { handleGenerateJob, handlePreviewJob, runCompleteCheck, runGenerateWindow } from '../modules/campaigns/index.ts'
+import { handleCampaignsEvent, handleGenerateJob, handlePreviewJob, runCompleteCheck, runGenerateWindow } from '../modules/campaigns/index.ts'
 import { handleRunJob, handleTriageEvent } from '../modules/autoreply/index.ts'
 import {
   cleanupExpiredOAuth,
@@ -19,7 +19,7 @@ import {
   runTokenCheck,
   subscribePage,
 } from '../modules/connections/index.ts'
-import { gcOrphanMedia, handleImageGenerateJob, handlePublishJob, requeueTargets } from '../modules/content/index.ts'
+import { gcOrphanMedia, handleContentEvent, handleImageGenerateJob, handlePublishJob, requeueTargets } from '../modules/content/index.ts'
 import {
   handleContactSummaryJob,
   handleEchoMatchJob,
@@ -99,6 +99,18 @@ try {
         // dữ liệu hỏng → 'ignored' (không ném ZodError đốt lượt retry). Idempotent nên retry an toàn.
         const result = await handleProfilesEvent({ db: dbHandle.db }, job.data)
         logger.debug({ jobId: job.id, result }, 'events.profiles')
+      },
+      // Story 7.6: gỡ trang → huỷ bài chưa đăng của trang (`PAGE_REMOVED`). Tự kiểm envelope; idempotent.
+      'events.content': async (job) => {
+        const result = await handleContentEvent({ db: dbHandle.db }, job.data)
+        logger.debug({ jobId: job.id, result }, 'events.content')
+      },
+      // Story 7.6: chiến dịch tự tạm dừng (trang mất kết nối, hạn mức AI 100%, chuỗi bài đăng lỗi), bỏ trang bị gỡ / rời
+      // nhóm nhãn. Tự kiểm envelope (sai dạng → 'ignored'); idempotent nên retry an toàn.
+      'events.campaigns': async (job) => {
+        const result = await handleCampaignsEvent({ db: dbHandle.db, jobs, events, cipher }, job.data)
+        if (result !== 'ignored' && result.changed > 0) logger.info({ jobId: job.id, result }, 'events.campaigns')
+        else logger.debug({ jobId: job.id, result }, 'events.campaigns')
       },
       'ai.reservations_gc': async () => {
         const removed = await gcReservations(dbHandle.db)

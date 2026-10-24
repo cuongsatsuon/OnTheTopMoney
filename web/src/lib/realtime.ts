@@ -51,13 +51,15 @@ export function entityMatches(root: unknown, entity: string): boolean {
  *   `['campaigns', id, 'preview']`.
  * - Story 7.3: `campaign` (`campaign.started` — cả lịch slot vừa tạo; tạm dừng / tiếp tục / xong) → danh sách chiến dịch
  *   `['campaigns', …]` (chính thực thể) + Lịch nội dung `['post_targets', …]`.
+ * - Story 7.6: `page` (gỡ trang / rời nhóm nhãn huỷ hàng loạt bài chưa đăng, không phát sự kiện từng bài) → Lịch nội dung
+ *   `['post_targets', …]`.
  */
 export const ENTITY_ALSO_INVALIDATES: Readonly<Record<string, readonly string[]>> = {
   openai_key: ['settings', 'onboarding'],
   settings: ['ai_budget', 'onboarding'],
   message: ['conversation', 'contact', 'onboarding', 'webhook'],
   contact: ['conversation', 'message', 'search'],
-  page: ['search', 'onboarding', 'campaign'],
+  page: ['search', 'onboarding', 'campaign', 'post_target'],
   group: ['search'],
   conversation: ['message', 'contact'],
   // Story 6.4: target đăng xong / lỗi → bài đang mở ở Soạn bài `['posts', id]`. Story 7.2: bài xem trước chiến dịch.

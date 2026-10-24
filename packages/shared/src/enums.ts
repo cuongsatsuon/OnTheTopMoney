@@ -177,6 +177,8 @@ export const PAUSE_REASONS = [
   'PUBLISH_FAILURES',
   'CONFIG_MISSING',
   'MANUAL',
+  // Story 7.6: khoá OpenAI chưa dùng được (chưa nhập / bị từ chối / chưa cấu hình mã hoá) lúc lượt sinh cần AI.
+  'OPENAI_KEY_UNAVAILABLE',
 ] as const
 export const PauseReason = z.enum(PAUSE_REASONS)
 export type PauseReason = z.infer<typeof PauseReason>

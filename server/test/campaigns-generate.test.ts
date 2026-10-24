@@ -342,21 +342,24 @@ describe('chế độ "Tự đăng"', () => {
 /* ---------- Khoá / hạn mức ---------- */
 
 describe('hạn mức AI', () => {
-  it('khoá chưa nhập / hạn mức đã hết trước lượt → `stopped`, không gọi AI, slot giữ `planned`', async () => {
+  it('khoá chưa nhập / hạn mức đã hết trước lượt → `stopped` + tự tạm dừng (Story 7.6), không gọi AI, slot giữ `planned`', async () => {
     const fb = await page('facebook')
     const c = await running([{ pageId: fb, frequency: null }])
     await handle.sql`delete from secrets where name = 'openai_api_key'`
-    expect(await gen(c.id)).toEqual({ stopped: 'OPENAI_KEY_MISSING', approved: 0 })
+    expect(await gen(c.id)).toEqual({ stopped: 'OPENAI_KEY_MISSING', approved: 0, paused: 'OPENAI_KEY_UNAVAILABLE' })
+    expect(await gen(c.id)).toBe('skipped')
     await setOpenAiKey({ db: handle.db, events, cipher, openai }, GOOD)
+    const c2 = await running([{ pageId: fb, frequency: null }])
     await setOpenAiPrefs(handle.db, events, { ...DEFAULT_OPENAI_PREFS, monthlyLimitVnd: 100 })
     await settle(
       { db: handle.db, events },
       { reservationId: null, month: '2026-10', feature: 'compose_caption', model: 'gpt-6-luna', pageId: null, ref: null, usage: { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, images: 0 }, cost: { usdMicros: 0, costVnd: 100 } },
     )
     await handle.sql`update ai_budget_months set month = to_char(now() at time zone 'Asia/Ho_Chi_Minh', 'YYYY-MM')`
-    expect(await gen(c.id)).toEqual({ stopped: 'AI_BUDGET_EXCEEDED', approved: 0 })
+    expect(await gen(c2.id)).toEqual({ stopped: 'AI_BUDGET_EXCEEDED', approved: 0, paused: 'AI_BUDGET_EXCEEDED' })
     expect(openai.responseRequests).toHaveLength(0)
     expect(await statuses(c.id)).toEqual(Array(30).fill('planned'))
+    expect(await statuses(c2.id)).toEqual(Array(30).fill('planned'))
   })
 
   it('hết hạn mức giữa lượt → slot gặp lỗi `AI_BUDGET_EXCEEDED`, slot còn lại giữ `planned`, không enqueue lượt tiếp, không vượt hạn mức', async () => {
@@ -369,7 +372,7 @@ describe('hạn mức AI', () => {
       if (++n === 1) await handle.sql`update ai_budget_months set spent_vnd = 1000000`
       return ok(`Bài số ${n} cho shop nhé`)
     })
-    expect(await gen(c.id, START_MIDNIGHT, { concurrency: 1 })).toMatchObject({ generated: 1, errors: 1, more: false, stopCode: 'AI_BUDGET_EXCEEDED' })
+    expect(await gen(c.id, START_MIDNIGHT, { concurrency: 1 })).toMatchObject({ generated: 1, errors: 1, more: false, stopCode: 'AI_BUDGET_EXCEEDED', paused: 'AI_BUDGET_EXCEEDED' })
     const rows = await slotRows(c.id)
     expect(rows.slice(0, 3).map((r) => [r.status, r.error_code])).toEqual([
       ['pending_approval', null],

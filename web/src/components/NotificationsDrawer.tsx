@@ -3,7 +3,7 @@
 // không đánh dấu mục tới sau lần tải); mục mới tới trong lúc mở cũng được đánh dấu. Mục chưa đọc lúc
 // thấy vẫn được làm nổi để dễ nhận ra. "Xem thêm" đi theo `nextCursor`.
 import type { MarkNotificationsReadRequest, Notification } from '@ottm/shared'
-import { AlertTriangle, Bell, BotMessageSquare, CalendarX, KeyRound, Megaphone } from 'lucide-react'
+import { AlertTriangle, Bell, BotMessageSquare, CalendarX, KeyRound, Megaphone, Unplug } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { errorMessageOf } from '../lib/error-messages'
@@ -22,6 +22,7 @@ const TYPE_ICON: Record<Notification['type'], ReactNode> = {
   token_expiring: <KeyRound size={16} />,
   publish_failed: <CalendarX size={16} />,
   campaign_paused: <Megaphone size={16} />,
+  page_disconnected: <Unplug size={16} />,
   system_error: <AlertTriangle size={16} />,
 }
 

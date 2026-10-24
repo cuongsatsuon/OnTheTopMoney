@@ -8,6 +8,7 @@
 // - `cancelCampaignTargets`: xoá chiến dịch (Story 7.6: trang rời nhóm nhãn — theo `pageId`) — huỷ bài chưa đăng, giữ bài
 //   `publishing` / `published`. Xoá cả chiến dịch: bài `publishing` thêm `held` — lỗi tạm đưa bài về `scheduled` thì lần
 //   retry bỏ qua (không đăng sau khi đã xoá); cron `campaigns.complete_check` huỷ nốt qua `heldCampaignIds`.
+// - `cancelPageTargets` (Story 7.6): gỡ trang — huỷ bài chưa đăng của trang đó (cả bài thủ công), consumer `events.content`.
 // Không phát `post_target.cancelled` từng bài: bên gọi phát một sự kiện cấp chiến dịch (Lịch / danh sách làm cũ theo đó).
 // Thứ tự khoá: dòng chiến dịch (bên gọi) → dòng slot theo id — cùng chiều "Bắt đầu" và "Tự đăng".
 import { CAMPAIGN_SLOT_MIN_LEAD_MS, type CancelReason, type PostTargetStatus } from '@ottm/shared'
@@ -138,6 +139,30 @@ export async function cancelCampaignTargets(
     .from(postTargets)
     .where(and(scope, inArray(postTargets.status, ['publishing', 'published'] satisfies PostTargetStatus[])))
   return { cancelled: cancelled.length, kept: kept?.n ?? 0 }
+}
+
+/**
+ * Story 7.6 (AD-23): huỷ bài chưa đăng của trang `pageId` (bài thủ công lẫn slot chiến dịch) với lý do `reason` — gỡ
+ * trang. `planned|pending_approval|scheduled|failed` → `cancelled`; nháp thủ công (`draft` — chưa lên lịch, không tự đăng),
+ * `publishing` / `published` giữ nguyên. Idempotent (bài đã huỷ không khớp lần sau). Trả số bài vừa huỷ.
+ */
+export async function cancelPageTargets(tx: DbExecutor, pageId: string, reason: CancelReason): Promise<number> {
+  await tx.select({ id: postTargets.id }).from(postTargets).where(eq(postTargets.pageId, pageId)).orderBy(asc(postTargets.id)).for('update')
+  const rows = await tx
+    .update(postTargets)
+    .set({
+      status: 'cancelled' satisfies PostTargetStatus,
+      cancelReason: reason,
+      errorCode: null,
+      held: false,
+      generateLeaseUntil: null,
+      scheduleVersion: sql`case when ${postTargets.status} = 'scheduled' then ${postTargets.scheduleVersion} + 1 else ${postTargets.scheduleVersion} end`,
+      version: sql`${postTargets.version} + 1`,
+      updatedAt: sql`now()`,
+    })
+    .where(and(eq(postTargets.pageId, pageId), inArray(postTargets.status, [...CANCELLABLE])))
+    .returning({ id: postTargets.id })
+  return rows.length
 }
 
 /** Số slot còn mở (`planned|pending_approval|scheduled|publishing`) theo chiến dịch; chiến dịch không có → 0 (không có trong map). */

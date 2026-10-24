@@ -10,7 +10,7 @@ import {
   type SecretCipher,
 } from '../../adapters/crypto/index.ts'
 import { createOpenAiAdapter, type OpenAiAdapter, type OpenAiErrorKind } from '../../adapters/openai/index.ts'
-import type { Db } from '../../platform/db/index.ts'
+import type { Db, DbExecutor } from '../../platform/db/index.ts'
 import { AppError } from '../../platform/errors/index.ts'
 import type { EventPublisher } from '../../platform/events/index.ts'
 import type { Logger } from '../../platform/log/index.ts'
@@ -88,7 +88,7 @@ interface StoredKey {
   envelope: string
 }
 
-async function readStoredKey(db: Db): Promise<StoredKey | null> {
+async function readStoredKey(db: DbExecutor): Promise<StoredKey | null> {
   const meta = await getSecretMeta(db, OPENAI_API_KEY_SECRET)
   const info = toKeyInfo(meta)
   if (!info.configured) return null
@@ -179,9 +179,10 @@ export interface UsableOpenAiKey {
  * Khoá OpenAI dùng được cho AI gateway (Story 1.6). Chưa có khoá → `OPENAI_KEY_MISSING`; khoá đã bị
  * OpenAI từ chối → `OPENAI_KEY_INVALID`; chưa có khoá chủ → `ENCRYPTION_NOT_CONFIGURED`. Không giải mã
  * được (keyId không còn trong `APP_ENCRYPTION_KEYS`, dữ liệu hỏng) → `OPENAI_KEY_INVALID` với
- * `details.reason = 'reentry_required'`, message nêu keyId; trạng thái đã lưu không đổi.
+ * `details.reason = 'reentry_required'`, message nêu keyId; trạng thái đã lưu không đổi. Story 7.6: nhận cả transaction
+ * (tiếp tục chiến dịch kiểm khoá dưới khoá dòng chiến dịch).
  */
-export async function getUsableOpenAiKey(deps: Pick<AiDeps, 'db' | 'cipher'>): Promise<UsableOpenAiKey> {
+export async function getUsableOpenAiKey(deps: { db: DbExecutor; cipher: AiDeps['cipher'] }): Promise<UsableOpenAiKey> {
   const stored = await readStoredKey(deps.db)
   if (!stored) throw new AppError('OPENAI_KEY_MISSING', 400)
   if (stored.info.status !== 'valid') throw new AppError('OPENAI_KEY_INVALID', 400)

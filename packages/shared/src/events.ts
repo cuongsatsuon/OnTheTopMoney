@@ -60,7 +60,9 @@ export const EVENTS = {
   'post_target.updated': event(true, { pageId: Id, campaignId: Id.nullable() }),
   // Story 7.3: chiến dịch vừa bắt đầu (cả lịch slot vừa được tạo) — web làm cũ danh sách chiến dịch + Lịch nội dung.
   'campaign.started': event(true, {}),
-  'campaign.paused': event(true, { reason: PauseReason }),
+  // Story 7.6: `pausedAt` = lúc chiến dịch vào `paused` (giữ nguyên khi lý do hệ thống đè `MANUAL`) — thông báo chống trùng
+  // theo `(id, reason, pausedAt)`: dừng lại lần sau vẫn báo, giao lại không nhân đôi.
+  'campaign.paused': event(true, { reason: PauseReason, pausedAt: z.iso.datetime() }),
   'campaign.resumed': event(true, {}),
   'campaign.completed': event(true, {}),
   // Story 7.5: chiến dịch đã xoá (bài chưa đăng đã huỷ hàng loạt, không phát `post_target.cancelled` từng bài) — web làm
@@ -68,7 +70,8 @@ export const EVENTS = {
   'campaign.deleted': event(true, {}),
   'page.connected': event(true, {}),
   'page.reconnected': event(true, {}),
-  'page.disconnected': event(true, { reason: z.string().optional() }),
+  // Story 7.6: `disconnectedAt` = lúc chuyển `disconnected` (thông báo `page_disconnected` chống trùng theo mốc này).
+  'page.disconnected': event(true, { reason: z.string().optional(), disconnectedAt: z.iso.datetime().optional() }),
   'page.expiring': event(true, { expiresAt: z.iso.datetime() }),
   'page.removed': event(true, {}),
   'page.group_changed': event(true, { fromGroupId: Id.nullable(), toGroupId: Id.nullable() }),

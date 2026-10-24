@@ -5,7 +5,8 @@
 //   (thông báo bỏ qua `MANUAL`). Đã dừng vì `MANUAL` mà hệ thống báo sự cố → đổi lý do (Tiếp tục khi đó vẫn kiểm sự cố).
 // - `resumeCampaign`: lý do tự dừng còn (trang vẫn mất kết nối / thiếu hồ sơ, hạn mức vẫn 100%) → 409 mã = lý do. Ngược
 //   lại `content.releaseCampaignTargets` (bài lỡ giờ → `cancelled MISSED_WHILE_PAUSED`, không đăng dồn; bài tương lai
-//   enqueue lại), `consecutive_failures = 0`, `campaign.resumed`, enqueue `campaigns.generate` (viết tiếp ngay).
+//   enqueue lại), `consecutive_failures = 0`, `campaign.resumed`, enqueue `campaigns.generate` (viết tiếp ngay). Story 7.6:
+//   khoá OpenAI vẫn chưa dùng được → 409 mã = lỗi khoá (`OPENAI_KEY_UNAVAILABLE`); bỏ cả danh sách target đã đếm lỗi.
 // - `deleteCampaign`: `content.cancelCampaignTargets(CAMPAIGN_DELETED)` (bài đã đăng / đang đăng giữ nguyên) rồi xoá dòng.
 // - `runCompleteCheck` (cron `campaigns.complete_check`): chiến dịch `running|paused` không còn slot mở → `done` (bỏ
 //   `held` còn sót). Kèm dọn bài `held` của chiến dịch đã xoá (bài `publishing` lúc xoá, lỗi tạm → về `scheduled`).
@@ -16,7 +17,7 @@ import { bossDbFor, type Db, type DbExecutor } from '../../platform/db/index.ts'
 import { AppError } from '../../platform/errors/index.ts'
 import type { EventPublisher } from '../../platform/events/index.ts'
 import type { JobSender } from '../../platform/jobs/index.ts'
-import { getBudgetSummary } from '../ai/index.ts'
+import { getBudgetSummary, getUsableOpenAiKey, type AiDeps } from '../ai/index.ts'
 import {
   cancelCampaignTargets,
   clearCampaignHolds,
@@ -34,6 +35,8 @@ import { campaigns } from './schema.ts'
 export interface LifecycleDeps {
   jobs: JobSender
   events: EventPublisher
+  /** Story 7.6: giải mã khoá OpenAI khi kiểm lý do `OPENAI_KEY_UNAVAILABLE` lúc tiếp tục (thiếu → coi như chưa cấu hình mã hoá). */
+  cipher?: AiDeps['cipher'] | undefined
 }
 
 export interface LifecycleResult {
@@ -51,9 +54,13 @@ const wrongStatus = (id: string, status: CampaignStatus) =>
   })
 
 async function lockCampaign(tx: DbExecutor, id: string) {
-  const [row] = await tx.select({ status: campaigns.status, pauseReason: campaigns.pauseReason }).from(campaigns).where(eq(campaigns.id, id)).for('update')
+  const [row] = await tx
+    .select({ status: campaigns.status, pauseReason: campaigns.pauseReason, pausedAt: campaigns.pausedAt })
+    .from(campaigns)
+    .where(eq(campaigns.id, id))
+    .for('update')
   if (!row) throw notFound(id)
-  return { status: row.status as CampaignStatus, pauseReason: row.pauseReason as PauseReason | null }
+  return { status: row.status as CampaignStatus, pauseReason: row.pauseReason as PauseReason | null, pausedAt: row.pausedAt }
 }
 
 /**
@@ -66,7 +73,7 @@ export async function pauseCampaign(tx: DbExecutor, deps: LifecycleDeps, id: str
   if (row.status === 'paused') {
     if (row.pauseReason !== 'MANUAL' || reason === 'MANUAL') return { changed: false, missed: 0 }
     await tx.update(campaigns).set({ pauseReason: reason, updatedAt: sql`now()` }).where(eq(campaigns.id, id))
-    await deps.events.publishEvent(tx, 'campaign.paused', { id, reason })
+    await deps.events.publishEvent(tx, 'campaign.paused', { id, reason, pausedAt: (row.pausedAt ?? now).toISOString() })
     return { changed: true, missed: 0 }
   }
   await tx
@@ -74,12 +81,30 @@ export async function pauseCampaign(tx: DbExecutor, deps: LifecycleDeps, id: str
     .set({ status: 'paused' satisfies CampaignStatus, pauseReason: reason, pausedAt: now, updatedAt: sql`now()` })
     .where(eq(campaigns.id, id))
   await holdCampaignTargets(tx, id)
-  await deps.events.publishEvent(tx, 'campaign.paused', { id, reason })
+  await deps.events.publishEvent(tx, 'campaign.paused', { id, reason, pausedAt: now.toISOString() })
   return { changed: true, missed: 0 }
 }
 
-/** Lý do tự dừng còn không: trang (chưa gỡ) vẫn bị chặn, hạn mức vẫn hết. `MANUAL` / `PUBLISH_FAILURES` không kiểm. */
-async function assertReasonCleared(tx: DbExecutor, id: string, reason: PauseReason): Promise<void> {
+/**
+ * Story 7.6: hệ thống tự tạm dừng chiến dịch `id` trong transaction riêng (consumer sự kiện, lượt sinh). Chiến dịch vừa xoá
+ * / chưa bắt đầu / đã xong giữa chừng (404 / 409) → bỏ qua. Trả `true` khi vừa đổi trạng thái / lý do.
+ */
+export async function pauseBySystem(db: Db, deps: LifecycleDeps, id: string, reason: Exclude<PauseReason, 'MANUAL'>, now: Date): Promise<boolean> {
+  return db.transaction(async (tx) => {
+    try {
+      return (await pauseCampaign(tx, deps, id, reason, now)).changed
+    } catch (err) {
+      if (err instanceof AppError && (err.statusCode === 404 || err.statusCode === 409)) return false
+      throw err
+    }
+  })
+}
+
+/**
+ * Lý do tự dừng còn không: trang (chưa gỡ) vẫn bị chặn, hạn mức vẫn hết, khoá OpenAI vẫn chưa dùng được (Story 7.6).
+ * `MANUAL` / `PUBLISH_FAILURES` không kiểm.
+ */
+async function assertReasonCleared(tx: DbExecutor, deps: LifecycleDeps, id: string, reason: PauseReason): Promise<void> {
   if (reason === 'PAGE_DISCONNECTED' || reason === 'CONFIG_MISSING') {
     const campaign = (await getCampaign(tx, id))!
     for (const p of campaign.pages) {
@@ -97,6 +122,14 @@ async function assertReasonCleared(tx: DbExecutor, id: string, reason: PauseReas
   if (reason === 'AI_BUDGET_EXCEEDED' && (await getBudgetSummary({ db: tx })).state === 'blocked') {
     throw new AppError('AI_BUDGET_EXCEEDED', 409, { message: 'Hạn mức AI tháng này vẫn hết', details: { campaignId: id } })
   }
+  if (reason === 'OPENAI_KEY_UNAVAILABLE') {
+    try {
+      await getUsableOpenAiKey({ db: tx, cipher: deps.cipher ?? null })
+    } catch (err) {
+      if (!(err instanceof AppError)) throw err
+      throw new AppError(err.code, 409, { message: 'Khoá OpenAI vẫn chưa dùng được', details: { campaignId: id } })
+    }
+  }
 }
 
 /**
@@ -107,11 +140,11 @@ export async function resumeCampaign(tx: DbExecutor, deps: LifecycleDeps, id: st
   const row = await lockCampaign(tx, id)
   if (row.status === 'running') return { changed: false, missed: 0 }
   if (row.status !== 'paused') throw wrongStatus(id, row.status)
-  await assertReasonCleared(tx, id, row.pauseReason ?? 'MANUAL')
+  await assertReasonCleared(tx, deps, id, row.pauseReason ?? 'MANUAL')
   const released = await releaseCampaignTargets(tx, deps, id, now)
   await tx
     .update(campaigns)
-    .set({ status: 'running' satisfies CampaignStatus, pauseReason: null, pausedAt: null, consecutiveFailures: 0, updatedAt: sql`now()` })
+    .set({ status: 'running' satisfies CampaignStatus, pauseReason: null, pausedAt: null, consecutiveFailures: 0, failureTargetIds: [], updatedAt: sql`now()` })
     .where(eq(campaigns.id, id))
   await deps.events.publishEvent(tx, 'campaign.resumed', { id })
   // Viết tiếp ngay (slot trong cửa sổ đã chờ suốt lúc dừng); "Tự đăng" duyệt bài chờ duyệt vừa bỏ `held`.

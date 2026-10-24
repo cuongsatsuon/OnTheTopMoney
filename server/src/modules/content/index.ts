@@ -51,11 +51,13 @@ export {
 export { autoApproveCampaignSlots, type AutoApproveOutcome } from './slots-approve.ts'
 // "Bắt đầu chiến dịch" (Story 7.3): tạo phần slot còn lại, bỏ `held` bài xem trước ("Tự đăng" → duyệt); tiến độ cho read-model.
 export { startCampaignSlots, type StartSlotsResult } from './slots-start.ts'
-export { campaignProgress, type CampaignProgress } from './slots-progress.ts'
+// Story 7.6: chuỗi lỗi đăng theo thứ tự thật của bài (không theo thứ tự xử lý sự kiện).
+export { campaignProgress, failedAfterPublish, publishedAfter, type CampaignProgress } from './slots-progress.ts'
 // Tạm dừng / tiếp tục / xoá chiến dịch (Story 7.5): giữ, thả (bài lỡ giờ → `MISSED_WHILE_PAUSED`), huỷ hàng loạt slot;
 // đếm slot còn mở cho cron hoàn tất.
 export {
   cancelCampaignTargets,
+  cancelPageTargets,
   clearCampaignHolds,
   heldCampaignIds,
   holdCampaignTargets,
@@ -64,6 +66,8 @@ export {
   type CancelCampaignResult,
   type ReleaseResult,
 } from './slots-hold.ts'
+// Story 7.6: consumer `events.content` — gỡ trang (`page.removed`) huỷ bài chưa đăng của trang đó (`PAGE_REMOVED`).
+export { handleContentEvent, type ContentEventDeps, type ContentEventResult } from './events.ts'
 // Sinh ảnh AI (Story 6.3, AD-14): yêu cầu 4 ô + job `content.image.generate`; cron dọn ảnh không gắn bài.
 export {
   ImageGenerateRetryableError,

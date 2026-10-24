@@ -134,7 +134,12 @@ describe('handleEvent (consumer events.notifications)', () => {
     expect(dedupeKey(envelope('post_target.failed', { id: 't', pageId: 'p', campaignId: null, errorCode: 'PUBLISH_FAILED' }))).toBe(
       'post_target.failed:t:PUBLISH_FAILED',
     )
-    expect(dedupeKey(envelope('campaign.paused', { id: 'c', reason: 'PAGE_DISCONNECTED' }))).toBe('campaign.paused:c:PAGE_DISCONNECTED')
+    expect(dedupeKey(envelope('campaign.paused', { id: 'c', reason: 'PAGE_DISCONNECTED', pausedAt: '2026-10-24T03:00:00.000Z' }))).toBe(
+      'campaign.paused:c:PAGE_DISCONNECTED:2026-10-24T03:00:00.000Z',
+    )
+    expect(dedupeKey(envelope('page.disconnected', { id: 'p', pageId: 'p', reason: 'TOKEN_INVALID', disconnectedAt: '2026-10-24T03:00:00.000Z' }))).toBe(
+      'page.disconnected:p:2026-10-24T03:00:00.000Z',
+    )
     expect(dedupeKey(envelope('job.failed', { id: 'j', queue: 'a.b', jobId: 'j' }))).toBe('job.failed:j:a.b:j')
   })
 
@@ -157,11 +162,33 @@ describe('handleEvent (consumer events.notifications)', () => {
   })
 
   it('campaign.paused: mặc định tắt; bật thì tạo; MANUAL thì không báo', async () => {
-    const paused = envelope('campaign.paused', { id: newId(), reason: 'PAGE_DISCONNECTED' })
+    const id = newId()
+    const paused = envelope('campaign.paused', { id, reason: 'PAGE_DISCONNECTED', pausedAt: '2026-10-24T03:00:00.000Z' })
     expect(await handleEvent(deps, paused)).toBe('disabled')
     await setNotificationPrefs(handle.db, events, { ...DEFAULT_NOTIFICATION_PREFS, campaign_paused: true })
     expect(await handleEvent(deps, paused)).toBe('created')
-    expect(await handleEvent(deps, envelope('campaign.paused', { id: newId(), reason: 'MANUAL' }))).toBe('ignored')
+    expect(await handleEvent(deps, envelope('campaign.paused', { id: newId(), reason: 'MANUAL', pausedAt: '2026-10-24T03:00:00.000Z' }))).toBe('ignored')
+    // Story 7.6: giao lại → một thông báo; dừng lại lần sau (cùng lý do, `pausedAt` khác) → thông báo mới.
+    expect(await handleEvent(deps, paused)).toBe('duplicate')
+    expect(await handleEvent(deps, envelope('campaign.paused', { id, reason: 'PAGE_DISCONNECTED', pausedAt: '2026-11-02T03:00:00.000Z' }))).toBe('created')
+    const [row] = await handle.sql<{ body: string }[]>`select body from notifications order by id limit 1`
+    expect(row!.body).toContain('mất kết nối')
+    expect(
+      await handleEvent(deps, envelope('campaign.paused', { id: newId(), reason: 'OPENAI_KEY_UNAVAILABLE', pausedAt: '2026-10-24T03:00:00.000Z' })),
+    ).toBe('created')
+  })
+
+  it('Story 7.6: page.disconnected → page_disconnected (mặc định bật); giao lại không nhân đôi; lần mất kết nối sau báo lại', async () => {
+    const page = newId()
+    const lost = (at: string) => envelope('page.disconnected', { id: page, pageId: page, reason: 'TOKEN_INVALID', disconnectedAt: at })
+    expect(await handleEvent(deps, lost('2026-10-24T03:00:00.000Z'))).toBe('created')
+    expect(await handleEvent(deps, lost('2026-10-24T03:00:00.000Z'))).toBe('duplicate')
+    expect(await handleEvent(deps, lost('2026-11-02T03:00:00.000Z'))).toBe('created')
+    const all = await handle.sql<{ type: string; entity: string; page_id: string; title: string }[]>`select type, entity, page_id, title from notifications`
+    expect(all).toHaveLength(2)
+    expect(all[0]).toMatchObject({ type: 'page_disconnected', entity: 'page', page_id: page, title: 'Trang mất kết nối' })
+    await setNotificationPrefs(handle.db, events, { ...DEFAULT_NOTIFICATION_PREFS, page_disconnected: false })
+    expect(await handleEvent(deps, lost('2026-12-01T03:00:00.000Z'))).toBe('disabled')
   })
 
   it('job.failed: system_error chỉ khi queue thuộc danh sách quan trọng', async () => {
@@ -178,7 +205,7 @@ describe('handleEvent (consumer events.notifications)', () => {
   it('registry thật: events.notifications không critical (tránh vòng lặp job.failed)', () => {
     expect(isCriticalQueue('events.notifications')).toBe(false)
     expect(QUEUES['events.notifications'].subscribes).toEqual(
-      expect.arrayContaining(['conversation.state_changed', 'page.expiring', 'post_target.failed', 'campaign.paused', 'job.failed']),
+      expect.arrayContaining(['conversation.state_changed', 'page.expiring', 'page.disconnected', 'post_target.failed', 'campaign.paused', 'job.failed']),
     )
   })
 })
@@ -191,6 +218,7 @@ describe('cài đặt thông báo (module settings)', () => {
       token_expiring: true,
       publish_failed: true,
       campaign_paused: false,
+      page_disconnected: true,
       system_error: true,
     })
   })
@@ -347,6 +375,8 @@ describe('worker thật: publish → events.notifications → thông báo; job h
         'platform.heartbeat': async () => {},
         'events.ai': async () => {},
         'events.profiles': async () => {},
+        'events.content': async () => {},
+        'events.campaigns': async () => {},
         'ai.reservations_gc': async () => {},
         'connections.oauth_gc': async () => {},
         'connections.token_check': async () => {},

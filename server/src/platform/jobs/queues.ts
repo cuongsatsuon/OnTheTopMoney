@@ -48,6 +48,8 @@ export interface QueuePayloads {
   'events.notifications': EventEnvelope
   'events.ai': EventEnvelope
   'events.profiles': EventEnvelope
+  'events.content': EventEnvelope
+  'events.campaigns': EventEnvelope
   'ai.reservations_gc': Record<string, never>
   'connections.oauth_gc': Record<string, never>
   'connections.token_check': Record<string, never>
@@ -115,7 +117,7 @@ export const QUEUES = {
     concurrency: 2,
     expireInSeconds: 60,
     pollingIntervalSeconds: 0.5,
-    subscribes: ['conversation.state_changed', 'page.expiring', 'post_target.failed', 'campaign.paused', 'job.failed'],
+    subscribes: ['conversation.state_changed', 'page.expiring', 'page.disconnected', 'post_target.failed', 'campaign.paused', 'job.failed'],
   },
   // Module `ai` (Story 1.6): đổi hạn mức / tỉ giá / cảnh báo 80% → tính lại cờ cảnh báo, phát
   // `ai_budget.restored` khi xuống dưới ngưỡng. Idempotent (đối chiếu cờ với số đã tiêu) nên retry an toàn.
@@ -140,6 +142,32 @@ export const QUEUES = {
     expireInSeconds: 60,
     pollingIntervalSeconds: 0.5,
     subscribes: ['page.group_changed', 'group.deleted'],
+  },
+  // Module `content` (Story 7.6, AD-23): gỡ trang → huỷ bài chưa đăng của trang đó (`PAGE_REMOVED`). Idempotent (bài đã
+  // huỷ không khớp lần sau) nên retry an toàn; retry 5 backoff (AD-24 dòng `events.<module>`).
+  'events.content': {
+    policy: 'standard',
+    retryLimit: 5,
+    retryDelay: 2,
+    retryBackoff: true,
+    concurrency: 1,
+    expireInSeconds: 60,
+    pollingIntervalSeconds: 0.5,
+    subscribes: ['page.removed'],
+  },
+  // Module `campaigns` (Story 7.6, AD-15): tự tạm dừng khi trang mất kết nối / hạn mức AI 100% / bài đăng lỗi liên tiếp,
+  // bỏ trang bị gỡ / rời nhóm nhãn. Idempotent (`pauseCampaign` đã dừng thì không đổi; chuỗi lỗi đếm theo `targetId`) nên
+  // retry an toàn; retry 5 backoff (AD-24). Concurrency 2: mỗi chiến dịch đổi dưới khoá dòng. Hỏi job 0,5 giây để thẻ
+  // chiến dịch đổi ngay.
+  'events.campaigns': {
+    policy: 'standard',
+    retryLimit: 5,
+    retryDelay: 2,
+    retryBackoff: true,
+    concurrency: 2,
+    expireInSeconds: 120,
+    pollingIntervalSeconds: 0.5,
+    subscribes: ['page.disconnected', 'page.removed', 'page.group_changed', 'ai_budget.threshold_reached', 'post_target.failed', 'post_target.published'],
   },
   // Dọn chỗ giữ chi phí AI bị bỏ rơi (tiến trình chết giữa lời gọi) cũ hơn 15 phút, mỗi 5 phút.
   'ai.reservations_gc': {

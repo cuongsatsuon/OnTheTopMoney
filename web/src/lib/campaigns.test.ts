@@ -356,6 +356,14 @@ describe('bắt đầu chiến dịch + danh sách (Story 7.3)', () => {
     expect(hintInvalidates('post_targets', 'campaign', 'campaign.deleted')).toBe(true)
   })
 
+  it('Story 7.6: lý do khoá OpenAI trên thẻ, câu lỗi tiếp tục khi khoá vẫn chưa dùng được', () => {
+    expect(pausedNote(summary({ status: 'paused', pauseReason: 'OPENAI_KEY_UNAVAILABLE', pausedAt: '2026-10-24T03:00:00.000Z' }))).toContain('khoá OpenAI chưa dùng được')
+    expect(pausedNote(summary({ status: 'paused', pauseReason: 'PUBLISH_FAILURES', pausedAt: '2026-10-24T03:00:00.000Z' }))).toContain('đăng lỗi liên tiếp')
+    for (const code of ['OPENAI_KEY_MISSING', 'OPENAI_KEY_INVALID', 'OPENAI_KEY_RESTRICTED'] as const) {
+      expect(resumeErrorText(new ApiError(code, 409, 'x'))).toBe('Khoá OpenAI vẫn chưa dùng được — cập nhật khoá ở Cài đặt › OpenAI rồi tiếp tục.')
+    }
+  })
+
   it('toast: bắt đầu "0/N bài trên Lịch" / đã bắt đầu từ trước', () => {
     expect(startedToast({ campaign: summary(), alreadyStarted: false })).toBe('Đã bắt đầu “Nuôi page 30 ngày” — 30 bài trên Lịch nội dung')
     expect(startedToast({ campaign: summary(), alreadyStarted: true })).toBe('“Nuôi page 30 ngày” đã bắt đầu từ trước')

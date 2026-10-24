@@ -7,6 +7,8 @@ export const NOTIFICATION_TYPES = [
   'token_expiring',
   'publish_failed',
   'campaign_paused',
+  /** Story 7.6: trang mất kết nối (`page.disconnected`) — chiến dịch dùng trang đó cũng tự tạm dừng. */
+  'page_disconnected',
   /** Job hết retry ở queue quan trọng (`critical: true` trong platform/jobs/queues.ts). */
   'system_error',
 ] as const
@@ -19,6 +21,7 @@ export const NotificationPrefs = z.object({
   token_expiring: z.boolean(),
   publish_failed: z.boolean(),
   campaign_paused: z.boolean(),
+  page_disconnected: z.boolean(),
   system_error: z.boolean(),
 }) satisfies z.ZodType<Record<NotificationType, boolean>>
 export type NotificationPrefs = z.infer<typeof NotificationPrefs>
@@ -29,6 +32,7 @@ export const DEFAULT_NOTIFICATION_PREFS: NotificationPrefs = {
   token_expiring: true,
   publish_failed: true,
   campaign_paused: false,
+  page_disconnected: true,
   system_error: true,
 }
 

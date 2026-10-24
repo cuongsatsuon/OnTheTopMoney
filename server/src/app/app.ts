@@ -160,8 +160,9 @@ export function buildApp({ sql, db, logger, http = {}, loginLimiter, health, eve
   // `post_target.cancelled` (cần `events`); Lịch nội dung `GET /calendar`.
   registerPosts(app, { db, jobs, events, ...(clock ? { now: clock } : {}) })
   // Chiến dịch nuôi page (Story 7.1): nháp wizard bước 1–3 + trang chọn được làm đích. Story 7.2: bài xem trước — lưu
-  // nháp enqueue `campaigns.preview` (cần `jobs`); Sửa / Xoá / Tạo lại cần `jobs` + `events`.
-  registerCampaigns(app, { db, jobs, events, ...(clock ? { now: clock } : {}) })
+  // nháp enqueue `campaigns.preview` (cần `jobs`); Sửa / Xoá / Tạo lại cần `jobs` + `events`. Story 7.6: tiếp tục kiểm khoá
+  // OpenAI (cần `cipher`).
+  registerCampaigns(app, { db, jobs, events, cipher: ai?.cipher ?? null, ...(clock ? { now: clock } : {}) })
   // Hộp thư (Story 4.3): hội thoại, tin, đính kèm (đọc từ kho riêng tư); Story 4.7: gửi tin (cần `events` + `jobs`).
   registerInbox(app, { db, media: mediaStores, events, jobs })
   // Khách hàng (Story 4.9): danh sách, hồ sơ, lịch sử, gộp (cần `events`), tóm tắt AI (cần `events` + `jobs`).

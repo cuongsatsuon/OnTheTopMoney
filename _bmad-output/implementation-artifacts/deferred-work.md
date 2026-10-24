@@ -35,9 +35,6 @@
   summary: Job CI tuỳ chọn chạy `runMediaCheck` với tài khoản Cloudinary thử (secret `CLOUDINARY_URL_TEST`).
   evidence: Fake ký bằng chính `signParams` của adapter; tải file `authenticated` qua API download chưa được kiểm với Cloudinary thật.
 - source_spec: `spec-2-4-han-token-va-ket-noi-lai.md`
-  summary: Thông báo bền (notification) khi trang `page.disconnected` — hiện chỉ phát realtime, chủ shop không có cảnh báo lưu lại cho ca khẩn nhất.
-  evidence: `events.notifications` subscribe `page.expiring` nhưng không `page.disconnected`; thêm cần enum NotificationType + prefs + FE. Làm khi mở rộng trung tâm thông báo.
-- source_spec: `spec-2-4-han-token-va-ket-noi-lai.md`
   summary: Reconnect chặt: xác nhận account Meta vừa re-auth đúng là account của pageId đã bấm (lưu platform_account_id kỳ vọng vào intent, so ở confirm).
   evidence: Hiện confirm khớp theo (platform, platformAccountId); nếu auth account khác thì cập nhật/ tạo dòng khác, pageId intent không được ép. App một chủ nên rủi ro thấp.
 - source_spec: `spec-3-1-ho-so-thuong-hieu.md`
@@ -255,9 +252,6 @@
     - chế độ "Tự đăng": bài viết xong lên lịch xanh, bài lỗi về hàng đợi.
   evidence: Chỉ có test API (Postgres thật, `server/test/campaigns-generate.test.ts`) và test helper web (`web/src/lib/campaigns.test.ts`, `calendar.test.ts`); chưa chạy UI (dev không có mật khẩu mẫu).
 - source_spec: `spec-7-4-sinh-cuon-chieu-va-hang-doi-duyet.md`
-  summary: Khoá OpenAI thiếu / hạn mức hết → lượt cuốn chiếu dừng im lặng (slot giữ `planned`, Lịch vẫn "AI sẽ viết"); khi gỡ chặn, slot đã quá giờ mà chưa viết vẫn được viết (tốn tiền) rồi về "Chờ duyệt" quá giờ.
-  evidence: `campaigns/generate.ts` kiểm trước lô, trả `{stopped}`; banner hạn mức / khoá toàn app đã báo lý do. Story 7.6 tự tạm dừng chiến dịch khi hạn mức 100% (Tiếp tục huỷ slot lỡ giờ `MISSED_WHILE_PAUSED`); thiếu khoá không phải lý do tạm dừng — cân nhắc thêm `PauseReason` hoặc huỷ slot `planned` quá giờ trong cron.
-- source_spec: `spec-7-4-sinh-cuon-chieu-va-hang-doi-duyet.md`
   summary: "Tạo lại" (kể cả `immediate`) một bài có giờ đăng xa hơn 3 ngày (bài xem trước ngày 4–7) chỉ được viết lại khi bài vào cửa sổ cuốn chiếu; trong lúc đó bài rời hàng đợi và hiện "AI sẽ viết" trên Lịch.
   evidence: Job `campaigns.generate` (stately — payload của lượt xếp sau có thể bị gộp) chỉ chọn slot theo cửa sổ. Hướng làm: đánh dấu slot "tạo lại theo yêu cầu" ở `content` để lượt kế chọn bất kể cửa sổ.
 - source_spec: `spec-7-4-sinh-cuon-chieu-va-hang-doi-duyet.md`
@@ -266,3 +260,15 @@
 - source_spec: `spec-7-4-sinh-cuon-chieu-va-hang-doi-duyet.md`
   summary: Hàng đợi "Bài chờ duyệt" đọc tối đa 200 bài (`truncated` → chip "200+"), không phân trang; "Duyệt tất cả" chạy tuần tự từng bài (lỗi giữa chừng báo "Đã xong k/n bài", không tất cả hoặc không).
   evidence: `app/read-models/campaign-queue.ts` + `PENDING_SLOTS_MAX`; route hành động slot nhận một bài mỗi lần. Hướng làm: route duyệt theo danh sách target trong một transaction (như `transitionPostTargets`).
+- source_spec: `spec-7-6-tu-tam-dung-khi-su-co.md`
+  summary: Kiểm bằng trình duyệt tự tạm dừng với phiên chủ shop + worker:
+    - trang mất kết nối → thẻ `/chien-dich` + Tổng quan "Tự tạm dừng: trang … mất kết nối", chuông có "Trang mất kết nối"; "Tiếp tục" → câu lỗi; kết nối lại → tiếp tục được;
+    - gỡ trang / trang rời nhóm nhãn → Lịch bỏ bài của trang đó (tải lại qua SSE `page.*`);
+    - xoá khoá OpenAI → lượt cron kế dừng chiến dịch "khoá OpenAI chưa dùng được".
+  evidence: Chỉ có test API / consumer (Postgres thật, `server/test/campaigns-auto-pause.test.ts`) và test helper web (`web/src/lib/campaigns.test.ts`, `realtime.test.ts`); chưa chạy UI.
+- source_spec: `spec-7-6-tu-tam-dung-khi-su-co.md`
+  summary: Thông báo `campaign_paused` vẫn mặc định TẮT (Story 1.4, theo mock) trong khi EXPERIENCE ghi "Chiến dịch … tự tạm dừng, có thông báo". Hết hạn mức dừng N chiến dịch → N thông báo riêng (không gộp).
+  evidence: `DEFAULT_NOTIFICATION_PREFS` ở `packages/shared/src/notifications.ts`; mất kết nối đã có `page_disconnected` (mặc định bật), hết hạn mức có banner toàn app. Cần chủ dự án chốt mặc định; gộp thông báo nếu số chiến dịch chạy song song lớn.
+- source_spec: `spec-7-6-tu-tam-dung-khi-su-co.md`
+  summary: "Tiếp tục" chỉ kiểm lý do đang ghi (luật 7.5): chiến dịch dừng vì `PUBLISH_FAILURES` mà trang cũng đã mất kết nối thì tiếp tục được, rồi mới bị dừng lại (`PAGE_DISCONNECTED`) ở lần đăng lỗi / lượt sinh kế tiếp.
+  evidence: `campaigns/lifecycle.ts` `assertReasonCleared`; lý do hệ thống không đè nhau (chỉ đè `MANUAL`). Hướng làm: tiếp tục kiểm mọi điều kiện chặn (trang, hồ sơ, hạn mức, khoá) bất kể lý do đã ghi.

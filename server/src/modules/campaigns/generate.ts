@@ -6,11 +6,14 @@
 // - Job `campaigns.generate {campaignId}` (stately): "Tự đăng" → duyệt bài chờ duyệt không mã lỗi trước (bài xem trước
 //   viết dở lúc bắt đầu); rồi một lô `GENERATE_BATCH` slot trong cửa sổ qua `content.generateSlot` (`autoApprove` theo
 //   chế độ). Còn slot ngoài lô → enqueue lượt sau.
-// - Hạn mức (AD-7): kiểm khoá OpenAI + hạn mức trước lô; bị chặn → không gọi AI, không đổi slot (tự viết khi gỡ chặn).
-//   Hết hạn mức giữa lô → slot gặp lỗi về "Chờ duyệt" kèm mã, các slot còn lại giữ `planned`, không enqueue tiếp. Gateway
-//   vẫn giữ chỗ trước mỗi lời gọi nên không bao giờ vượt hạn mức.
+// - Hạn mức (AD-7): kiểm khoá OpenAI + hạn mức trước lô; bị chặn → không gọi AI, không đổi slot. Hết hạn mức giữa lô →
+//   slot gặp lỗi về "Chờ duyệt" kèm mã, các slot còn lại giữ `planned`, không enqueue tiếp. Gateway vẫn giữ chỗ trước mỗi
+//   lời gọi nên không bao giờ vượt hạn mức.
+// - Story 7.6: bị chặn (trang của chiến dịch mất kết nối / thiếu hồ sơ, khoá OpenAI chưa dùng được, hạn mức hết — trước lô
+//   hay giữa lô) → tự tạm dừng chiến dịch với lý do tương ứng thay vì dừng im lặng: chủ shop thấy lý do trên thẻ, và
+//   "Tiếp tục" huỷ bài lỡ giờ (`MISSED_WHILE_PAUSED`) thay vì viết bù bài đã quá giờ (tốn tiền).
 // - Idempotent: slot đã sinh bỏ qua; lease của `generateSlot` chặn hai lượt cùng viết một slot (không tính tiền hai lần).
-import { CAMPAIGN_GENERATE_WINDOW_MS, type CampaignStatus, type ErrorCode } from '@ottm/shared'
+import { CAMPAIGN_GENERATE_WINDOW_MS, type CampaignStatus, type ErrorCode, type PauseReason } from '@ottm/shared'
 import { eq } from 'drizzle-orm'
 import type { Db } from '../../platform/db/index.ts'
 import { AppError } from '../../platform/errors/index.ts'
@@ -21,6 +24,8 @@ import { getBudgetSummary, getUsableOpenAiKey } from '../ai/index.ts'
 import { autoApproveCampaignSlots, failStuckSlotImages, listSlotsToGenerate, staleSlotCampaigns, type SlotGenerateDeps } from '../content/index.ts'
 import { getPage } from '../pages/index.ts'
 import { getCampaign } from './drafts.ts'
+import { pauseBySystem } from './lifecycle.ts'
+import { pageBlockReason } from './pages.ts'
 import { COMPOSE_GOAL, campaignPlan, keyOf } from './preview.ts'
 import { campaignIn, runSlotBatch } from './runner.ts'
 import { campaigns } from './schema.ts'
@@ -42,10 +47,25 @@ export class GenerateRetryableError extends Error {
 
 export type GenerateDeps = SlotGenerateDeps
 
+/** Story 7.6: lý do tự tạm dừng ứng với mã dừng của lô (`AI_STOP_CODES`). */
+export function pauseReasonOfStop(code: ErrorCode): Exclude<PauseReason, 'MANUAL'> {
+  return code === 'AI_BUDGET_EXCEEDED' ? 'AI_BUDGET_EXCEEDED' : 'OPENAI_KEY_UNAVAILABLE'
+}
+
 export type GenerateResult =
   | 'skipped'
-  | { stopped: ErrorCode; approved: number }
-  | { generated: number; errors: number; scheduled: number; approved: number; more: boolean; stopCode: ErrorCode | null }
+  /** Bị chặn trước khi gọi AI; `paused` = lý do vừa tự tạm dừng. */
+  | { stopped: ErrorCode; approved: number; paused: Exclude<PauseReason, 'MANUAL'> }
+  | {
+      generated: number
+      errors: number
+      scheduled: number
+      approved: number
+      more: boolean
+      stopCode: ErrorCode | null
+      /** Story 7.6: mã dừng giữa lô → lý do vừa tự tạm dừng. */
+      paused: Exclude<PauseReason, 'MANUAL'> | null
+    }
 
 /**
  * Một lượt sinh cuốn chiếu của chiến dịch `campaignId` (chỉ khi `running`). `now` = mốc của cửa sổ (test cố định);
@@ -72,17 +92,26 @@ export async function runGenerate(
   })
   if (!loaded) return 'skipped'
   const { campaign, approved } = loaded
-  if (!loaded.todo.length) return { generated: 0, errors: 0, scheduled: 0, approved, more: false, stopCode: null }
+  if (!loaded.todo.length) return { generated: 0, errors: 0, scheduled: 0, approved, more: false, stopCode: null, paused: null }
 
-  // Khoá OpenAI / hạn mức đã chặn → dừng trước khi gọi AI; slot giữ `planned` (lượt sau tự viết khi gỡ chặn).
+  // Bị chặn → tự tạm dừng trước khi gọi AI (Story 7.6); slot giữ `planned`. Lưới an toàn khi sự kiện bị lỡ (vd hạ hạn mức).
+  const stop = async (code: ErrorCode, reason: Exclude<PauseReason, 'MANUAL'>): Promise<GenerateResult> => {
+    await pauseBySystem(deps.db, deps, campaignId, reason, now)
+    return { stopped: code, approved, paused: reason }
+  }
+  for (const pageId of loaded.livePages) {
+    const page = await getPage(deps.db, pageId)
+    const blocked = page ? await pageBlockReason(deps.db, page) : null
+    if (blocked) return stop(blocked, blocked)
+  }
   try {
     await getUsableOpenAiKey(deps)
   } catch (err) {
-    if (err instanceof AppError) return { stopped: err.code, approved }
+    if (err instanceof AppError) return stop(err.code, 'OPENAI_KEY_UNAVAILABLE')
     throw err
   }
   // Cùng đồng hồ với gateway (tháng hạn mức theo giờ thật, không theo mốc cửa sổ).
-  if ((await getBudgetSummary({ db: deps.db })).state === 'blocked') return { stopped: 'AI_BUDGET_EXCEEDED', approved }
+  if ((await getBudgetSummary({ db: deps.db })).state === 'blocked') return stop('AI_BUDGET_EXCEEDED', 'AI_BUDGET_EXCEEDED')
 
   const withImage = new Map(loaded.plan.map((s) => [keyOf(s.pageId, s.slotAt), s.withImage]))
   // Slot của trang đã gỡ không có trong kế hoạch → vẫn đi tiếp để chốt `PAGE_REMOVED` (không kẹt `planned`).
@@ -100,12 +129,15 @@ export async function runGenerate(
     // Story 7.5: tạm dừng / xoá giữa lô → dừng trước slot kế (AC: cron sinh nội dung bỏ qua chiến dịch tạm dừng).
     active: () => campaignIn(deps.db, campaignId, ['running']),
   })
+  // Mã dừng giữa lô (hết hạn mức, khoá bị thu hồi) → tự tạm dừng; slot gặp lỗi đã về "Chờ duyệt" kèm mã.
+  const paused = result.stopCode ? pauseReasonOfStop(result.stopCode) : null
+  if (paused) await pauseBySystem(deps.db, deps, campaignId, paused, now)
   if (result.retryCode && !result.inactive) throw new GenerateRetryableError(result.retryCode)
   // Còn slot trong cửa sổ ngoài lô (và lô không dừng vì mã dừng / chiến dịch thôi chạy) → lượt sau (stately: xếp sau lượt
   // đang chạy).
   const more = loaded.todo.length > GENERATE_BATCH && !result.stopCode && !result.inactive
   if (more) await deps.jobs.send('campaigns.generate', { campaignId })
-  return { generated: result.generated, errors: result.errors, scheduled: result.scheduled, approved, more, stopCode: result.stopCode }
+  return { generated: result.generated, errors: result.errors, scheduled: result.scheduled, approved, more, stopCode: result.stopCode, paused }
 }
 
 export function parseGenerateJobData(data: unknown): { campaignId: string } {

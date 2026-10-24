@@ -1,0 +1,6 @@
+ALTER TABLE "campaigns" DROP CONSTRAINT "campaigns_pause_reason_value_check";--> statement-breakpoint
+ALTER TABLE "notifications" DROP CONSTRAINT "notifications_type_check";--> statement-breakpoint
+ALTER TABLE "campaigns" ADD COLUMN "failure_target_ids" text[] DEFAULT '{}'::text[] NOT NULL;--> statement-breakpoint
+ALTER TABLE "campaigns" ADD CONSTRAINT "campaigns_failures_check" CHECK ("campaigns"."consecutive_failures" = cardinality("campaigns"."failure_target_ids"));--> statement-breakpoint
+ALTER TABLE "campaigns" ADD CONSTRAINT "campaigns_pause_reason_value_check" CHECK ("campaigns"."pause_reason" is null or "campaigns"."pause_reason" in ('PAGE_DISCONNECTED', 'AI_BUDGET_EXCEEDED', 'PUBLISH_FAILURES', 'CONFIG_MISSING', 'MANUAL', 'OPENAI_KEY_UNAVAILABLE'));--> statement-breakpoint
+ALTER TABLE "notifications" ADD CONSTRAINT "notifications_type_check" CHECK ("notifications"."type" in ('ai_handoff', 'token_expiring', 'publish_failed', 'campaign_paused', 'page_disconnected', 'system_error'));

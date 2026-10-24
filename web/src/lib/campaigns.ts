@@ -645,6 +645,8 @@ export const PAUSE_REASON_TEXT: Record<PauseReason, string> = {
   AI_BUDGET_EXCEEDED: 'Tự tạm dừng: đã dùng hết hạn mức AI tháng này. Tăng hạn mức rồi tiếp tục.',
   PUBLISH_FAILURES: 'Tự tạm dừng: nhiều bài đăng lỗi liên tiếp. Kiểm tra Lịch nội dung rồi tiếp tục.',
   CONFIG_MISSING: 'Tự tạm dừng: trang trong chiến dịch chưa có hồ sơ thương hiệu. Tạo hồ sơ rồi tiếp tục.',
+  // Story 7.6: lượt AI viết bài gặp khoá OpenAI chưa dùng được (chưa nhập / bị từ chối).
+  OPENAI_KEY_UNAVAILABLE: 'Tự tạm dừng: khoá OpenAI chưa dùng được nên AI không viết tiếp bài. Cập nhật khoá ở Cài đặt rồi tiếp tục.',
 }
 
 /** Dòng lý do của thẻ đang tạm dừng (dữ liệu cũ thiếu lý do → câu chung). */
@@ -658,12 +660,16 @@ export function lifecycleToast(action: 'pause' | 'resume', res: CampaignActionRe
   return res.missed > 0 ? `Đã tiếp tục ${name} — bỏ ${res.missed} bài lỡ giờ trong lúc dừng` : `Đã tiếp tục ${name}`
 }
 
+/** Story 7.6: mã lỗi khoá khi tiếp tục chiến dịch dừng vì `OPENAI_KEY_UNAVAILABLE`. */
+const RESUME_KEY_CODES: ReadonlySet<string> = new Set(['OPENAI_KEY_MISSING', 'OPENAI_KEY_INVALID', 'OPENAI_KEY_RESTRICTED', 'ENCRYPTION_NOT_CONFIGURED'])
+
 /** Câu lỗi khi tiếp tục bị từ chối vì lý do tự dừng vẫn còn; lỗi khác theo bảng chung. */
 export function resumeErrorText(err: unknown): string {
   if (isApiError(err)) {
     if (err.code === 'PAGE_DISCONNECTED') return 'Trang trong chiến dịch vẫn mất kết nối — kết nối lại ở Trang & Nhóm rồi tiếp tục.'
     if (err.code === 'CONFIG_MISSING') return 'Trang trong chiến dịch vẫn chưa có hồ sơ thương hiệu — tạo hồ sơ rồi tiếp tục.'
     if (err.code === 'AI_BUDGET_EXCEEDED') return 'Hạn mức AI tháng này vẫn hết — tăng hạn mức ở Cài đặt rồi tiếp tục.'
+    if (RESUME_KEY_CODES.has(err.code)) return 'Khoá OpenAI vẫn chưa dùng được — cập nhật khoá ở Cài đặt › OpenAI rồi tiếp tục.'
   }
   return errorMessageOf(err)
 }

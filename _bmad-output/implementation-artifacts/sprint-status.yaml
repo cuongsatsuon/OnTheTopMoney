@@ -92,17 +92,17 @@ development_status:
   6-5-lịch-nội-dung-với-kéo-thả: review
   epic-6-retrospective: optional
 
-  epic-7: in-progress
+  epic-7: review
   7-1-wizard-tạo-chiến-dịch-mục-tiêu-trang-đích-nội-dung-và-lịch: review
   7-2-xem-trước-7-bài-đầu: review
   7-3-bắt-đầu-chiến-dịch: review
   7-4-sinh-nội-dung-cuốn-chiếu-và-hàng-đợi-bài-chờ-duyệt: review
   7-5-tạm-dừng-tiếp-tục-và-xoá-chiến-dịch: review
-  7-6-chiến-dịch-tự-tạm-dừng-khi-có-sự-cố: in-progress
+  7-6-chiến-dịch-tự-tạm-dừng-khi-có-sự-cố: review
   epic-7-retrospective: optional
 
-  epic-8: backlog
-  8-1-thu-thập-số-liệu-trang-và-bài: backlog
+  epic-8: in-progress
+  8-1-thu-thập-số-liệu-trang-và-bài: in-progress
   8-2-màn-hiệu-suất-theo-phạm-vi: backlog
   8-3-hiệu-quả-ai: backlog
   8-4-tạo-bài-tương-tự: backlog

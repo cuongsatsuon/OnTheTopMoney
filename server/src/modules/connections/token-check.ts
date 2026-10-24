@@ -105,7 +105,7 @@ export async function markDisconnectedTx(
     const page = await getPage(tx, id)
     if (!page || page.connectionStatus === 'disconnected') continue
     await setConnectionStatus(tx, id, 'disconnected', reason)
-    await deps.events.publishEvent(tx, 'page.disconnected', { id, pageId: id, reason })
+    await deps.events.publishEvent(tx, 'page.disconnected', { id, pageId: id, reason, disconnectedAt: new Date().toISOString() })
     changed.push(id)
   }
   deps.log?.info({ pageId, reason, changed: changed.length }, 'connections: đánh dấu mất kết nối')
@@ -199,7 +199,7 @@ export async function runTokenCheck(deps: TokenCheckDeps): Promise<{ refreshed: 
       }
       // Token đã hết hạn (mốc đã qua) → mất kết nối; phát `page.disconnected` một lần khi chuyển sang.
       if (status === 'disconnected') {
-        await deps.events.publishEvent(tx, 'page.disconnected', { id: page.id, pageId: page.id, reason: REASON_TOKEN_EXPIRED })
+        await deps.events.publishEvent(tx, 'page.disconnected', { id: page.id, pageId: page.id, reason: REASON_TOKEN_EXPIRED, disconnectedAt: now.toISOString() })
       }
     }
     return count

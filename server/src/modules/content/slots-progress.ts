@@ -70,3 +70,46 @@ export async function campaignProgress(db: DbExecutor, campaignIds: readonly str
   }
   return out
 }
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * Story 7.6 (chuỗi lỗi đăng không phụ thuộc thứ tự xử lý sự kiện): có target nào của chiến dịch `campaignId` đã đăng
+ * SAU lần đổi cuối của target `targetId` (lúc nó lỗi) không — có → lỗi đó thuộc chuỗi cũ, không đếm.
+ */
+export async function publishedAfter(db: DbExecutor, campaignId: string, targetId: string): Promise<boolean> {
+  if (!UUID_RE.test(campaignId) || !UUID_RE.test(targetId)) return false
+  const [row] = await db
+    .select({ id: postTargets.id })
+    .from(postTargets)
+    .where(
+      and(
+        eq(postTargets.campaignId, campaignId),
+        eq(postTargets.status, 'published' satisfies PostTargetStatus),
+        sql`${postTargets.publishedAt} > (select f.updated_at from post_targets f where f.id = ${targetId}::uuid)`,
+      ),
+    )
+    .limit(1)
+  return row !== undefined
+}
+
+/**
+ * Story 7.6: trong `targetIds`, các target vẫn `failed` và lỗi SAU lúc target `publishedId` đăng — phần chuỗi lỗi còn
+ * hiệu lực khi sự kiện đăng được tới muộn hơn sự kiện lỗi của bài đăng sau nó.
+ */
+export async function failedAfterPublish(db: DbExecutor, targetIds: readonly string[], publishedId: string): Promise<string[]> {
+  const ids = targetIds.filter((id) => UUID_RE.test(id))
+  if (!ids.length || !UUID_RE.test(publishedId)) return []
+  const rows = await db
+    .select({ id: postTargets.id })
+    .from(postTargets)
+    .where(
+      and(
+        inArray(postTargets.id, ids),
+        eq(postTargets.status, 'failed' satisfies PostTargetStatus),
+        sql`${postTargets.updatedAt} > (select p.published_at from post_targets p where p.id = ${publishedId}::uuid)`,
+      ),
+    )
+  const kept = new Set(rows.map((r) => r.id))
+  return targetIds.filter((id) => kept.has(id))
+}
