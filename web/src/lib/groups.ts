@@ -47,14 +47,15 @@ export function shouldConfirmMove(impact: GroupMoveImpact): boolean {
 const mirroredIds = new Set<string>()
 
 /**
- * Chép nhóm thật vào kho mẫu: thêm/cập nhật theo id, bỏ nhóm thật không còn trong danh sách, GIỮ nhóm mẫu
- * (các màn Epic 3–8 chưa chuyển API vẫn dùng). Giữ cờ `autoReply` mẫu nếu nhóm đã có (overlay giao diện).
+ * Chép nhóm thật vào kho dùng chung: thêm/cập nhật theo id, bỏ MỌI nhóm không có trong danh sách server — kể cả
+ * nhóm mẫu (mọi màn đã đọc API thật; nhóm mẫu lẫn vào bộ chọn phạm vi là sai). Giữ cờ `autoReply` nếu nhóm đã có
+ * (overlay giao diện).
  */
 export function mirrorRealGroups(dtos: readonly GroupDto[], store: Group[] = mockGroups, known: Set<string> = mirroredIds): void {
   const incoming = new Set(dtos.map((d) => d.id))
   for (let i = store.length - 1; i >= 0; i--) {
     const id = store[i]!.id
-    if (known.has(id) && !incoming.has(id)) {
+    if (!incoming.has(id)) {
       store.splice(i, 1)
       known.delete(id)
     }

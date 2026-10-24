@@ -88,15 +88,16 @@ export function usePages(options: { enabled?: boolean } = {}) {
 const mirroredIds = new Set<string>()
 
 /**
- * Chép trang thật vào kho mẫu: thêm trang mới, cập nhật tên/handle/trạng thái của trang đã có nhưng GIỮ các
- * trường chỉ có ở giao diện mẫu (nhóm, AI trả lời, hồ sơ, màu avatar); bỏ trang thật không còn trong danh sách.
- * Trang mẫu sẵn có (p1…p8) không bị đụng tới.
+ * Chép trang thật vào kho dùng chung: thêm trang mới, cập nhật tên/handle/trạng thái của trang đã có nhưng GIỮ
+ * các trường overlay giao diện (AI trả lời, hồ sơ, màu avatar); bỏ MỌI trang không có trong danh sách server —
+ * kể cả trang mẫu sẵn có (p1…p8): mọi màn đã đọc API thật, trang mẫu lẫn vào phạm vi / Tổng quan là sai (và chọn
+ * trang mẫu làm phạm vi thì API trả 404).
  */
 export function mirrorRealPages(dtos: readonly PageDto[], store: Page[] = mockPages, known: Set<string> = mirroredIds): void {
   const incoming = new Set(dtos.map((d) => d.id))
   for (let i = store.length - 1; i >= 0; i--) {
     const id = store[i]!.id
-    if (known.has(id) && !incoming.has(id)) {
+    if (!incoming.has(id)) {
       store.splice(i, 1)
       known.delete(id)
     }

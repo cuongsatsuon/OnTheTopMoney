@@ -25,22 +25,21 @@ describe('toUiGroup', () => {
 })
 
 describe('mirrorRealGroups (kho mẫu cho màn chưa chuyển API)', () => {
-  it('thêm/cập nhật nhóm thật, giữ nhóm mẫu, bỏ nhóm thật không còn — trạng thái rỗng khi server trả []', () => {
+  it('thêm/cập nhật nhóm thật, bỏ nhóm mẫu, bỏ nhóm thật không còn — trạng thái rỗng khi server trả []', () => {
     const sample: Group = { id: 'g-beauty', name: 'Mẫu', color: '#DB2777', autoReply: true, activeCampaigns: 2 }
     const store: Group[] = [sample]
     const known = new Set<string>()
 
     mirrorRealGroups([dto('r1', 'A'), dto('r2', 'B')], store, known)
-    expect(store.map((g) => g.id)).toEqual(['g-beauty', 'r1', 'r2'])
+    expect(store.map((g) => g.id)).toEqual(['r1', 'r2']) // nhóm mẫu không lẫn vào bộ chọn phạm vi
 
     mirrorRealGroups([dto('r1', 'A mới', 'group-3')], store, known)
-    expect(store.map((g) => g.id)).toEqual(['g-beauty', 'r1']) // r2 (nhóm thật) bị gỡ
+    expect(store.map((g) => g.id)).toEqual(['r1']) // r2 (nhóm thật) bị gỡ
     expect(store.find((g) => g.id === 'r1')).toMatchObject({ name: 'A mới', color: GROUP_COLOR_HEX['group-3'] })
-    expect(store.find((g) => g.id === 'g-beauty')).toBe(sample) // nhóm mẫu không bị đụng
 
-    // Server trả [] → không còn nhóm thật nào (FE hiện trạng thái rỗng), nhóm mẫu vẫn đó.
+    // Server trả [] → không còn nhóm nào (FE hiện trạng thái rỗng).
     mirrorRealGroups([], store, known)
-    expect(store.map((g) => g.id)).toEqual(['g-beauty'])
+    expect(store.map((g) => g.id)).toEqual([])
   })
 })
 

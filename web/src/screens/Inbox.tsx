@@ -407,8 +407,9 @@ function ChatHeader({
   const note = handoffNote(conv, now)
   return (
     <div className="border-b border-border bg-surface">
-      <div className="flex items-center gap-4 px-5 py-3">
-        <div className="min-w-0 flex-1">
+      {/* Khung chat hẹp (~540px ở 1440px): chip + công tắc + nút không co được → cho xuống dòng thay vì ép tên khách về 0. */}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-5 py-3">
+        <div className="min-w-[12rem] flex-1">
           <h2 className="truncate text-base font-semibold">{name}</h2>
           <div className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
             {page ? (
