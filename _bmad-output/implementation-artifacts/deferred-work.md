@@ -295,7 +295,7 @@
   evidence: Chỉ có test API (Postgres thật, `server/test/analytics-performance.test.ts`) và test helper web (`web/src/lib/performance.test.ts`); chưa chạy UI (dev không có mật khẩu mẫu).
 - source_spec: `spec-8-2-man-hieu-suat.md`
   summary: Tab "Hiệu suất" của Chi tiết trang (`PageDetail.tsx` › `PagePerformance`) và Chi tiết nhóm (`GroupDetail.tsx` › `GroupPerformance`) vẫn chạy dữ liệu mẫu (`engagement30d`, `posts`, `AI_REPLIES`).
-  evidence: AC 8.2 chỉ nêu `/hieu-suat`; EXPERIENCE ghi hai tab "cùng nguồn dữ liệu". Hướng làm: dùng `usePerformance({kind:'page'|'group', id}, '30d')` của `web/src/lib/performance.ts` (cùng endpoint, không cần API mới); phần "tin AI trả lời" chờ Story 8.3.
+  evidence: AC 8.2 chỉ nêu `/hieu-suat`; EXPERIENCE ghi hai tab "cùng nguồn dữ liệu". Hướng làm: dùng `usePerformance({kind:'page'|'group', id}, '30d')` của `web/src/lib/performance.ts` (cùng endpoint, không cần API mới); "tin AI trả lời" lấy từ `data.ai.aiMessages` (Story 8.3 đã có, thay `AI_REPLIES` mẫu ở `GroupDetail.tsx`).
 - source_spec: `spec-8-2-man-hieu-suat.md`
   summary: Đã bỏ khỏi `/hieu-suat` hai phần chỉ có số giả và không thuộc story nào: heatmap "Giờ đăng tốt nhất" và nút "Xuất báo cáo" (chỉ hiện toast).
   evidence: Không có trong epics.md / EXPERIENCE / DESIGN — chỉ có ở bản mẫu. Nếu cần: heatmap tính được từ `post_metrics` (tương tác trung bình theo thứ × giờ đăng, giờ VN) qua `content.listPublishedInRange` + `published_at`; xuất báo cáo cần story riêng (định dạng CSV / PDF).
@@ -305,3 +305,14 @@
 - source_spec: `spec-8-2-man-hieu-suat.md`
   summary: % so kỳ trước tắt (`previous = null`) cho cả phạm vi khi CÓ một trang bắt đầu có số liệu sau ngày đầu kỳ trước — phạm vi `all` nhiều trang mất so sánh tới 2N ngày (90 ngày → ~180 ngày) chỉ vì thêm một trang mới.
   evidence: `lateStart` / `comparable` ở `server/src/modules/analytics/performance.ts` (review lượt 1). Hướng làm: so like-for-like — tính `current` / `previous` dùng cho % chỉ trên các trang đủ dữ liệu kỳ trước (thêm trường vào `MetricComparison`, vd. `comparableCurrent`), hiển thị tổng vẫn gồm mọi trang.
+- source_spec: `spec-8-3-hieu-qua-ai.md`
+  summary: Kiểm bằng trình duyệt khối "Hiệu quả AI" + KPI "Tin nhắn" ở `/hieu-suat` với phiên chủ shop + hội thoại AI thật:
+    - "n tin" / "AI đã trả lời X% tin nhắn", "Chuyển cho bạn X%" / "n trên m hội thoại AI nhận", "Phản hồi trung bình" (giây / phút);
+    - thanh Bài AI tạo vs Bài tự viết + "AI tạo cao hơn / thấp hơn X%"; kỳ không có tin / bài → "—" và câu trống; lưới 6 KPI ở màn hẹp.
+  evidence: Chỉ có test API (Postgres thật, `server/test/analytics-ai-efficiency.test.ts`) và test helper web (`web/src/lib/performance.test.ts`); chưa chạy UI (dev không có mật khẩu mẫu).
+- source_spec: `spec-8-3-hieu-qua-ai.md`
+  summary: Bỏ dòng mẫu "Bạn tự trả lời: 23 phút" (thời gian chủ shop trả lời) dưới "Phản hồi trung bình".
+  evidence: Từ `messages` chưa đo đúng được: sau khi AI chuyển người, câu chuyển tiếp của AI là tin đã gửi cuối, nên tin chủ shop trả lời không neo được vào tin khách đang chờ (chính những ca cần đo). Hướng làm: neo theo tin `system` chuyển sang `handoff` / `human` (khách chờ từ tin khách cuối trước đó — cùng luật `waiting_since`) trong `inbox/stats.ts`, rồi thêm trường `avgHumanResponseSeconds`.
+- source_spec: `spec-8-3-hieu-qua-ai.md`
+  summary: Khối "Hiệu quả AI" chưa so với kỳ trước (chỉ KPI "Tin nhắn" có %); thời gian phản hồi là trung bình — vài lượt chậm (lỗi gửi lại, OpenAI chậm) kéo số lên.
+  evidence: AC 8.3 không nêu so kỳ trước. `aiReplyStats` (`server/src/modules/inbox/stats.ts`) nhận khoảng bất kỳ — gọi thêm cho kỳ trước nếu cần; có thể trả thêm trung vị / p95 (NFR1) từ cùng tập mẫu.

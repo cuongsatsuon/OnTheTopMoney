@@ -20,6 +20,7 @@
 // Story 5.6: `handoff` tạm đóng khôi phục được (`resumableHandoff`) — ảnh chụp lượt và áp quyết định nhận cả trạng thái
 // này (`handoff → ai` `GATE_OPEN`); tin AI gửi lỗi phía gửi → `AI_SEND_FAILED`.
 // Story 5.7: `latestAiReply` — tin AI đã gửi gần nhất cho cao trào Màn chào (`app/read-models/onboarding.ts`).
+// Story 8.3: `aiReplyStats` / `countCustomerMessages` — số liệu "Hiệu quả AI" + KPI "Tin nhắn" của màn Hiệu suất (`analytics`).
 export const MODULE = 'inbox'
 
 export {
@@ -199,3 +200,4 @@ export {
   type PageQuery,
   type Paged,
 } from './queries.ts'
+export { aiReplyStats, countCustomerMessages, type AiReplyStats } from './stats.ts'

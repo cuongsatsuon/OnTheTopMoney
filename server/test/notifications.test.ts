@@ -455,8 +455,11 @@ describe('worker thật: publish → events.notifications → thông báo; job h
     const row = await waitFor(async () => (await rows()).find((r) => r.type === 'system_error'), 10_000)
     expect(row).toMatchObject({ entity: 'job', entity_id: jobId })
     expect(attempts).toBe(2) // lần đầu + 1 retry; job.failed chỉ phát ở lần cuối
-    const [job] = await handle.sql.unsafe<{ state: string }[]>(`select state from ${BOSS_SCHEMA}.job where id = $1`, [jobId])
-    expect(job?.state).toBe('failed')
+    // job.failed (và thông báo) được phát trong handler, TRƯỚC khi pg-boss ghi state `failed` → chờ thay vì đọc một lần.
+    await waitFor(
+      async () => (await handle.sql.unsafe<{ state: string }[]>(`select state from ${BOSS_SCHEMA}.job where id = $1`, [jobId]))[0]?.state === 'failed',
+      5_000,
+    )
     await sleep(1_500) // đủ cho mọi lượt xử lý còn lại
     expect((await rows()).filter((r) => r.type === 'system_error')).toHaveLength(1)
     // Đúng một job.failed được phát cho job này (lần thử đầu không phát).

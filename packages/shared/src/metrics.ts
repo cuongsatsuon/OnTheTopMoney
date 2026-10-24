@@ -1,6 +1,6 @@
 // Số liệu Hiệu suất (AD-17 — Story 8.1): bảng chỉ số chuẩn dùng chung server + web. Metric gốc của từng nền tảng
 // ánh xạ sang đây ở MỘT chỗ (`server/src/modules/analytics/metric-map.ts`). Nền tảng không cung cấp → `null`, không 0.
-// Story 8.2: hợp đồng màn Hiệu suất (`GET /api/v1/performance`) ở cuối file.
+// Story 8.2: hợp đồng màn Hiệu suất (`GET /api/v1/performance`) ở cuối file. Story 8.3: KPI "Tin nhắn" + khối "Hiệu quả AI".
 import { z } from 'zod'
 import { Platform, PostSource } from './enums.ts'
 import { ScopeParam } from './scope.ts'
@@ -126,6 +126,35 @@ export const TopPostDto = z.object({
 })
 export type TopPostDto = z.infer<typeof TopPostDto>
 
+/** Tương tác trung bình mỗi bài của một nhóm (bài AI tạo / bài tự viết) — chỉ bài có snapshot với `engagement` khác `null`. */
+export const PostKindStats = z.object({ posts: z.number().int().nonnegative(), avgEngagement: MetricValue })
+export type PostKindStats = z.infer<typeof PostKindStats>
+
+const Count = z.number().int().nonnegative()
+
+/**
+ * Khối "Hiệu quả AI" (Story 8.3) — đếm từ `messages` + tin `system` chuyển trạng thái (hàm đọc của `inbox`), cùng phạm vi
+ * + kỳ của màn. FE tự tính %:
+ * - `customerMessages`: tin khách (DM + bình luận, chưa bị gỡ) trong kỳ; `aiAnswered`: trong đó tin đã gửi đầu tiên sau
+ *   nó là tin AI → "AI đã trả lời X% tin nhắn";
+ * - `aiMessages`: tin AI đã gửi; `aiConversations`: hội thoại AI đã gửi tin hoặc đã chuyển người trong kỳ;
+ *   `handoffConversations`: hội thoại AI chuyển người (đang `ai` → `handoff`) → tỉ lệ chuyển người;
+ * - `avgResponseSeconds`: từ tin khách đầu nhóm tới lúc tin AI gửi đi, chỉ khi hội thoại ở với AI suốt quãng đó
+ *   (`null` khi 0 mẫu);
+ * - `posts`: tương tác trung bình bài AI tạo vs bài tự viết (bài đăng trong kỳ, snapshot mới nhất).
+ */
+export const AiEfficiencyDto = z.object({
+  customerMessages: Count,
+  aiAnswered: Count,
+  aiMessages: Count,
+  aiConversations: Count,
+  handoffConversations: Count,
+  avgResponseSeconds: z.number().nonnegative().nullable(),
+  responseSamples: Count,
+  posts: z.object({ ai: PostKindStats, manual: PostKindStats }),
+})
+export type AiEfficiencyDto = z.infer<typeof AiEfficiencyDto>
+
 /**
  * `GET /api/v1/performance` → 200. Chỉ đọc bảng nội bộ của `analytics` (không gọi Meta). Nhóm gộp theo thành viên hiện
  * tại. `insufficientData` = phạm vi có trang và mọi trang đều kết nối chưa đủ `INSUFFICIENT_DATA_DAYS` ngày.
@@ -140,7 +169,8 @@ export const PerformanceResponse = z.object({
   platforms: z.array(Platform),
   /**
    * `previous` = `null` khi kỳ trước chưa đủ dữ liệu (có trang bắt đầu có số liệu sau ngày đầu kỳ trước). `engagementRate`
-   * (%) = tương tác / tiếp cận, chỉ cộng ngày có cả hai số (Threads không có reach).
+   * (%) = tương tác / tiếp cận, chỉ cộng ngày có cả hai số (Threads không có reach). `messages` (Story 8.3) = tin khách;
+   * `previous = null` khi có trang kết nối sau ngày đầu kỳ trước.
    */
   kpis: z.object({
     views: MetricComparison,
@@ -148,9 +178,11 @@ export const PerformanceResponse = z.object({
     engagement: MetricComparison,
     followersDelta: MetricComparison,
     engagementRate: MetricComparison,
+    messages: MetricComparison,
   }),
   series: z.array(PerformanceSeriesPoint),
   pages: z.array(PagePerformanceDto),
   topPosts: z.array(TopPostDto),
+  ai: AiEfficiencyDto,
 })
 export type PerformanceResponse = z.infer<typeof PerformanceResponse>

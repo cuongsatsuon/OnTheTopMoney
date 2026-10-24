@@ -2,6 +2,7 @@
 // qua hàm này. Chỉ target `published` có `platform_post_id` (Meta trả id lúc đăng), trong cửa sổ `since`, mới nhất trước.
 // Story 8.2 (màn Hiệu suất): `listPublishedInRange` (id bài đã đăng trong kỳ — đếm bài theo trang, ứng viên "bài tốt
 // nhất") và `describePublishedTargets` (chi tiết vài bài đã chọn, cùng luật `ai` / tiêu đề với Lịch nội dung).
+// Story 8.3: `listPublishedInRange` trả thêm cờ `ai` (cùng luật) — "Hiệu quả AI" so bài AI tạo với bài tự viết.
 import type { PostSource } from '@ottm/shared'
 import { and, desc, eq, gte, inArray, isNotNull, lt, sql } from 'drizzle-orm'
 import type { DbExecutor } from '../../platform/db/index.ts'
@@ -45,7 +46,18 @@ export const PUBLISHED_IN_RANGE_MAX = 10_000
 export interface PublishedRef {
   targetId: string
   pageId: string
+  /** Bài AI tạo — cùng luật `PublishedTargetInfo.ai`. */
+  ai: boolean
 }
+
+/** Target có ảnh AI. */
+const aiMediaOf = () => sql<boolean>`exists (select 1 from ${postTargetMedia} join ${mediaAssets} on ${mediaAssets.id} = ${postTargetMedia.mediaAssetId}
+    where ${postTargetMedia.postTargetId} = ${postTargets.id} and ${mediaAssets.source} = 'ai')`
+
+/**
+ * Cùng luật Lịch nội dung (UX-DR10): slot chiến dịch luôn do AI sinh; bài tay: caption AI hoặc ảnh AI. Cần join `posts`.
+ */
+const aiPostOf = () => sql<boolean>`(${posts.source} = 'campaign' or ${postTargets.aiCaption} or ${aiMediaOf()})`
 
 /** Target `published` của các trang có `published_at` trong `[from, to)`, mới nhất trước. */
 export async function listPublishedInRange(
@@ -54,8 +66,9 @@ export async function listPublishedInRange(
 ): Promise<PublishedRef[]> {
   if (!opts.pageIds.length) return []
   return db
-    .select({ targetId: postTargets.id, pageId: postTargets.pageId })
+    .select({ targetId: postTargets.id, pageId: postTargets.pageId, ai: aiPostOf() })
     .from(postTargets)
+    .innerJoin(posts, eq(posts.id, postTargets.postId))
     .where(
       and(
         inArray(postTargets.pageId, [...opts.pageIds]),
@@ -84,8 +97,6 @@ export interface PublishedTargetInfo {
 /** Chi tiết target đã đăng theo id (bỏ id không còn `published`); thứ tự không đảm bảo — bên gọi tự xếp. */
 export async function describePublishedTargets(db: DbExecutor, targetIds: readonly string[]): Promise<PublishedTargetInfo[]> {
   if (!targetIds.length) return []
-  const aiMedia = sql<boolean>`exists (select 1 from ${postTargetMedia} join ${mediaAssets} on ${mediaAssets.id} = ${postTargetMedia.mediaAssetId}
-    where ${postTargetMedia.postTargetId} = ${postTargets.id} and ${mediaAssets.source} = 'ai')`
   const thumbnail = sql<string | null>`(select ${mediaAssets.url} from ${postTargetMedia} join ${mediaAssets} on ${mediaAssets.id} = ${postTargetMedia.mediaAssetId}
     where ${postTargetMedia.postTargetId} = ${postTargets.id} order by ${postTargetMedia.position} limit 1)`
   const rows = await db
@@ -96,8 +107,7 @@ export async function describePublishedTargets(db: DbExecutor, targetIds: readon
       publishedAt: postTargets.publishedAt,
       caption: postTargets.caption,
       permalink: postTargets.permalink,
-      aiCaption: postTargets.aiCaption,
-      aiMedia,
+      ai: aiPostOf(),
       thumbnail,
       source: posts.source,
       campaignId: postTargets.campaignId,
@@ -113,8 +123,7 @@ export async function describePublishedTargets(db: DbExecutor, targetIds: readon
     title: calendarTitle(r.caption),
     permalink: r.permalink,
     thumbnailUrl: r.thumbnail,
-    // Cùng luật Lịch nội dung: slot chiến dịch luôn do AI sinh; bài tay: caption AI hoặc ảnh AI (UX-DR10).
-    ai: r.source === 'campaign' || r.aiCaption || r.aiMedia,
+    ai: r.ai,
     source: r.source as PostSource,
     campaignId: r.campaignId,
   }))

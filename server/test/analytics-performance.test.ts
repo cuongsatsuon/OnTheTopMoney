@@ -140,6 +140,8 @@ describe('GET /performance — tổng hợp theo phạm vi', () => {
       engagement: { current: 18, previous: 4 },
       followersDelta: { current: 2, previous: 0 },
       engagementRate: { current: (18 / 135) * 100, previous: (4 / 25) * 100 },
+      // Story 8.3: trang kết nối 60 ngày — sau đầu kỳ trước (25/08) → tin nhắn kỳ trước không so.
+      messages: { current: 0, previous: null },
     })
     expect(r.series).toHaveLength(30)
     expect(r.series[0]!.date).toBe(FROM)

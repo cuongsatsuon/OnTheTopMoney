@@ -10,6 +10,7 @@
 // - Tin outbound (Story 4.7, AD-10): `pending → sending → sent` hoặc `failed` + `error_code`; `delivery` cách gửi,
 //   `reply_to_platform_id` bình luận được trả lời / nhắn riêng, `queued_at` lần đưa vào hàng gửi, `sending_at` lúc job chiếm.
 // - Story 5.4: `conversations.ai_typing_at` (chấm "đang gõ" của AI), `messages.sent_at` (đo độ trễ AI trả lời).
+// - Story 8.3: index `messages (page_id, platform_timestamp)` cho số liệu "Hiệu quả AI" (`stats.ts`).
 // Khoá ngoại tới `pages` `on delete cascade`: trang chỉ bị soft-delete (`removed_at`), xoá cứng chỉ xảy ra ở test/xoá
 // dữ liệu (Epic 9).
 import {
@@ -204,6 +205,8 @@ export const messages = pgTable(
     index('messages_conversation_ts_idx').on(t.conversationId, t.platformTimestamp, t.id),
     // Cron dọn tin kẹt `sending` (Story 4.7).
     index('messages_sending_idx').on(t.sendingAt).where(sql`${t.status} = 'sending'`),
+    // Đếm "Hiệu quả AI" theo trang + kỳ (Story 8.3).
+    index('messages_page_ts_idx').on(t.pageId, t.platformTimestamp),
   ],
 )
 

@@ -41,3 +41,5 @@ export {
 export { runPageMetricsCron, runPostMetricsCron, type MetricsCronDeps } from './cron.ts'
 // Màn Hiệu suất (Story 8.2): tổng hợp chỉ đọc theo phạm vi + khoảng.
 export { pageMetricsState, performanceOverview, performanceWindow, type PerformanceWindow } from './performance.ts'
+// Story 8.3: "Hiệu quả AI" + KPI "Tin nhắn" (ghép vào `performanceOverview`).
+export { aiEfficiency, messagesKpi } from './ai-efficiency.ts'

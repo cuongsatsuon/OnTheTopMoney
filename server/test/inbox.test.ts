@@ -389,7 +389,8 @@ describe('đính kèm', () => {
       ['image', 'pending'],
       ['audio', 'pending'],
     ])
-    expect((await jobsOf('inbox.fetch_attachment')).map((j) => j.data.attachmentId)).toEqual(rows.map((r) => r.id))
+    // Hai job cùng transaction → cùng `created_on`, thứ tự đọc không cố định: so không theo thứ tự.
+    expect((await jobsOf('inbox.fetch_attachment')).map((j) => j.data.attachmentId).sort()).toEqual(rows.map((r) => r.id).sort())
     const [msg] = await handle.sql<{ text: string | null }[]>`select text from messages`
     expect(msg!.text).toBeNull()
   })

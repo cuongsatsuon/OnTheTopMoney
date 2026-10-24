@@ -1,0 +1,1 @@
+CREATE INDEX "messages_page_ts_idx" ON "messages" USING btree ("page_id","platform_timestamp");

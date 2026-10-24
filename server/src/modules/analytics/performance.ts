@@ -10,6 +10,7 @@
 //   chỉ lùi vài ngày) → kỳ trước thiếu → `previous = null` cho mọi KPI thay vì "+300%" giả.
 // - Tỉ lệ tương tác tính ở server, chỉ trên ngày có CẢ tương tác lẫn tiếp cận (Threads không có reach — cộng tương tác
 //   Threads vào tử mà mẫu không có sẽ thổi phồng tỉ lệ).
+// - Story 8.3: KPI "Tin nhắn" + khối "Hiệu quả AI" (`ai-efficiency.ts`) cùng phạm vi + kỳ.
 import {
   INSUFFICIENT_DATA_DAYS,
   PERFORMANCE_RANGE_DAYS,
@@ -30,6 +31,7 @@ import { and, desc, gte, inArray, lte, sql } from 'drizzle-orm'
 import { describePublishedTargets, listPublishedInRange } from '../content/index.ts'
 import { listPages } from '../pages/index.ts'
 import type { DbExecutor } from '../../platform/db/index.ts'
+import { aiEfficiency, messagesKpi } from './ai-efficiency.ts'
 import { vnDateOf } from './collect.ts'
 import { metricSyncStates, pageDailyMetrics, postMetrics } from './schema.ts'
 
@@ -146,6 +148,11 @@ export async function performanceOverview(
       ])
     : [[], [], [], []]
   const comparable = lateStart.length === 0
+  const current = { from: vnDayStart(w.from), to: vnDayStart(addDays(w.to, 1)) }
+  const [messages, ai] = await Promise.all([
+    messagesKpi(db, { pages, current, previous: { from: vnDayStart(w.prevFrom), to: current.from } }),
+    aiEfficiency(db, { pageIds, current, published }),
+  ])
 
   for (const r of daily) {
     const no = dayNumber(r.date)
@@ -199,6 +206,7 @@ export async function performanceOverview(
       engagement: kpi('engagement'),
       followersDelta: kpi('followersDelta'),
       engagementRate: { current: rateOf(curRate), previous: comparable ? rateOf(prevRate) : null },
+      messages,
     },
     series,
     pages: pageRows,
@@ -206,6 +214,7 @@ export async function performanceOverview(
       db,
       published.map((p) => p.targetId),
     ),
+    ai,
   }
 }
 

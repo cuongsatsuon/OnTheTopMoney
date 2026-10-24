@@ -2,14 +2,17 @@ import { PerformanceResponse, type PagePerformanceDto } from '@ottm/shared'
 import { describe, expect, it } from 'vitest'
 import {
   INSUFFICIENT_DATA_TEXT,
+  aiVsManualText,
   deltaPct,
   emptyPerformance,
   engagementRate,
   formatDay,
+  formatDuration,
   formatMetric,
   formatRate,
   hasSeriesData,
   metricsStateText,
+  percentOf,
   sortPageRows,
 } from './performance'
 
@@ -94,5 +97,38 @@ describe('biểu đồ', () => {
     const empty = emptyPerformance('7d')
     expect(empty).toMatchObject({ range: '7d', platforms: [], pages: [], topPosts: [], series: [], insufficientData: false })
     expect(() => PerformanceResponse.parse({ ...empty, from: '2026-10-17', to: '2026-10-23' })).not.toThrow()
+  })
+})
+
+describe('Hiệu quả AI (Story 8.3)', () => {
+  it('% làm tròn; mẫu số 0 → null ("—", không phải 0%)', () => {
+    expect(percentOf(81, 100)).toBe(81)
+    expect(percentOf(2, 3)).toBe(67)
+    expect(percentOf(0, 5)).toBe(0)
+    expect(percentOf(0, 0)).toBeNull()
+  })
+
+  it('thời gian phản hồi: giây / phút / giờ; null → —', () => {
+    expect(formatDuration(14)).toBe('14 giây')
+    expect(formatDuration(4.6)).toBe('5 giây')
+    expect(formatDuration(200)).toBe('3 phút')
+    expect(formatDuration(7200)).toBe('2 giờ')
+    expect(formatDuration(5400)).toBe('1,5 giờ')
+    expect(formatDuration(null)).toBe('—')
+  })
+
+  it('so bài AI với bài tự viết: chỉ khi hai nhóm có số và bài tự viết > 0', () => {
+    expect(aiVsManualText(40, 20)).toBe('AI tạo cao hơn 100%')
+    expect(aiVsManualText(15, 20)).toBe('AI tạo thấp hơn 25%')
+    expect(aiVsManualText(20.05, 20)).toBe('Ngang bài tự viết')
+    expect(aiVsManualText(40, 0)).toBeNull()
+    expect(aiVsManualText(40, null)).toBeNull()
+    expect(aiVsManualText(null, 20)).toBeNull()
+  })
+
+  it('phạm vi kho mẫu: khối AI rỗng, KPI Tin nhắn null', () => {
+    const empty = emptyPerformance('30d')
+    expect(empty.kpis.messages).toEqual({ current: null, previous: null })
+    expect(empty.ai).toMatchObject({ customerMessages: 0, aiConversations: 0, avgResponseSeconds: null })
   })
 })

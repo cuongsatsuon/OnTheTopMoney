@@ -1,11 +1,12 @@
 // Hiệu suất `/hieu-suat` (Story 8.2, UX Flow 5): KPI + so với kỳ trước, tương tác theo nền tảng, so sánh từng trang và
-// bài tốt nhất — số thật từ `GET /performance` (lib/performance.ts), lọc theo Phạm vi ở thanh trên. "Hiệu quả AI" còn dữ
-// liệu mẫu tới Story 8.3; "Tạo bài tương tự" điền sẵn đủ ở Story 8.4.
-import { ArrowDown, ArrowUp, Bot, ExternalLink, Eye, Heart, ImageOff, Percent, RefreshCw, Timer, UserPlus, Users } from 'lucide-react'
+// bài tốt nhất — số thật từ `GET /performance` (lib/performance.ts), lọc theo Phạm vi ở thanh trên. Story 8.3: KPI "Tin
+// nhắn" + khối "Hiệu quả AI" (tin AI trả lời, tỉ lệ chuyển người, thời gian phản hồi, bài AI vs tự viết) cùng response.
+// "Tạo bài tương tự" điền sẵn đủ ở Story 8.4.
+import { ArrowDown, ArrowUp, Bot, ExternalLink, Eye, Heart, ImageOff, MessageCircle, Percent, RefreshCw, Timer, UserPlus, Users } from 'lucide-react'
 import { useMemo, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Bar, BarChart, CartesianGrid, Cell, ComposedChart, LabelList, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import type { PagePerformanceDto, PerformanceRange, TopPostDto } from '@ottm/shared'
+import type { AiEfficiencyDto, PagePerformanceDto, PerformanceRange, TopPostDto } from '@ottm/shared'
 import { AiLockHint } from '../components/AiLockHint'
 import { Content } from '../components/AppShell'
 import { Skeleton } from '../components/Skeleton'
@@ -33,13 +34,16 @@ import { errorMessageOf } from '../lib/error-messages'
 import {
   INSUFFICIENT_DATA_TEXT,
   PERFORMANCE_RANGE_OPTIONS,
+  aiVsManualText,
   deltaPct,
   engagementRate,
   formatDay,
+  formatDuration,
   formatMetric,
   formatRate,
   hasSeriesData,
   metricsStateText,
+  percentOf,
   sortPageRows,
   usePerformance,
   type PageSortKey,
@@ -115,7 +119,7 @@ export default function Analytics() {
         </Card>
       ) : (
         <>
-          <div className="grid grid-cols-2 gap-4 lg:grid-cols-3 xl:grid-cols-5">
+          <div className="grid grid-cols-2 gap-4 lg:grid-cols-3 xl:grid-cols-6">
             <KpiCard label="Lượt xem" value={formatMetric(data.kpis.views.current)} delta={kpiDelta(data.kpis.views)} icon={<Eye size={16} />} />
             <KpiCard label="Lượt tiếp cận" value={formatMetric(data.kpis.reach.current)} delta={kpiDelta(data.kpis.reach)} icon={<Users size={16} />} />
             <KpiCard label="Tương tác" value={formatMetric(data.kpis.engagement.current)} delta={kpiDelta(data.kpis.engagement)} icon={<Heart size={16} />} />
@@ -130,6 +134,13 @@ export default function Analytics() {
               value={formatMetric(data.kpis.followersDelta.current)}
               delta={kpiDelta(data.kpis.followersDelta)}
               icon={<UserPlus size={16} />}
+            />
+            <KpiCard
+              label="Tin nhắn"
+              value={formatMetric(data.kpis.messages.current)}
+              delta={kpiDelta(data.kpis.messages)}
+              hint="khách nhắn và bình luận"
+              icon={<MessageCircle size={16} />}
             />
           </div>
 
@@ -194,7 +205,7 @@ export default function Analytics() {
           </Card>
 
           <div className="mt-6 grid grid-cols-1 gap-6 xl:grid-cols-2">
-            <AiEfficiencyCard />
+            <AiEfficiencyCard ai={data.ai} />
             <Card>
               <CardHeader title="Bài hiệu quả nhất" subtitle="Bài đăng trong kỳ, xếp theo tương tác" />
               {data.topPosts.length === 0 ? (
@@ -236,8 +247,8 @@ function PerformanceSkeleton() {
   return (
     <div aria-busy="true" role="status">
       <span className="sr-only">Đang tải số liệu…</span>
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-3 xl:grid-cols-5">
-        {Array.from({ length: 5 }, (_, i) => (
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-3 xl:grid-cols-6">
+        {Array.from({ length: 6 }, (_, i) => (
           <Skeleton key={i} className="h-28 rounded-lg" />
         ))}
       </div>
@@ -346,14 +357,18 @@ function TopPostRow({ rank, post, page, aiLocked, onSimilar }: { rank: number; p
   )
 }
 
-/* ---------- Hiệu quả AI — dữ liệu mẫu tới Story 8.3 ---------- */
+/* ---------- Hiệu quả AI (Story 8.3) ---------- */
 
-const AI_VS_HUMAN = [
-  { name: 'Bài AI tạo', value: 1840 },
-  { name: 'Bài tự viết', value: 1310 },
-]
-
-function AiEfficiencyCard() {
+/** Khối "Hiệu quả AI": số đếm của server (`data.ai`), % và câu so sánh tính ở `lib/performance.ts`. Không có số → "—". */
+function AiEfficiencyCard({ ai }: { ai: AiEfficiencyDto }) {
+  const answeredPct = percentOf(ai.aiAnswered, ai.customerMessages)
+  const handoffPct = percentOf(ai.handoffConversations, ai.aiConversations)
+  const { ai: aiPosts, manual } = ai.posts
+  const compareText = aiVsManualText(aiPosts.avgEngagement, manual.avgEngagement)
+  const bars = [
+    { name: 'Bài AI tạo', value: aiPosts.avgEngagement },
+    { name: 'Bài tự viết', value: manual.avgEngagement },
+  ]
   return (
     <Card className="border-ai/25">
       <CardHeader
@@ -368,43 +383,58 @@ function AiEfficiencyCard() {
       <div className="grid grid-cols-3 divide-x divide-border border-b border-border">
         <div className="p-4">
           <div className="text-[13px] text-muted-foreground">AI trả lời</div>
-          <div className="tabular mt-1 text-2xl font-bold text-ai">912 tin</div>
-          <div className="mt-1 text-xs text-muted-foreground">81% tổng tin nhắn</div>
+          <div className="tabular mt-1 text-2xl font-bold text-ai">{formatNumber(ai.aiMessages)} tin</div>
+          <div className="mt-1 text-xs text-muted-foreground">{answeredPct !== null ? `AI đã trả lời ${answeredPct}% tin nhắn` : 'Chưa có tin nhắn trong kỳ'}</div>
         </div>
         <div className="p-4">
           <div className="flex items-center gap-1 text-[13px] text-muted-foreground">
             <Users size={13} /> Chuyển cho bạn
           </div>
-          <div className="tabular mt-1 text-2xl font-bold">9%</div>
-          <div className="mt-1 text-xs text-muted-foreground">101 hội thoại</div>
+          <div className="tabular mt-1 text-2xl font-bold">{handoffPct !== null ? `${handoffPct}%` : '—'}</div>
+          <div className="mt-1 text-xs text-muted-foreground">
+            {ai.aiConversations > 0
+              ? `${formatNumber(ai.handoffConversations)} trên ${formatNumber(ai.aiConversations)} hội thoại AI nhận`
+              : 'AI chưa nhận hội thoại nào'}
+          </div>
         </div>
         <div className="p-4">
           <div className="flex items-center gap-1 text-[13px] text-muted-foreground">
             <Timer size={13} /> Phản hồi trung bình
           </div>
-          <div className="tabular mt-1 text-2xl font-bold">14 giây</div>
-          <div className="mt-1 text-xs text-muted-foreground">Bạn tự trả lời: 23 phút</div>
+          <div className="tabular mt-1 text-2xl font-bold">{formatDuration(ai.avgResponseSeconds)}</div>
+          <div className="mt-1 text-xs text-muted-foreground">
+            {ai.avgResponseSeconds !== null ? 'Từ lúc khách nhắn tới lúc AI gửi' : 'Chưa có lượt AI trả lời'}
+          </div>
         </div>
       </div>
       <div className="p-4">
         <div className="mb-2 flex items-center justify-between text-[13px]">
           <span className="font-medium">Tương tác trung bình mỗi bài</span>
-          <span className="font-medium text-ai">AI tạo cao hơn 40%</span>
+          {compareText && <span className="font-medium text-ai">{compareText}</span>}
         </div>
-        <div className="h-[110px]">
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={AI_VS_HUMAN} layout="vertical" margin={{ top: 0, right: 56, bottom: 0, left: 0 }} barCategoryGap={14}>
-              <XAxis type="number" hide />
-              <YAxis type="category" dataKey="name" width={92} tick={{ fontSize: 13, fill: '#0F172A' }} tickLine={false} axisLine={false} />
-              <Bar dataKey="value" radius={[0, 6, 6, 0]} isAnimationActive={false}>
-                {AI_VS_HUMAN.map((row, i) => (
-                  <Cell key={row.name} fill={i === 0 ? '#7C3AED' : '#CBD5E1'} />
-                ))}
-                <LabelList dataKey="value" position="right" style={{ fontSize: 13, fill: '#0F172A' }} formatter={(v) => formatNumber(Number(v))} />
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
+        {aiPosts.posts === 0 && manual.posts === 0 ? (
+          <p className="py-6 text-center text-sm text-muted-foreground">Chưa có bài đã đăng có số liệu trong kỳ này.</p>
+        ) : (
+          <>
+            <div className="h-[110px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={bars} layout="vertical" margin={{ top: 0, right: 56, bottom: 0, left: 0 }} barCategoryGap={14}>
+                  <XAxis type="number" hide />
+                  <YAxis type="category" dataKey="name" width={92} tick={{ fontSize: 13, fill: '#0F172A' }} tickLine={false} axisLine={false} />
+                  <Bar dataKey="value" radius={[0, 6, 6, 0]} isAnimationActive={false}>
+                    {bars.map((row, i) => (
+                      <Cell key={row.name} fill={i === 0 ? '#7C3AED' : '#CBD5E1'} />
+                    ))}
+                    <LabelList dataKey="value" position="right" style={{ fontSize: 13, fill: '#0F172A' }} formatter={(v) => formatNumber(Math.round(Number(v)))} />
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Bài đăng trong kỳ có số liệu: {formatNumber(aiPosts.posts)} bài AI tạo, {formatNumber(manual.posts)} bài tự viết
+            </p>
+          </>
+        )}
       </div>
     </Card>
   )

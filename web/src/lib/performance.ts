@@ -2,8 +2,10 @@
 // Meta). Phạm vi chỉ có id kho mẫu (`serverScope` → `null`) → dữ liệu rỗng, không hỏi server. Phần thuần (so sánh kỳ
 // trước, tỉ lệ tương tác, sắp xếp bảng trang có `null`, câu trạng thái) tách khỏi hook để test được (performance.test.ts).
 // `null` = không có số liệu (nền tảng không cung cấp / chưa thu) → hiện "—", khác 0.
+// Story 8.3: KPI "Tin nhắn" + khối "Hiệu quả AI" (`data.ai`) — % và câu so sánh tính ở đây từ số đếm của server.
 import {
   PerformanceResponse,
+  type AiEfficiencyDto,
   type MetricComparison,
   type PagePerformanceDto,
   type PageMetricsState,
@@ -27,6 +29,17 @@ export const INSUFFICIENT_DATA_TEXT = 'Cần thêm vài ngày dữ liệu'
 export const performanceKey = (scope: string | null, range: PerformanceRange) => ['performance', scope, range] as const
 
 const NO_KPI: MetricComparison = { current: null, previous: null }
+const NO_POSTS = { posts: 0, avgEngagement: null }
+const NO_AI: AiEfficiencyDto = {
+  customerMessages: 0,
+  aiAnswered: 0,
+  aiMessages: 0,
+  aiConversations: 0,
+  handoffConversations: 0,
+  avgResponseSeconds: null,
+  responseSamples: 0,
+  posts: { ai: NO_POSTS, manual: NO_POSTS },
+}
 
 /** Phạm vi không có trang thật: rỗng như server trả cho nhóm không có trang (không ngày nào). */
 export function emptyPerformance(range: PerformanceRange): PerformanceResponse {
@@ -36,10 +49,11 @@ export function emptyPerformance(range: PerformanceRange): PerformanceResponse {
     to: '',
     insufficientData: false,
     platforms: [],
-    kpis: { views: NO_KPI, reach: NO_KPI, engagement: NO_KPI, followersDelta: NO_KPI, engagementRate: NO_KPI },
+    kpis: { views: NO_KPI, reach: NO_KPI, engagement: NO_KPI, followersDelta: NO_KPI, engagementRate: NO_KPI, messages: NO_KPI },
     series: [],
     pages: [],
     topPosts: [],
+    ai: NO_AI,
   }
 }
 
@@ -114,4 +128,30 @@ export function metricsStateText(state: PageMetricsState): string | null {
     case 'ok':
       return null
   }
+}
+
+/* ---------- Hiệu quả AI (Story 8.3) ---------- */
+
+/** Phần trăm làm tròn số nguyên ("81%"); mẫu số 0 → `null` (hiện "—", không phải 0%). */
+export function percentOf(part: number, whole: number): number | null {
+  return whole > 0 ? Math.round((part / whole) * 100) : null
+}
+
+/** Thời gian phản hồi: dưới 90 giây → "14 giây"; dưới 90 phút → "3 phút"; còn lại → "1,5 giờ". `null` → "—". */
+export function formatDuration(seconds: number | null): string {
+  if (seconds === null) return '—'
+  if (seconds < 90) return `${Math.round(seconds)} giây`
+  if (seconds < 90 * 60) return `${Math.round(seconds / 60)} phút`
+  return `${(seconds / 3600).toLocaleString('vi-VN', { maximumFractionDigits: 1 })} giờ`
+}
+
+/**
+ * Câu so tương tác trung bình bài AI tạo với bài tự viết ("AI tạo cao hơn 40%"); chỉ khi hai nhóm đều có số và bài tự
+ * viết > 0, không thì `null` (không câu). Chênh dưới 1% → "Ngang bài tự viết".
+ */
+export function aiVsManualText(aiAvg: number | null, manualAvg: number | null): string | null {
+  if (aiAvg === null || manualAvg === null || manualAvg <= 0) return null
+  const pct = Math.round(((aiAvg - manualAvg) / manualAvg) * 100)
+  if (pct === 0) return 'Ngang bài tự viết'
+  return pct > 0 ? `AI tạo cao hơn ${pct}%` : `AI tạo thấp hơn ${-pct}%`
 }
