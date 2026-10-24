@@ -352,3 +352,6 @@
 - source_spec: `spec-9-4-app-review.md`
   summary: Reviewer của Meta cần vào app — app chỉ có một chủ sở hữu, nên hồ sơ hướng dẫn tạm đổi mật khẩu chủ sở hữu trong kỳ duyệt; chưa có môi trường staging tách biệt.
   evidence: `deploy/app-review.md` mục 2.4. Nếu Meta đòi tài khoản thử riêng hoặc chủ shop không muốn đưa mật khẩu production, dựng VPS staging theo runbook (app Meta riêng) hoặc thêm tài khoản chỉ đọc.
+- source_spec: none
+  summary: Story 9.5 (diễn tập khôi phục backup) bỏ qua theo quyết định chủ dự án — hệ thống chỉ có sao lưu tay `pg_dump` (runbook mục 4), không backup tự động, chưa diễn tập khôi phục.
+  evidence: AC 9.5 giả định "backup đêm qua", mâu thuẫn quyết định bỏ restic ngày 2026-10-22 (spec-bo-backup-restic.md: "Không thêm công cụ backup thay thế"). Chủ dự án chọn bỏ qua ngày 2026-10-24; RPO hiện phụ thuộc lần dump tay gần nhất.
