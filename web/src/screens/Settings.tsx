@@ -1,4 +1,4 @@
-import { Bell, Check, Copy, Eye, EyeOff, KeyRound, Loader2, Plus, RefreshCw, Send, Sparkles, Trash2, TriangleAlert, Webhook } from 'lucide-react'
+import { Bell, Check, Copy, ExternalLink, Eye, EyeOff, KeyRound, Loader2, Plus, RefreshCw, Send, Sparkles, Trash2, TriangleAlert, Webhook } from 'lucide-react'
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { Content } from '../components/AppShell'
@@ -36,6 +36,7 @@ import {
 } from '../lib/connections'
 import { errorMessage, errorMessageOf } from '../lib/error-messages'
 import { useNotificationPrefs, useSaveNotificationPrefs } from '../lib/notifications'
+import { metaAppPrivacyFields, usePrivacyConfig } from '../lib/privacy'
 import {
   WEBHOOK_PRODUCT_LABEL,
   canRetry,
@@ -168,6 +169,8 @@ export default function Settings() {
   const retryEvent = useRetryWebhookEvent()
   // Sức khoẻ webhook (Story 4.2): tin gần nhất mỗi sản phẩm + trang đăng ký lỗi.
   const webhookHealth = useWebhookHealth()
+  // Quyền riêng tư (Story 9.1): URL trang chính sách + callback xoá dữ liệu để dán vào Meta App.
+  const privacyConfig = usePrivacyConfig()
 
   // Tài khoản Meta: trang thật, tách khối Facebook và Threads. "Kết nối" / "Kết nối lại" chạy lại OAuth đúng nền
   // tảng; callback đưa về đây (`from: 'settings'`) và mở bước chọn trang ngay trong Cài đặt.
@@ -936,6 +939,68 @@ export default function Settings() {
                       </section>
                     )
                   })}
+                </div>
+              )}
+            </Card>
+          )}
+
+          {section === 'meta' && (
+            <Card>
+              <CardHeader
+                title="Quyền riêng tư cho Meta App"
+                subtitle="Meta cần các địa chỉ này trước khi cho app chạy Live. Dán vào đúng ô trong Meta App."
+              />
+              {privacyConfig.data ? (
+                <div className="space-y-4 p-4">
+                  {(!privacyConfig.data.operatorConfigured || !privacyConfig.data.metaSecretConfigured) && (
+                    <div className="flex gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-[13px] text-amber-900" role="status">
+                      <TriangleAlert size={15} className="mt-0.5 shrink-0" />
+                      <div className="space-y-1">
+                        {!privacyConfig.data.operatorConfigured && (
+                          <p>
+                            Trang chính sách còn thiếu tên đơn vị vận hành hoặc email liên hệ. Đặt <code className="font-mono">PRIVACY_CONTROLLER_NAME</code> và{' '}
+                            <code className="font-mono">PRIVACY_CONTACT_EMAIL</code> rồi khởi động lại.
+                          </p>
+                        )}
+                        {!privacyConfig.data.metaSecretConfigured && (
+                          <p>
+                            Máy chủ chưa đặt <code className="font-mono">META_APP_SECRET</code> nên chưa nhận được yêu cầu xoá dữ liệu từ Meta.
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                  {metaAppPrivacyFields(privacyConfig.data).map((f) => (
+                    <Field key={f.label} label={f.label} hint={f.hint}>
+                      <div className="flex gap-2">
+                        <Input readOnly value={f.value} className="font-mono" onFocus={(e) => e.target.select()} />
+                        <Button icon={<Copy size={15} />} onClick={() => copy(f.value)}>
+                          Sao chép
+                        </Button>
+                      </div>
+                    </Field>
+                  ))}
+                  <a
+                    href={privacyConfig.data.policyUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-sm font-medium text-primary hover:underline"
+                  >
+                    Xem trang chính sách <ExternalLink size={14} />
+                  </a>
+                </div>
+              ) : privacyConfig.isError ? (
+                <div className="px-4 py-6 text-center" role="alert">
+                  <p className="text-sm">{errorMessageOf(privacyConfig.error)}</p>
+                  <Button className="mt-3" onClick={() => void privacyConfig.refetch()}>
+                    Thử lại
+                  </Button>
+                </div>
+              ) : (
+                <div className="space-y-3 p-4" aria-busy="true">
+                  <Skeleton className="h-9 w-full" />
+                  <Skeleton className="h-9 w-full" />
+                  <Skeleton className="h-9 w-full" />
                 </div>
               )}
             </Card>

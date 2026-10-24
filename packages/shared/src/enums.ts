@@ -230,3 +230,8 @@ export type DeletionScope = z.infer<typeof DeletionScope>
 export const DELETION_STATUSES = ['pending', 'processing', 'completed'] as const
 export const DeletionStatus = z.enum(DELETION_STATUSES)
 export type DeletionStatus = z.infer<typeof DeletionStatus>
+
+// AD-22, Story 9.1: nguồn của yêu cầu xoá — callback Meta (gỡ app / xin xoá dữ liệu) hoặc thao tác tay của chủ shop (9.2).
+export const DELETION_SOURCES = ['meta_deauthorize', 'meta_data_deletion', 'manual'] as const
+export const DeletionSource = z.enum(DELETION_SOURCES)
+export type DeletionSource = z.infer<typeof DeletionSource>

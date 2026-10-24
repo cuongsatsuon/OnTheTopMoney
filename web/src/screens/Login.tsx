@@ -7,6 +7,7 @@ import { ScreenSkeleton } from '../components/Skeleton'
 import { Button, Card, Field, Input } from '../components/ui'
 import { safeNext, useLogin, useMe } from '../lib/session'
 import { errorMessageOf } from '../lib/error-messages'
+import { privacyPolicyHref } from '../lib/privacy'
 
 export default function Login() {
   const [params] = useSearchParams()
@@ -65,6 +66,11 @@ export default function Login() {
         </Card>
         <p className="mt-4 text-center text-xs text-muted-foreground">
           Quên mật khẩu? Đặt lại trên máy chủ bằng lệnh <code className="font-mono">npm run set-password -w server</code>.
+        </p>
+        <p className="mt-2 text-center text-xs">
+          <a href={privacyPolicyHref()} target="_blank" rel="noopener noreferrer" className="text-muted-foreground hover:text-primary hover:underline">
+            Chính sách quyền riêng tư
+          </a>
         </p>
       </div>
     </main>

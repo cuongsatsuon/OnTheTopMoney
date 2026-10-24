@@ -54,6 +54,10 @@ x-app-env: &app-env
   THREADS_APP_ID: ${THREADS_APP_ID:-}
   THREADS_APP_SECRET: ${THREADS_APP_SECRET:-}
   THREADS_APP_ENV: ${THREADS_APP_ENV:-}
+  # Trang chính sách /privacy/policy (Story 9.1): tên đơn vị vận hành + email nhận yêu cầu về dữ liệu. Trống → trang
+  # hiện chỗ "Chưa điền" (Meta duyệt app sẽ thấy).
+  PRIVACY_CONTROLLER_NAME: ${PRIVACY_CONTROLLER_NAME:-}
+  PRIVACY_CONTACT_EMAIL: ${PRIVACY_CONTACT_EMAIL:-}
   # Ảnh bài đăng, logo (công khai) và file riêng tư (kho kiến thức, đính kèm) lưu trên Cloudinary.
   # cloudinary://<api_key>:<api_secret>@<cloud_name>; trống → tính năng media báo chưa cấu hình.
   CLOUDINARY_URL: ${CLOUDINARY_URL:-}

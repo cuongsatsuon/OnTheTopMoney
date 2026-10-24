@@ -7,6 +7,7 @@ import type { Config } from '../platform/config/index.ts'
 import type { Db } from '../platform/db/index.ts'
 import { createJobSender } from '../platform/jobs/index.ts'
 import type { Logger } from '../platform/log/index.ts'
+import type { PrivacyDeps } from './privacy.ts'
 import type { WebhooksDeps } from './webhooks.ts'
 
 /**
@@ -74,5 +75,19 @@ export function webhooksOptionsFromConfig(
     ...(config.META_APP_SECRET ? { metaAppSecret: config.META_APP_SECRET } : {}),
     ...(config.THREADS_APP_SECRET ? { threadsAppSecret: config.THREADS_APP_SECRET } : {}),
     publicBaseUrl: config.PUBLIC_BASE_URL,
+  }
+}
+
+/**
+ * Phần `privacy` của `buildApp` (Story 9.1, AD-22): app secret để verify `signed_request`, gốc công khai cho URL trạng
+ * thái, tên + email đơn vị vận hành cho trang chính sách (tuỳ chọn).
+ */
+export function privacyOptionsFromConfig(
+  config: Pick<Config, 'META_APP_SECRET' | 'PUBLIC_BASE_URL' | 'PRIVACY_CONTROLLER_NAME' | 'PRIVACY_CONTACT_EMAIL'>,
+): Omit<PrivacyDeps, 'db' | 'events' | 'log'> {
+  return {
+    ...(config.META_APP_SECRET ? { metaAppSecret: config.META_APP_SECRET } : {}),
+    publicBaseUrl: config.PUBLIC_BASE_URL,
+    operator: { name: config.PRIVACY_CONTROLLER_NAME, email: config.PRIVACY_CONTACT_EMAIL },
   }
 }

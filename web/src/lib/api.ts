@@ -19,6 +19,14 @@ export function apiUrl(path: string): string {
   return `${API_BASE}${path.startsWith('/') ? path : `/${path}`}`
 }
 
+/**
+ * URL tới một đường công khai của api NGOÀI `/api/v1` (vd trang `/privacy/policy` — Story 9.1). Chế độ tách (web trên
+ * Hostinger) đường này chỉ có ở host api; đường tương đối sẽ rơi vào SPA của web. Trống → tương đối (dev: proxy Vite).
+ */
+export function apiPublicUrl(path: string): string {
+  return `${API_ORIGIN}${path.startsWith('/') ? path : `/${path}`}`
+}
+
 export class ApiError extends Error {
   readonly code: ErrorCode
   /** HTTP status; 0 khi không tới được server. */

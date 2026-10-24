@@ -928,3 +928,29 @@ curl -si -X OPTIONS https://api.example.com/api/v1/auth/login \
 Quay lại chế độ VPS: `COMPOSE_PROFILES=web`, bỏ `WEB_BASE_URL` / `ALLOWED_ORIGINS` (hoặc đặt = `PUBLIC_BASE_URL` của
 tên miền chung — `WEB_BASE_URL` khác `PUBLIC_BASE_URL` làm OAuth chuyển về sai host), cài lại site `nginx.conf.example`,
 lên bản như mục 2 với tag mới (build lại `ottm-web` và chạy container web).
+
+## 9. Quyền riêng tư: trang chính sách và callback xoá dữ liệu (Meta App)
+
+Meta không cho app lên Live mode khi thiếu Privacy Policy URL và Data Deletion callback. api phục vụ sẵn các đường
+`/privacy/*` (công khai, không cần đăng nhập) trên **host api** = `PUBLIC_BASE_URL`: chế độ cùng VPS là tên miền của
+app, chế độ tách (mục 8) là `https://api.<miền>` — host web trên Hostinger **không** có các đường này.
+
+1. Đặt trong `deploy/.env` rồi `docker compose up -d`:
+   - `PRIVACY_CONTROLLER_NAME` — tên cửa hàng / người vận hành app;
+   - `PRIVACY_CONTACT_EMAIL` — email nhận yêu cầu về dữ liệu;
+   - `META_APP_SECRET` (đã có ở mục 1.4) — thiếu thì mọi callback trả 400.
+2. Mở Cài đặt › Tài khoản Meta › "Quyền riêng tư cho Meta App" để chép ba URL, rồi dán vào Meta App:
+   - **Privacy Policy URL** (Settings › Basic): `<PUBLIC_BASE_URL>/privacy/policy`;
+   - **Data deletion callback URL** (Settings › Basic › User data deletion): `<PUBLIC_BASE_URL>/privacy/meta/data-deletion`;
+   - **Deauthorize callback URL** (Facebook Login for Business › Settings): `<PUBLIC_BASE_URL>/privacy/meta/deauthorize`.
+3. Kiểm: `curl -sI https://<host api>/privacy/policy` → `200`, đúng **một** header `Content-Security-Policy` (của api,
+   có `style-src 'self'`). Hai header CSP là site nginx còn bản mẫu cũ: cài lại `nginx.conf.example` /
+   `nginx-api.conf.example` (map `$ottm_csp` / `$ottm_api_csp`) rồi `sudo nginx -t && sudo systemctl reload nginx`.
+4. Đọc lại nội dung trang chính sách trước khi nộp App Review; sửa nội dung ở `server/src/app/privacy-pages.ts` (đổi cả
+   `POLICY_UPDATED_AT`).
+
+Khi Meta gọi callback: app kiểm chữ ký `signed_request` bằng `META_APP_SECRET`, ghi một yêu cầu xoá (bảng
+`deletion_requests`) và trả mã xác nhận + đường `/privacy/status/<mã>`. Gỡ app (deauthorize) còn chuyển các trang
+Facebook / Instagram lấy qua tài khoản đó sang "Mất kết nối". Tài khoản Facebook không có dữ liệu trong app → yêu cầu
+ghi "Đã hoàn tất" ngay. Việc xoá dữ liệu thật do bản có Story 9.2 thực hiện; trước đó yêu cầu nằm ở "đang chờ xoá".
+nginx không ghi access log cho `/privacy/status/` (mã nằm trong đường dẫn).

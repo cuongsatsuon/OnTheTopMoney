@@ -44,6 +44,8 @@ export default defineConfig({
       '/healthz': { target: API_TARGET },
       '/oauth': { target: API_TARGET },
       '/webhooks': { target: API_TARGET },
+      // Story 9.1: trang chính sách / trạng thái xoá dữ liệu (api phục vụ HTML).
+      '/privacy': { target: API_TARGET },
     },
   },
 })

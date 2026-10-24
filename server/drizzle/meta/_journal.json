@@ -274,6 +274,13 @@
       "when": 1792811273406,
       "tag": "0038_foamy_captain_flint",
       "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1792816642724,
+      "tag": "0039_luxuriant_kat_farrell",
+      "breakpoints": true
     }
   ]
 }

@@ -43,6 +43,12 @@ describe('platform/log — redact theo AD-12', () => {
     expect(JSON.parse(out)).toMatchObject({ pageId: 'p1', service: 't' })
   })
 
+  it('redactUrl che mã xác nhận trong đường trang trạng thái xoá dữ liệu (Story 9.1)', () => {
+    expect(redactUrl('/privacy/status/0123456789abcdef0123456789abcdef')).toBe('/privacy/status/REDACTED')
+    expect(redactUrl('/privacy/status/abc?x=1&code=c')).toBe('/privacy/status/REDACTED?x=1&code=REDACTED')
+    expect(redactUrl('/privacy/policy')).toBe('/privacy/policy')
+  })
+
   it('redactUrl thay giá trị tham số query bí mật, giữ tham số khác', () => {
     expect(redactUrl('/webhooks/meta?hub.mode=subscribe&hub.verify_token=vt-secret&hub.challenge=42')).toBe(
       '/webhooks/meta?hub.mode=subscribe&hub.verify_token=REDACTED&hub.challenge=42',

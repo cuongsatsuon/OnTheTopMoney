@@ -22,6 +22,7 @@
 #   do nginx tự sinh (413/502/503/504 — không qua api) được gắn Access-Control-Allow-Origin/Credentials cho origin web,
 #   để web đọc được JSON lỗi thay vì "lỗi mạng"
 #   mọi response (kể cả lỗi) có CSP, HSTS, X-Content-Type-Options, Referrer-Policy, X-Frame-Options, Permissions-Policy
+#   (trang HTML /privacy/* giữ CSP riêng của api — đúng một header CSP)
 #   SSE /api/v1/stream không đệm, không nén; đường api không bao giờ nén
 #   502/503/504 do nginx sinh trên đường api → JSON {"error":{"code":"INTERNAL","message":"api unavailable"}};
 #   body quá lớn (413) → JSON VALIDATION_FAILED; mọi response lỗi có Cache-Control: no-store
@@ -35,8 +36,14 @@
 # server. Vì vậy mọi header chỉ đặt ở cấp server; phần khác nhau theo đường dẫn được tính bằng các map dưới đây.
 # KHÔNG thêm add_header vào location.
 
-# CSP. Host api chỉ trả JSON / chuyển hướng: không cho tải gì (đặt thẳng ở add_header bên dưới). Ảnh bài đăng / logo
-# nằm trên Cloudinary (AD-14) — web trên Hostinger nhúng URL https://res.cloudinary.com/…, không qua host này.
+# CSP. Host api chỉ trả JSON / chuyển hướng: không cho tải gì. Ảnh bài đăng / logo nằm trên Cloudinary (AD-14) — web
+# trên Hostinger nhúng URL https://res.cloudinary.com/…, không qua host này. Ngoại lệ: trang HTML công khai /privacy/*
+# (Story 9.1 — chính sách, trạng thái xoá dữ liệu) do api tự đặt CSP chặt riêng (chỉ thêm CSS cùng origin) → giữ của
+# api, không thêm cái thứ hai (hai header CSP thì trình duyệt áp cả hai, CSS bị chặn).
+map $upstream_http_content_security_policy $ottm_api_csp {
+    ""      "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
+    default "";
+}
 
 # Cache-Control. Lỗi (4xx/5xx, kể cả JSON lỗi do nginx sinh) → no-store. Thành công: chuỗi rỗng = nginx không thêm
 # header (api tự quyết).
@@ -121,7 +128,7 @@ server {
     ssl_session_tickets off;
 
     # Header bảo mật (AD-19) — `always`: có cả trên 404/502 và trang lỗi.
-    add_header Content-Security-Policy "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'" always;
+    add_header Content-Security-Policy $ottm_api_csp always;
     add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
     add_header X-Content-Type-Options "nosniff" always;
     add_header Referrer-Policy $ottm_api_referrer_policy always;
@@ -186,6 +193,13 @@ server {
     # theo từng route. Đặt TRƯỚC location `/api` (regex khớp theo thứ tự).
     location ~ ^/api/v1/(media-assets|knowledge-items/(group|page)/[0-9a-f-]+/files|brand-profiles/(group|page)/[0-9a-f-]+/logo)$ {
         client_max_body_size 11m;
+        proxy_pass http://ottm_api_upstream;
+    }
+
+    # Trang trạng thái xoá dữ liệu: mã xác nhận nằm trong đường dẫn → không ghi access log (như /oauth). `^~` thắng regex.
+    location ^~ /privacy/status/ {
+        access_log off;
+        error_log /var/log/nginx/error.log crit;
         proxy_pass http://ottm_api_upstream;
     }
 

@@ -22,6 +22,8 @@ const SECRET_KEYS = [
   'api_secret',
   'apiSecret',
   'signature',
+  // Story 9.1: callback xoá dữ liệu của Meta.
+  'signed_request',
   'token',
   'password',
   'cookie',
@@ -64,7 +66,14 @@ export const SECRET_QUERY_PARAMS = new Set([
   'q',
 ])
 
+/**
+ * Đường có mã bí mật ngay trong path: trang trạng thái xoá dữ liệu `/privacy/status/<mã xác nhận>` (Story 9.1) — mã là
+ * quyền xem trạng thái, không ghi vào log.
+ */
+const SECRET_PATH_RE = /^(\/privacy\/status\/)[^/?#]+/
+
 export function redactUrl(url: string | undefined): string | undefined {
+  if (url && SECRET_PATH_RE.test(url)) url = url.replace(SECRET_PATH_RE, '$1REDACTED')
   if (!url || !url.includes('?')) return url
   const qIndex = url.indexOf('?')
   const params = new URLSearchParams(url.slice(qIndex + 1))

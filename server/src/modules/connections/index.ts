@@ -2,6 +2,7 @@
 // `oauth_states`, `oauth_results`, `meta_accounts` (Story 2.2); OAuth Threads dùng chung các bảng này (Story 2.3). Public API chỉ export từ file này.
 // Story 4.2: đăng ký webhook trang (job `connections.subscribe_page`) + lỗi đăng ký cho API sức khoẻ của `webhooks`.
 // Story 8.1: `grantedScopes` — quyền đã cấp theo trang (analytics kiểm quyền insight trước khi gọi Meta).
+// Story 9.1: `isKnownMetaUser`, `disconnectMetaUserTx` — callback gỡ app của Meta.
 // Phụ thuộc: chỉ module nền (`pages`); được import `adapters/meta`. Chỉ module này giữ token trang và gọi
 // `pages.upsertFromPlatform` / `pages.setConnectionStatus`.
 export const MODULE = 'connections'
@@ -52,6 +53,8 @@ export {
   type SubscribePageDeps,
 } from './subscribe.ts'
 export { getAccessToken, grantedScopes, removePage, tokenOwnerPageId } from './credentials.ts'
+// Story 9.1: người dùng Meta gỡ app (callback deauthorize của `privacy`, ghép ở entrypoint).
+export { REASON_META_DEAUTHORIZED, disconnectMetaUserTx, isKnownMetaUser } from './deauthorize.ts'
 export { FAKE_CODE, FAKE_THREADS_CODE } from './fake-meta.ts'
 export {
   computeConnectionStatus,

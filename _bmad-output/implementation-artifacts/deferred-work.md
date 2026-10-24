@@ -19,9 +19,6 @@
 - source_spec: `spec-1-3c-fe-hostinger-be-vps.md`
   summary: Ghi bản web đang chạy trên Hostinger (marker commit) và cảnh báo khi rollback BE lệch phiên bản web.
   evidence: Chế độ external không có tương đương `IMAGE_TAG`/`WEB_ROOT/current`; runbook 8.4 bảo checkout commit cũ nhưng không biết commit nào đang chạy.
-- source_spec: `spec-1-3c-fe-hostinger-be-vps.md`
-  summary: Dùng `apiUrl()` (web/src/lib/api.ts, có từ Story 4.3 cho đính kèm Hộp thư) cho link `/privacy/*` khi màn quyền riêng tư có (Epic 9).
-  evidence: Story 4.3 đã thêm `apiUrl()` theo `API_ORIGIN` và CSP `media-src` cho origin api; `/media/...` không còn dùng (ảnh công khai đi URL Cloudinary). Còn `/privacy/*` chưa có màn nào.
 - source_spec: `spec-1-3d-web-chay-trong-docker.md`
   summary: Kiểm nén gzip của asset web qua nginx (Content-Encoding, một Vary) trong smoke-test.
   evidence: gzip đã dời vào container web (`deploy/web-nginx.conf`); không bước nào kiểm.
@@ -331,3 +328,15 @@
 - source_spec: `spec-8-5-tong-quan.md`
   summary: Tổng quan refetch cả `GET /overview` (~15 câu: hội thoại, bài lỗi / sắp đăng, chiến dịch + `engagementGains`, sức khoẻ webhook, hạn mức AI) cho MỖI hint `message` / `conversation` / `contact` — tin / bình luận dồn dập (livestream) thì server tính đủ một lượt cho mỗi tin (client huỷ request đang bay nhưng server vẫn chạy).
   evidence: `ENTITY_ALSO_INVALIDATES` + `handleHint` (`invalidateQueries`, mặc định `cancelRefetch`) ở `web/src/lib/realtime.ts` (review lượt 1). Hướng làm: gom hint theo gốc khoá — throttle có lượt cuối (vd. 1 giây, vẫn ≤3 giây của AC) cho `['overview', …]`, hoặc `cancelRefetch: false` + đánh dấu "cần tải lại" khi lượt đang bay xong.
+- source_spec: `spec-9-1-chinh-sach-va-callback-xoa.md`
+  summary: Callback gỡ app / xoá dữ liệu của Threads app (Uninstall Callback URL, Delete Callback URL trong cài đặt Threads app) — 9.1 chỉ làm cho Meta App (Facebook Login).
+  evidence: `server/src/app/privacy.ts` chỉ verify bằng `META_APP_SECRET`. Threads có thể đòi hai URL này khi nộp review; nếu cần thì thêm `POST /privacy/threads/{uninstall,delete}` verify bằng `THREADS_APP_SECRET` (dạng `signed_request` cần xác nhận với tài liệu Threads) — đối chiếu ở 9.4.
+- source_spec: `spec-9-1-chinh-sach-va-callback-xoa.md`
+  summary: Yêu cầu `scope=all` từ Meta chưa nêu ai xoá `connections.meta_accounts` (tên + user token của tài khoản Facebook) — danh sách module tham gia của AD-22 không có `connections`.
+  evidence: AD-22 chỉ liệt kê `inbox`, `autoreply`, `webhooks`, `ai`, `content`. Story 9.2 quyết: thêm `connections` vào danh sách tham gia cho `scope=all`, hoặc ghi rõ là giữ.
+- source_spec: `spec-9-1-chinh-sach-va-callback-xoa.md`
+  summary: Trang chính sách nêu thời hạn lưu theo AD-22 (payload webhook 30 ngày, lượt AI 90 ngày, dữ liệu trang gỡ quá 30 ngày) nhưng cron dọn chưa có — đúng sau Story 9.3 (và 9.2 cho trang gỡ quá 30 ngày). Nên xong cả hai trước khi nộp App Review.
+  evidence: `server/src/app/privacy-pages.ts` mục 5; chưa có queue `privacy.retention`.
+- source_spec: `spec-9-1-chinh-sach-va-callback-xoa.md`
+  summary: Callback Meta không kiểm độ mới của `signed_request` (`issued_at`) — một `signed_request` hợp lệ bị lộ có thể gửi lại sau khi yêu cầu cũ đã xoá xong và chủ shop kết nối lại cùng tài khoản Facebook → yêu cầu `scope=all` mới (xoá sạch lần nữa khi 9.2 chạy).
+  evidence: `server/src/modules/privacy/signed-request.ts` chỉ đọc `issued_at`, `recordMetaRequest` tạo mới khi yêu cầu gần nhất `completed matched=true` (review lượt 1). Khó khai thác (cần body POST HTTPS của Meta). Hướng làm ở 9.2: từ chối `issued_at` quá cũ (vd > 1 ngày, chọn theo cửa sổ retry của Meta) hoặc nhớ `issued_at` lớn nhất theo `subject_hash`.

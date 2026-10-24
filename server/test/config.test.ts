@@ -134,6 +134,15 @@ describe('platform/config', () => {
     })
   })
 
+  it('PRIVACY_CONTROLLER_NAME / PRIVACY_CONTACT_EMAIL (Story 9.1): tuỳ chọn, email phải hợp lệ', () => {
+    const base = { DATABASE_URL: 'postgres://u:p@localhost:5432/db' }
+    expect(parseEnv(base).PRIVACY_CONTACT_EMAIL).toBeUndefined()
+    const env = parseEnv({ ...base, PRIVACY_CONTROLLER_NAME: '  Shop Mỹ Phẩm  ', PRIVACY_CONTACT_EMAIL: 'lienhe@shop.example' })
+    expect(env.PRIVACY_CONTROLLER_NAME).toBe('Shop Mỹ Phẩm')
+    expect(env.PRIVACY_CONTACT_EMAIL).toBe('lienhe@shop.example')
+    expect(variablesOf({ ...base, PRIVACY_CONTACT_EMAIL: 'khong-phai-email' })).toEqual(['PRIVACY_CONTACT_EMAIL'])
+  })
+
   it('đọc ALLOWED_ORIGINS, TRUST_PROXY, COOKIE_SECURE', () => {
     const cfg = parseEnv({
       DATABASE_URL: 'postgres://u:p@localhost:5432/db',

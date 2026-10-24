@@ -38,6 +38,7 @@ import { registerPages } from './pages.ts'
 import { registerPerformance } from './performance.ts'
 import { registerPosts } from './posts.ts'
 import { registerPostsCompose } from './posts-compose.ts'
+import { registerPrivacy, type PrivacyDeps } from './privacy.ts'
 import { registerSearch } from './search.ts'
 import { registerStream } from './stream.ts'
 import { registerWebhooks, type WebhooksDeps } from './webhooks.ts'
@@ -96,12 +97,17 @@ export interface AppDeps {
   webhooks?: Omit<WebhooksDeps, 'db' | 'log'>
   /** Enqueue job (Story 4.7: gửi tin từ Hộp thư enqueue `inbox.send` cùng transaction). Thiếu → không có route gửi tin. */
   jobs?: JobSender
+  /**
+   * Quyền riêng tư (Story 9.1, AD-22): trang `/privacy/*` công khai + callback xoá dữ liệu của Meta (app secret, gốc
+   * công khai, tên + email đơn vị vận hành). Đăng ký cùng `events` (callback phát `privacy.purge_requested`).
+   */
+  privacy?: Omit<PrivacyDeps, 'db' | 'events' | 'log'>
 }
 
 /** Như `trustProxy: 1` của proxy-addr (kiểu Fastify không nhận số): chỉ tin hop đầu tiên. */
 const trustOneHop = (_address: string, hop: number): boolean => hop < 1
 
-export function buildApp({ sql, db, logger, http = {}, loginLimiter, health, events, realtime, ai, clock, connections, media, webhooks, jobs }: AppDeps): FastifyInstance {
+export function buildApp({ sql, db, logger, http = {}, loginLimiter, health, events, realtime, ai, clock, connections, media, webhooks, jobs, privacy }: AppDeps): FastifyInstance {
   // Sau một hop reverse proxy (nginx): chỉ tin địa chỉ cuối của X-Forwarded-For, không tin cả chuỗi client gửi.
   const app = Fastify({ loggerInstance: logger as FastifyBaseLogger, trustProxy: http.trustProxy ? trustOneHop : false })
 
@@ -201,5 +207,7 @@ export function buildApp({ sql, db, logger, http = {}, loginLimiter, health, eve
   }
   // Cổng webhook (Story 4.1): cần `jobs` (enqueue `webhook.route`) — main.ts truyền từ pg-boss của api.
   if (webhooks) registerWebhooks(app, { ...webhooks, db, log: logger.child({ component: 'webhooks' }) })
+  // Quyền riêng tư (Story 9.1): cần `events` (ghi yêu cầu + phát `privacy.purge_requested` cùng transaction).
+  if (events && privacy) registerPrivacy(app, { ...privacy, db, events, log: logger.child({ component: 'privacy' }) })
   return app
 }

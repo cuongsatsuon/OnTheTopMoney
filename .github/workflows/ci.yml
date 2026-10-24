@@ -166,7 +166,9 @@ jobs:
           grep -nE '^[[:space:]]*(listen|server |root|alias|server_name|proxy_pass)' "$conf"
           # Không còn phục vụ /media từ máy chủ; CSP cho phép ảnh Cloudinary.
           if grep -nE '^[^#]*(location[^{]*/media|alias)' "$conf"; then echo "mẫu nginx còn phục vụ /media"; exit 1; fi
-          grep -qE "^[^#]*Content-Security-Policy \"[^\"]*img-src [^;\"]*https://res\.cloudinary\.com" "$conf"
+          # CSP của SPA nằm trong map $ottm_csp (api tự đặt CSP riêng cho trang /privacy/* — Story 9.1).
+          grep -qE '^[^#]*add_header Content-Security-Policy \$ottm_csp always;' "$conf"
+          grep -qE "^[^#]*\"[^\"]*img-src [^;\"]*https://res\.cloudinary\.com" "$conf"
           # Không còn TLS hay giá trị mẫu ngoài chú thích (ký hiệu trong mẫu bị đổi → bước này đỏ).
           if grep -nE '^[^#]*(ssl|443|example\.com|/var/www|/var/lib/ottm|127\.0\.0\.1:3000|127\.0\.0\.1:3080)' "$conf"; then
             echo "mẫu nginx còn TLS/giá trị mẫu sau khi thay — ký hiệu cho CI trong nginx.conf.example đã đổi?"; exit 1

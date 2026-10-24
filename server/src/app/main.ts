@@ -6,7 +6,13 @@ import { createEventPublisher } from '../platform/events/index.ts'
 import { createBoss, createJobSender } from '../platform/jobs/index.ts'
 import { createRealtimeHub } from '../platform/realtime/index.ts'
 import { buildApp } from './app.ts'
-import { aiOptionsFromConfig, connectionsOptionsFromConfig, mediaStoresFromConfig, webhooksOptionsFromConfig } from './deps.ts'
+import {
+  aiOptionsFromConfig,
+  connectionsOptionsFromConfig,
+  mediaStoresFromConfig,
+  privacyOptionsFromConfig,
+  webhooksOptionsFromConfig,
+} from './deps.ts'
 
 const config = getConfig()
 const logger = createLogger({ level: config.LOG_LEVEL, name: 'api' })
@@ -40,12 +46,17 @@ const app = buildApp({
   media: mediaStoresFromConfig(config),
   webhooks: webhooksOptionsFromConfig(config, boss),
   jobs: createJobSender(boss),
+  privacy: privacyOptionsFromConfig(config),
 })
 if (!config.META_VERIFY_TOKEN) logger.warn('META_VERIFY_TOKEN chưa đặt — GET /webhooks/* trả 403 (chưa xác minh được với Meta)')
 // Thiếu app secret → không verify được chữ ký webhook → POST /webhooks/* luôn 401, Meta có thể tắt subscription.
 if (!config.META_FAKE) {
   if (!config.META_APP_SECRET) logger.warn('META_APP_SECRET chưa đặt — POST /webhooks/meta trả 401 (không verify được chữ ký; Meta có thể tắt subscription)')
   if (!config.THREADS_APP_SECRET) logger.warn('THREADS_APP_SECRET chưa đặt — POST /webhooks/threads trả 401 (không verify được chữ ký)')
+}
+// Trang chính sách công khai (Story 9.1) hiện chỗ trống khi thiếu — Meta duyệt app sẽ thấy.
+if (!config.PRIVACY_CONTROLLER_NAME || !config.PRIVACY_CONTACT_EMAIL) {
+  logger.warn('PRIVACY_CONTROLLER_NAME / PRIVACY_CONTACT_EMAIL chưa đặt — /privacy/policy hiện chỗ trống "Chưa điền"')
 }
 if (!config.CLOUDINARY_URL) logger.warn('CLOUDINARY_URL chưa đặt — tải logo hồ sơ thương hiệu trả MEDIA_NOT_CONFIGURED (phần chữ vẫn lưu được)')
 

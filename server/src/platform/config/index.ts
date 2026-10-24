@@ -171,6 +171,12 @@ export const EnvSchema = z
     THREADS_APP_ENV: z.enum(['test', 'live']).optional(),
     /** Chuỗi tự đặt cho bước xác minh webhook của Meta (`hub.verify_token`). */
     META_VERIFY_TOKEN: z.string().min(16, 'ít nhất 16 ký tự').optional(),
+    /**
+     * Trang chính sách `/privacy/policy` (Story 9.1): tên đơn vị / người vận hành app và email nhận yêu cầu về dữ liệu.
+     * Tuỳ chọn — thiếu thì trang hiện chỗ trống đánh dấu "chưa điền" (Meta duyệt app sẽ thấy), api log cảnh báo.
+     */
+    PRIVACY_CONTROLLER_NAME: z.string().trim().min(1).max(200).optional(),
+    PRIVACY_CONTACT_EMAIL: z.email('phải là địa chỉ email').optional(),
     /** Thư mục trên đĩa mà `/healthz` đo dung lượng (mặc định `/` — gốc container; media nằm trên Cloudinary). */
     HEALTH_DISK_PATH: z.string().startsWith('/', 'phải là đường dẫn tuyệt đối').default('/'),
     /** Khoá chủ mã hoá bí mật (AD-12). Bắt buộc khi production; dev do `npm run dev` tự sinh. */
