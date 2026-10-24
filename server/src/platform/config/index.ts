@@ -1,6 +1,7 @@
 // Env đọc đúng một lần qua zod (Consistency Conventions › Cấu hình).
 // Thiếu biến bắt buộc → tiến trình không khởi động, log tên biến, exit ≠ 0.
 import { z } from 'zod'
+import { MEDIA_ORPHAN_SWEEP_MODES } from '@ottm/shared'
 
 /** Bool từ env: chỉ nhận `true|false|1|0` (z.coerce.boolean coi "false" là true). */
 const EnvBool = z
@@ -177,6 +178,12 @@ export const EnvSchema = z
      */
     PRIVACY_CONTROLLER_NAME: z.string().trim().min(1).max(200).optional(),
     PRIVACY_CONTACT_EMAIL: z.email('phải là địa chỉ email').optional(),
+    /**
+     * Story 9.3: chế độ cron `privacy.orphan_files` (dọn file Cloudinary không còn dòng nào tham chiếu) — `off`, `dry_run`
+     * (chỉ đếm), `on`, `force` (bỏ cầu dao tỉ lệ mồ côi). Không đặt → `dry_run` ở MỌI môi trường, kể cả production
+     * (quyết định của chủ dự án, review 9.3: đối chiếu báo cáo dry_run với Cloudinary thật rồi mới đặt `on`).
+     */
+    MEDIA_ORPHAN_SWEEP: z.enum(MEDIA_ORPHAN_SWEEP_MODES).optional(),
     /** Thư mục trên đĩa mà `/healthz` đo dung lượng (mặc định `/` — gốc container; media nằm trên Cloudinary). */
     HEALTH_DISK_PATH: z.string().startsWith('/', 'phải là đường dẫn tuyệt đối').default('/'),
     /** Khoá chủ mã hoá bí mật (AD-12). Bắt buộc khi production; dev do `npm run dev` tự sinh. */

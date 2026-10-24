@@ -11,6 +11,8 @@
 //   có hội thoại → `ignored`); "đã nhận / đã xem" (`message_deliveries|message_reads`) → `inbox.markOutboundReceipt`
 //   (không có hội thoại / tin nào → `ignored`);
 // - loại khác (postback, reaction, mentions, không rõ) → `ignored`.
+// - Story 9.3: payload thô đã dọn theo hạn → `missing`; tin / bình luận mới của khách đang chờ xoá → bỏ payload thô ngay
+//   khi đặt trạng thái (luồng xoá 9.2 đã quét `webhook_events` ở giai đoạn 1, mục tới sau đó không ai xoá).
 // Idempotent theo khoá mục: ingest chống trùng theo `(page_id, platform_message_id)`, sửa/xoá lặp lại không đổi gì.
 import type { Platform, WebhookProduct } from '@ottm/shared'
 import { eq } from 'drizzle-orm'
@@ -32,6 +34,7 @@ import {
   ingestComment,
   ingestDm,
   ingestEcho,
+  isSenderPendingDeletion,
   markMessageRemoved,
   markMessageUnhidden,
   markOutboundReceipt,
@@ -91,7 +94,8 @@ export async function routeWebhookEvent(deps: RouteDeps, data: RouteJobData): Pr
     .select()
     .from(webhookEvents)
     .where(eq(webhookEvents.id, data.eventId))
-  if (!event) return 'missing'
+  // Story 9.3: payload thô đã dọn theo hạn → không còn gì để route; giữ nguyên trạng thái.
+  if (!event || event.payload === null) return 'missing'
 
   if (event.test) {
     await setStatus(deps.db, event.id, 'ignored', null)
@@ -111,18 +115,20 @@ export async function routeWebhookEvent(deps: RouteDeps, data: RouteJobData): Pr
 
   // Story 4.3: tin nhắn Messenger / IG Direct → `inbox.ingest`; Story 4.5: tin của chính trang → `inbox.ingestEcho`.
   // Threads không có DM.
+  // Story 9.3: tin của khách đang chờ xoá (tới sau khi phần `webhooks` của luồng xoá đã chạy) → bỏ payload thô ngay.
+  let dropPayload = false
   if (MESSAGE_FIELDS.has(event.field)) {
     let status: RouteResult = 'ignored'
     if (page.platform !== 'threads' && event.platformPageId) {
       const dm = normalizeMessagingItem(event.payload, event.platformPageId, deps.now?.() ?? new Date())
       if (dm.kind === 'dm') {
-        await ingestDm(inbox, { pageId: page.id, message: dm })
+        dropPayload = await pendingDeletion(deps.db, await ingestDm(inbox, { pageId: page.id, message: dm }))
         status = 'routed'
       } else if (dm.kind === 'echo') {
         status = echoStatus(await ingestEcho(inbox, { pageId: page.id, echo: echoFromDm(dm) }))
       }
     }
-    await setStatus(deps.db, event.id, status, page.id)
+    await setStatus(deps.db, event.id, status, page.id, dropPayload)
     return status
   }
 
@@ -145,7 +151,7 @@ export async function routeWebhookEvent(deps: RouteDeps, data: RouteJobData): Pr
     const ref = (commentId: string) => ({ pageId: page.id, platformMessageId: commentId })
     switch (comment.kind) {
       case 'comment':
-        await ingestComment(inbox, { pageId: page.id, comment })
+        dropPayload = await pendingDeletion(deps.db, await ingestComment(inbox, { pageId: page.id, comment }))
         status = 'routed'
         break
       case 'page_comment':
@@ -164,14 +170,19 @@ export async function routeWebhookEvent(deps: RouteDeps, data: RouteJobData): Pr
         break
     }
   }
-  await setStatus(deps.db, event.id, status, page.id)
+  await setStatus(deps.db, event.id, status, page.id, dropPayload)
   return status
 }
 
-async function setStatus(db: Db, id: string, status: 'routed' | 'ignored', pageId: string | null): Promise<void> {
+/** Tin vừa ingest (mới hoặc trùng) của khách đang chờ xoá. */
+async function pendingDeletion(db: Db, result: { messageId: string }): Promise<boolean> {
+  return isSenderPendingDeletion(db, result.messageId)
+}
+
+async function setStatus(db: Db, id: string, status: 'routed' | 'ignored', pageId: string | null, dropPayload = false): Promise<void> {
   await db
     .update(webhookEvents)
-    .set({ status, pageId, errorCode: null, routedAt: new Date() })
+    .set({ status, pageId, errorCode: null, routedAt: new Date(), ...(dropPayload ? { payload: null } : {}) })
     .where(eq(webhookEvents.id, id))
 }
 

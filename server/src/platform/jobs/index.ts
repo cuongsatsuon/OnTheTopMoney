@@ -18,6 +18,7 @@ export {
 export {
   BOSS_INTERNAL_PREFIX,
   BOSS_SCHEMA,
+  JOB_DELETE_AFTER_SECONDS,
   createBoss,
   ensureQueues,
   hasLiveJob,

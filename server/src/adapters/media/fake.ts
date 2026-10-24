@@ -5,6 +5,9 @@
 //   `{result: 'ok' | 'not found'}`, `download` (chỉ file `authenticated`) trả bytes hoặc 404.
 // - Giao file `https://res.cloudinary.com/<cloud>/<resource_type>/<type>/...`: `upload` công khai → 200; `authenticated`
 //   chỉ trả khi URL có chữ ký giả của chính fake (`s--fakesig--`), không thì 401; không có → 404.
+// - Admin API `GET …/<cloud>/resources/<resource_type>/<type>?prefix=&max_results=&next_cursor=` (Story 9.3): Basic auth
+//   `api_key:api_secret` (sai → 401), lọc theo prefix, sắp theo public_id, phân trang bằng con trỏ; `created_at` lấy từ
+//   `asset.createdAt` (test sửa trực tiếp để giả file cũ).
 // - `failNext(...)`: lời gọi kế tiếp trả HTTP status đó, lỗi mạng, treo tới khi bị huỷ (hết giờ), hoặc 200 body hỏng.
 import { CLOUDINARY_API_BASE_URL, signParams } from './index.ts'
 
@@ -18,6 +21,8 @@ export interface FakeCloudinaryAsset {
   width: number
   height: number
   version: number
+  /** Lúc tải lên (Admin API trả `created_at`); test đổi để giả file cũ. */
+  createdAt: Date
 }
 
 export interface FakeCloudinaryRequest {
@@ -43,6 +48,8 @@ export interface FakeCloudinaryOptions {
   apiKey: string
   apiSecret: string
   apiBaseUrl?: string
+  /** Đồng hồ cho `createdAt` của file mới. */
+  now?: () => Date
 }
 
 export const FAKE_DELIVERY_BASE_URL = 'https://res.cloudinary.com'
@@ -92,6 +99,34 @@ export function createFakeCloudinary(options: FakeCloudinaryOptions): FakeCloudi
     return undefined
   }
 
+  /** Admin API liệt kê: con trỏ = public_id cuối của trang trước (Cloudinary thật dùng chuỗi mờ). */
+  function handleList(resourceType: string, type: string, params: Record<string, string>, authorization: string | null): Response {
+    const expected = `Basic ${Buffer.from(`${options.apiKey}:${options.apiSecret}`).toString('base64')}`
+    if (authorization !== expected) return apiError(401, 'Invalid credentials')
+    if (resourceType !== 'image' && resourceType !== 'raw') return apiError(400, 'Invalid resource type')
+    if (type !== 'upload' && type !== 'authenticated') return apiError(400, 'Invalid type')
+    const prefix = params.prefix ?? ''
+    const max = Math.min(Number(params.max_results ?? 10) || 10, 500)
+    const after = params.next_cursor ? Buffer.from(params.next_cursor, 'base64url').toString('utf8') : null
+    if (params.next_cursor && !after) return apiError(400, 'Invalid next_cursor')
+    const all = [...assets.values()]
+      .filter((a) => a.resourceType === resourceType && a.type === type && a.publicId.startsWith(prefix) && (after === null || a.publicId > after))
+      .sort((a, b) => (a.publicId < b.publicId ? -1 : 1))
+    const page = all.slice(0, max)
+    return json(200, {
+      resources: page.map((a) => ({
+        public_id: a.publicId,
+        resource_type: a.resourceType,
+        type: a.type,
+        format: a.format,
+        version: a.version,
+        bytes: a.data.length,
+        created_at: a.createdAt.toISOString().replace(/\.\d{3}Z$/, 'Z'),
+      })),
+      ...(all.length > max ? { next_cursor: Buffer.from(page[page.length - 1]!.publicId).toString('base64url') } : {}),
+    })
+  }
+
   async function handleApi(method: string, path: string, params: Record<string, string>, file: Blob | undefined): Promise<Response> {
     const [cloud, resourceType, action, ...extra] = path.split('/')
     if (cloud !== options.cloudName || extra.length > 0) return apiError(401, 'Invalid cloud_name')
@@ -115,7 +150,7 @@ export function createFakeCloudinary(options: FakeCloudinaryOptions): FakeCloudi
         height = sniffed.height
       }
       version += 1
-      const asset: FakeCloudinaryAsset = { publicId: params.public_id, resourceType, type, format, data, width, height, version }
+      const asset: FakeCloudinaryAsset = { publicId: params.public_id, resourceType, type, format, data, width, height, version, createdAt: options.now?.() ?? new Date() }
       assets.set(keyOf(resourceType, type, asset.publicId), asset)
       const ext = format ? `.${format}` : ''
       const sig = type === 'authenticated' ? `${FAKE_SIGNATURE}/` : ''
@@ -185,7 +220,14 @@ export function createFakeCloudinary(options: FakeCloudinaryOptions): FakeCloudi
     if (failure === 'bad-json') return new Response('<html>không phải json</html>', { status: 200 })
     if (typeof failure === 'number') return apiError(failure, 'lỗi giả')
 
-    if (bare.startsWith(apiPrefix)) return handleApi(method, bare.slice(apiPrefix.length), params, file)
+    if (bare.startsWith(apiPrefix)) {
+      const [cloud, section, resourceType = '', type = '', ...rest] = bare.slice(apiPrefix.length).split('/')
+      if (section === 'resources' && method === 'GET') {
+        if (cloud !== options.cloudName || rest.length > 0) return apiError(401, 'Invalid cloud_name')
+        return handleList(resourceType, type, params, new Headers(init?.headers).get('authorization'))
+      }
+      return handleApi(method, bare.slice(apiPrefix.length), params, file)
+    }
     if (bare.startsWith(deliveryPrefix)) return handleDelivery(bare.slice(deliveryPrefix.length))
     return new Response('Not found', { status: 404 })
   }) as typeof fetch

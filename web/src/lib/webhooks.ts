@@ -2,13 +2,14 @@
 // thử. Chỉ đọc/ghi qua REST; không có nghiệp vụ ở client. Helper thuần (nhãn/tone/thời gian) tách để test.
 // Story 4.2: sức khoẻ webhook (`GET /webhooks/health`) cho Cài đặt › Webhook, banner Hộp thư, cảnh báo Chi tiết trang.
 // Mọi khoá query gốc `['webhooks', …]` → hint realtime `webhook.stalled|recovered` tự làm cũ (lib/realtime.ts).
+// Story 9.3: sự kiện quá hạn đã dọn nội dung thô (`payloadPurged`) → không "Xử lý lại".
 import {
+  RETENTION,
   WebhookConfigResponse,
   WebhookEventDto,
   WebhookHealthResponse,
   WebhookLogResponse,
   type PageSubscriptionError,
-  type WebhookEventStatus,
   type WebhookProduct,
   type WebhookSubscribeError,
 } from '@ottm/shared'
@@ -85,10 +86,13 @@ export function webhookErrorLabel(code: string): string {
   return ERROR_LABELS[code] ?? code
 }
 
-/** Chỉ mục `failed` mới cho "Xử lý lại" (AD-4). */
-export function canRetry(status: WebhookEventStatus): boolean {
-  return status === 'failed'
+/** Chỉ mục `failed` còn nội dung thô mới cho "Xử lý lại" (AD-4; Story 9.3: payload quá hạn đã dọn thì không). */
+export function canRetry(ev: Pick<WebhookEventDto, 'status' | 'payloadPurged'>): boolean {
+  return ev.status === 'failed' && !ev.payloadPurged
 }
+
+/** Story 9.3: dòng phụ của nhật ký — payload thô chỉ giữ `RETENTION.webhookPayloadDays` ngày (AD-22). */
+export const WEBHOOK_LOG_SUBTITLE = `Các sự kiện webhook gần nhất. Nội dung thô chỉ giữ ${RETENTION.webhookPayloadDays} ngày, sau đó chỉ còn thời gian, trang, loại và trạng thái.`
 
 const FIELD_LABELS: Record<string, string> = {
   test: 'thử',

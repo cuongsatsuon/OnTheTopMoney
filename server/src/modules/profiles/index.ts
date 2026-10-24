@@ -66,3 +66,6 @@ export {
 } from './knowledge.ts'
 export { EXTRACT_TIMEOUT_MS, runExtraction } from './knowledge-extract-thread.ts'
 export { detectKnowledgeMime, extractKnowledgeText, type ExtractResult } from './knowledge-files.ts'
+
+// Story 9.3: tra public_id còn dùng ở kho kiến thức / logo (lượt dọn file mồ côi).
+export { referencedProfileFiles } from './file-refs.ts'

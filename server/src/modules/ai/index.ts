@@ -4,6 +4,8 @@
 export const MODULE = 'ai'
 
 export { handleAiPurge, type AiPurgeDeps } from './purge.ts'
+// Story 9.3: bỏ `ai_usage.ref` quá hạn (cron `privacy.retention`).
+export { clearExpiredRefs } from './retention.ts'
 
 export {
   OPENAI_KEY_KIND,

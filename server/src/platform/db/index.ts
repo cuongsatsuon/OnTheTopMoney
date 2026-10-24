@@ -70,3 +70,34 @@ export async function assertBossDbSupported(db: Db): Promise<void> {
     if (rows[0]?.ok !== 1) throw new Error('bossDbFor: executeSql trên transaction Drizzle không trả kết quả mong đợi')
   })
 }
+
+/** Tuỳ chọn của một lượt dọn theo lô (Story 9.3): cỡ lô và trần số lô mỗi lượt (phần còn lại để lượt sau). */
+export interface BatchOptions {
+  batchSize?: number
+  maxBatches?: number
+}
+
+/** Kết quả một lượt dọn: số dòng đã xử lý; `done=false` = chạm trần lô, lượt sau làm tiếp. */
+export interface BatchResult {
+  count: number
+  done: boolean
+}
+
+export const DEFAULT_BATCH_SIZE = 1000
+export const DEFAULT_MAX_BATCHES = 200
+
+/**
+ * Lặp `step(limit)` (mỗi lần một câu lệnh — một transaction ngầm) tới khi một lô ít hơn `limit` hoặc chạm trần lô.
+ * `step` trả số dòng đã xử lý. Trả tổng và `done` (false = còn việc, chạm trần).
+ */
+export async function runInBatches(step: (limit: number) => Promise<number>, options: BatchOptions = {}): Promise<BatchResult> {
+  const limit = options.batchSize ?? DEFAULT_BATCH_SIZE
+  const maxBatches = options.maxBatches ?? DEFAULT_MAX_BATCHES
+  let count = 0
+  for (let i = 0; i < maxBatches; i++) {
+    const n = await step(limit)
+    count += n
+    if (n < limit) return { count, done: true }
+  }
+  return { count, done: false }
+}

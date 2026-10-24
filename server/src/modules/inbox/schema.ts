@@ -248,6 +248,8 @@ export const messageAttachments = pgTable(
     check('message_attachments_status_check', sql`${t.status} in (${list(ATTACHMENT_STATUSES)})`),
     check('message_attachments_error_check', sql`${t.errorCode} in (${list(ATTACHMENT_ERRORS)})`),
     check('message_attachments_resource_type_check', sql`${t.fileResourceType} in ('image', 'raw')`),
+    // Story 9.3: lượt dọn file mồ côi tra theo public_id.
+    index('message_attachments_file_idx').on(t.filePublicId).where(sql`${t.filePublicId} is not null`),
   ],
 )
 

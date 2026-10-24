@@ -433,11 +433,40 @@ Lệnh `drop schema` xoá **toàn bộ** dữ liệu hiện có trước khi n�
 giữa chừng → DB trống (không phải dữ liệu cũ): chạy lại `pg_restore` với file khác. DB về thời điểm cũ có thể trỏ tới
 ảnh/file đã bị xoá trên Cloudinary sau thời điểm đó.
 
+Ngược lại, ảnh/file tải lên **sau** thời điểm của file dump không còn dòng nào trỏ tới: cron `privacy.orphan_files` coi
+là mồ côi và xoá khi đủ 7 ngày tuổi nếu `MEDIA_ORPHAN_SWEEP=on` (mục 5 › Dọn dữ liệu theo hạn). Khôi phục để thử /
+diễn tập trên một máy khác dùng chung `CLOUDINARY_URL` + `CLOUDINARY_FOLDER` với production → đặt
+`MEDIA_ORPHAN_SWEEP=off` ở máy đó **trước** khi chạy `docker compose up -d`, không thì (nếu để `on`) máy đó xoá dần
+file của production.
+
 **Sang VPS mới (máy cũ mất):** làm mục 1.1–1.7 trên VPS mới với **đúng** `deploy/.env` đã cất (cùng
 `APP_ENCRYPTION_KEYS`, `CLOUDINARY_URL` — ảnh/file vẫn ở Cloudinary), đổi DNS sang IP mới (trước khi lấy chứng chỉ ở
 1.6), chép file dump lên rồi làm 4.2. Bật lại uptime ping (1.9).
 
 ## 5. Vận hành hằng ngày
+
+### Dọn dữ liệu theo hạn (Story 9.3)
+
+Worker tự chạy hai cron (giờ VN), thời hạn ghi ở trang `/privacy/policy` mục 5 (cùng nguồn `RETENTION` trong
+`packages/shared/src/privacy.ts`):
+
+- `privacy.retention` (3h30): nội dung thô sự kiện webhook quá 30 ngày (nhật ký Cài đặt › Webhook chỉ còn thời gian, trang,
+  loại, trạng thái — sự kiện lỗi cũ không "Xử lý lại" được nữa), lượt AI trả lời quá 90 ngày, liên kết của dòng chi phí AI
+  quá 90 ngày, phiên đăng nhập hết hạn. Job pg-boss đã xong / lỗi bị pg-boss xoá sau 7 ngày.
+- `privacy.orphan_files` (5h): file Cloudinary trong `<CLOUDINARY_FOLDER>/public|private/` mà DB không còn trỏ tới, tối
+  thiểu 7 ngày tuổi, tối đa 100 file mỗi ngày. Chế độ `MEDIA_ORPHAN_SWEEP` (`deploy/.env`): bỏ trống = `dry_run` (chỉ
+  đếm, không xoá — cả production); `on` xoá; `off` tắt. **Bật `on` chỉ sau khi đối chiếu báo cáo dry_run với Cloudinary
+  thật:** dòng log `dọn file mồ côi (dry_run …)` có `byKind` = mỗi loại một prefix (`<folder>/public/`, `<folder>/private/`)
+  với số file đã quét / đủ 7 ngày tuổi / mồ côi. Mở Media Library của Cloudinary ở đúng các thư mục đó, so số file và thử
+  vài ảnh cũ đang dùng (ảnh bài, logo, file kho kiến thức) xem vẫn mở được trong app; khớp thì đặt
+  `MEDIA_ORPHAN_SWEEP=on` rồi `docker compose up -d worker`. **Cầu dao:** trong số file cũ đã quét có > 50% không còn
+  ai trỏ tới (≥ 20 file) thì không xoá gì (cả ở dry_run: log báo `tripped`) và log cảnh báo `tỉ lệ file mồ côi bất thường` — thường do DB không khớp kho (khôi phục nhầm file, máy dev dùng chung thư
+  mục). Kiểm lại cấu hình; nếu chắc đúng (vd vừa khôi phục bản dump cũ và muốn dọn file mới hơn bản đó) đặt
+  `MEDIA_ORPHAN_SWEEP=force` cho tới khi log hết số mồ côi, rồi đặt lại `on`.
+
+```bash
+docker compose logs worker | grep -E 'privacy: (đã dọn|dọn file mồ côi)'   # mỗi ngày một dòng số đếm + prefix (không có public_id / nội dung)
+```
 
 ### Log
 

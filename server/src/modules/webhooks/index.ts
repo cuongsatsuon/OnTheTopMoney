@@ -1,9 +1,11 @@
 // Module `webhooks` (AD-1, AD-4): cổng nhận webhook Meta/Threads. Public API chỉ export từ file này.
 // Gọi: `pages` (base), `connections`, `inbox` (Story 4.3: `webhook.route` → `inbox.ingest`), `adapters/meta` — theo
 // bảng mũi tên AD-1. Story 9.2: `handleWebhooksPurge` — xoá payload thô liên quan khi xoá dữ liệu theo yêu cầu.
+// Story 9.3: `purgeExpiredPayloads` — dọn payload thô quá hạn (cron `privacy.retention`).
 export const MODULE = 'webhooks'
 
 export { handleWebhooksPurge, type WebhooksPurgeDeps } from './purge.ts'
+export { purgeExpiredPayloads } from './retention.ts'
 
 export {
   createTestEvent,

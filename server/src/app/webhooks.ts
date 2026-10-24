@@ -6,7 +6,7 @@
 // - GET /webhooks/{meta,threads}: trả `hub.challenge` khi `hub.verify_token` khớp `META_VERIFY_TOKEN`; sai → 403.
 // - /api/v1/webhooks/{config,events,test,events/:id/retry,health}: dưới guard phiên.
 import type { WebhookConfigResponse, WebhookLogResponse, WebhookProduct } from '@ottm/shared'
-import { WEBHOOK_FIELDS, WebhookEventDto, WebhookHealthResponse, WebhookLogQuery, WebhookTestRequest } from '@ottm/shared'
+import { RETENTION, WEBHOOK_FIELDS, WebhookEventDto, WebhookHealthResponse, WebhookLogQuery, WebhookTestRequest } from '@ottm/shared'
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { AppError } from '../platform/errors/index.ts'
@@ -124,6 +124,10 @@ export function registerWebhooks(app: FastifyInstance, deps: WebhooksDeps): void
     if (outcome.status === 'not_found') throw new AppError('NOT_FOUND', 404, { message: 'Không tìm thấy sự kiện webhook' })
     // Chỉ mục failed mới xử lý lại được (AD-4): received/routed/ignored → 409, không reset/re-route.
     if (outcome.status === 'not_failed') throw new AppError('VERSION_CONFLICT', 409, { message: 'Chỉ sự kiện lỗi mới xử lý lại được' })
+    // Story 9.3: payload thô đã dọn theo hạn → không còn nội dung để xử lý lại.
+    if (outcome.status === 'purged') {
+      throw new AppError('VERSION_CONFLICT', 409, { message: `Sự kiện quá ${RETENTION.webhookPayloadDays} ngày đã dọn nội dung — không xử lý lại được` })
+    }
     return WebhookEventDto.parse(outcome.event)
   })
 

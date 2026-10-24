@@ -228,6 +228,14 @@ describe('routeWebhookEvent (job webhook.route)', () => {
     const [row] = await handle.sql<{ status: string; error_code: string }[]>`select status, error_code from webhook_events where id = ${id}`
     expect(row).toMatchObject({ status: 'failed', error_code: 'WEBHOOK_ROUTE_FAILED' })
   })
+
+  it('Story 9.3: payload thô đã dọn → missing, trạng thái giữ nguyên', async () => {
+    await upsertFromPlatform(handle.db, { platform: 'facebook', platformAccountId: 'PAGE_X', name: 'X', handle: null, avatarUrl: null })
+    const id = await insertEvent({ platformPageId: 'PAGE_X' })
+    await handle.sql`update webhook_events set payload = null where id = ${id}`
+    expect(await routeWebhookEvent(routeDeps(), { eventId: id })).toBe('missing')
+    expect((await statusOf(id)).status).toBe('received')
+  })
 })
 
 describe('API Cài đặt › Webhook (dưới guard phiên)', () => {
@@ -318,6 +326,28 @@ describe('API Cài đặt › Webhook (dưới guard phiên)', () => {
     const [after] = await handle.sql<{ status: string }[]>`select status from webhook_events where id = ${row!.id}`
     expect(after!.status).toBe('routed')
     expect(await countRouteJobs()).toBe(0)
+  })
+
+  // Story 9.3: payload thô quá hạn đã dọn (null) → nhật ký báo `payloadPurged`, "Xử lý lại" bị từ chối.
+  it('mục failed đã dọn payload thô → 409, không enqueue; nhật ký có payloadPurged', async () => {
+    const [row] = await handle.db
+      .insert(webhookEventsTable)
+      .values({ product: 'meta', platformPageId: 'PAGE_1', field: 'messages', dedupeKey: 'k_purged', payload: null, status: 'failed', errorCode: 'WEBHOOK_ROUTE_FAILED' })
+      .returning({ id: webhookEventsTable.id })
+    await handle.sql`delete from pgboss.job where name = 'webhook.route'`
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/v1/webhooks/events/${row!.id}/retry`,
+      headers: { cookie: await cookie(), origin: ORIGIN },
+    })
+    expect(res.statusCode).toBe(409)
+    expect(res.json().error.message).toContain('30 ngày')
+    const [after] = await handle.sql<{ status: string }[]>`select status from webhook_events where id = ${row!.id}`
+    expect(after!.status).toBe('failed')
+    expect(await countRouteJobs()).toBe(0)
+
+    const log = WebhookLogResponse.parse((await app.inject({ method: 'GET', url: '/api/v1/webhooks/events', headers: { cookie: await cookie() } })).json())
+    expect(log.items.find((e) => e.id === row!.id)?.payloadPurged).toBe(true)
   })
 })
 

@@ -68,3 +68,35 @@ export const ContactDeletionResponse = z.object({
   statusUrl: z.url(),
 })
 export type ContactDeletionResponse = z.infer<typeof ContactDeletionResponse>
+
+// ---------------------------------------------------------------------------------------------------------
+// Story 9.3 — dọn dữ liệu theo thời hạn (AD-22). Nguồn DUY NHẤT cho cron `privacy.retention` / `privacy.orphan_files`,
+// cron đã có (`privacy.removed_pages`, `content.media_gc`) và mục "Thời gian lưu trữ" của trang chính sách — đổi số ở đây
+// thì trang chính sách đổi theo.
+// ---------------------------------------------------------------------------------------------------------
+
+export const RETENTION = {
+  /** Payload thô `webhook_events` (mục webhook có nội dung tin của khách); sau đó chỉ giữ metadata. */
+  webhookPayloadDays: 30,
+  /** Nhật ký lượt AI trả lời (`autoreply_runs`). */
+  autoreplyRunDays: 90,
+  /** Tham chiếu của dòng chi phí AI (`ai_usage.ref` — id hội thoại / bài); dòng chi phí giữ cho hạn mức. */
+  aiUsageRefDays: 90,
+  /** Job pg-boss đã xong / lỗi / huỷ (payload có thể mang nội dung tin đang xử lý). */
+  jobDays: 7,
+  /** Dữ liệu khách của trang đã gỡ (Story 9.2, `privacy.removed_pages`). */
+  removedPageDays: 30,
+  /** Ảnh bài không gắn vào bài nào (Story 6.3, `content.media_gc`). */
+  unattachedImageDays: 7,
+  /** File trên Cloudinary không còn dòng nào tham chiếu: chỉ xoá khi đã nằm trên kho ít nhất ngần này. */
+  orphanFileMinAgeDays: 7,
+} as const
+
+export const DAY_MS = 24 * 60 * 60_000
+
+/**
+ * `MEDIA_ORPHAN_SWEEP` — chế độ dọn file mồ côi trên Cloudinary: `off` không gọi kho; `dry_run` quét + đếm, không xoá;
+ * `on` xoá trong trần mỗi lượt, dừng khi cầu dao bật (tỉ lệ mồ côi bất thường); `force` như `on` nhưng bỏ cầu dao.
+ */
+export const MEDIA_ORPHAN_SWEEP_MODES = ['off', 'dry_run', 'on', 'force'] as const
+export type MediaOrphanSweepMode = (typeof MEDIA_ORPHAN_SWEEP_MODES)[number]

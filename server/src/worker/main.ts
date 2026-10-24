@@ -37,6 +37,7 @@ import { handlePrivacyEvent, resumeStalledRequests, sweepRemovedPages } from '..
 import { handleKnowledgeExtractJob, handleProfilesEvent } from '../modules/profiles/index.ts'
 import { handleRouteJob, handleWebhooksPurge, markEventFailed, routeWebhookEvent, runHealthCheck } from '../modules/webhooks/index.ts'
 import { HEARTBEAT_INTERVAL_MS, writeHeartbeat } from './heartbeat.ts'
+import { resolveSweepMode, runRetention, sweepOrphanFiles } from './retention.ts'
 
 const config = getConfig()
 const logger = createLogger({ level: config.LOG_LEVEL, name: 'worker' })
@@ -332,6 +333,24 @@ try {
       'privacy.removed_pages': async () => {
         const created = await sweepRemovedPages({ db: dbHandle.db, events, log: logger.child({ component: 'privacy' }) })
         if (created > 0) logger.info({ created }, 'privacy: yêu cầu xoá dữ liệu trang gỡ quá 30 ngày')
+      },
+      // Story 9.3 (AD-22): dọn theo hạn — mỗi module chủ bảng tự dọn; bước lỗi không chặn bước khác, cuối lượt ném (retry 1).
+      'privacy.retention': async () => {
+        const result = await runRetention({ db: dbHandle.db, log: logger.child({ component: 'retention' }) })
+        logger.info(result, 'privacy: đã dọn dữ liệu theo hạn')
+      },
+      // Story 9.3 (AD-14): file Cloudinary không còn dòng nào tham chiếu (≥ 7 ngày tuổi, trần mỗi lượt, cầu dao).
+      'privacy.orphan_files': async () => {
+        const result = await sweepOrphanFiles({
+          db: dbHandle.db,
+          media,
+          mode: resolveSweepMode(config),
+          log: logger.child({ component: 'orphan_files' }),
+        })
+        // Log chỉ số đếm + prefix theo loại (`byKind`), không public_id đầy đủ — báo cáo dry_run để đối chiếu kho thật.
+        if (result.tripped || result.fileErrors > 0 || result.storeErrors > 0) logger.warn(result, 'privacy: dọn file mồ côi chưa trọn')
+        else if (result.mode === 'dry_run') logger.info(result, 'privacy: dọn file mồ côi (dry_run — chỉ đếm, không xoá)')
+        else logger.info(result, 'privacy: đã dọn file mồ côi')
       },
       // Story 4.2: sức khoẻ webhook mỗi 5 phút; phát `webhook.stalled|recovered` khi đổi trạng thái.
       'webhooks.health': async () => {

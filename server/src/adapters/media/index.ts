@@ -2,6 +2,8 @@
 // - `MediaStore` (công khai): ảnh bài đăng, logo — trả URL `https://res.cloudinary.com/...` mà Meta/trình duyệt tải được.
 // - `PrivateFileStore` (riêng tư): file kho kiến thức, đính kèm của khách — Cloudinary `type: authenticated`, không có
 //   URL công khai dùng được; chỉ server tải về qua API download có chữ ký.
+// - `MediaInventory` (Story 9.3): liệt kê / xoá file theo prefix của app (`<folder>/public|private/`) qua Admin API — cho
+//   lượt dọn file mồ côi; không bao giờ đụng file ngoài hai prefix đó.
 // Gọi bằng `fetch` (không SDK, như adapters/openai) để test trỏ được về Cloudinary giả (`fake.ts`). Không biết nghiệp
 // vụ, không log, không ném lỗi thô: trả `{ok:false, kind}` đã phân loại. Không bao giờ đưa api secret, chữ ký hay
 // thông báo lỗi gốc của Cloudinary vào kết quả (AD-12). Khởi tạo không gọi mạng.
@@ -121,11 +123,49 @@ export interface PrivateFileStore {
   delete(ref: PrivateFileRef): Promise<DeleteResult>
 }
 
+/**
+ * Story 9.3: loại file của app trên kho — mỗi loại một lệnh liệt kê Admin API (`resources/<resource_type>/<type>`) giới hạn
+ * trong prefix của app: `public_image` = `<folder>/public/` (ảnh bài, logo), `private_*` = `<folder>/private/` (đính kèm,
+ * file kho kiến thức; ảnh và raw là hai resource type khác nhau).
+ */
+export const STORED_FILE_KINDS = ['public_image', 'private_image', 'private_raw'] as const
+export type StoredFileKind = (typeof STORED_FILE_KINDS)[number]
+
+export interface StoredFile {
+  publicId: string
+  /** `created_at` của Cloudinary; `null` khi thiếu / hỏng (caller coi như mới, không xoá). */
+  createdAt: Date | null
+}
+
+export type ListFilesResult = { ok: true; files: StoredFile[]; nextCursor: string | null } | MediaFailure
+
+/** Số file tối đa mỗi trang liệt kê (giới hạn của Admin API). */
+export const LIST_MAX_RESULTS = 500
+
+/** Prefix public_id của loại `kind` trong thư mục `folder` (`<folder>/public/` hoặc `<folder>/private/`). */
+export function storedFilePrefix(folder: string, kind: StoredFileKind): string {
+  return `${folder}/${kind === 'public_image' ? 'public' : 'private'}/`
+}
+
+export interface MediaInventory {
+  /** Prefix public_id mà loại `kind` liệt kê / xoá — cho báo cáo đếm (dry_run) đối chiếu với kho thật; không gọi mạng. */
+  prefix(kind: StoredFileKind): string
+  /**
+   * Một trang file của loại `kind` (sắp theo public_id — với public_id uuidv7 là theo thời gian tải lên). `cursor` =
+   * `nextCursor` của trang trước, `null` = từ đầu. Chỉ trả file nằm trong prefix của loại.
+   */
+  list(kind: StoredFileKind, cursor: string | null, maxResults?: number): Promise<ListFilesResult>
+  /** Xoá một file của loại `kind`. public_id ngoài prefix của loại → `INVALID_REQUEST`, không gọi mạng. Idempotent. */
+  delete(kind: StoredFileKind, publicId: string): Promise<DeleteResult>
+}
+
 export interface MediaStores {
   /** `false` khi thiếu `CLOUDINARY_URL`: mọi thao tác trả `MEDIA_NOT_CONFIGURED`, không gọi mạng. */
   configured: boolean
   publicStore: MediaStore
   privateStore: PrivateFileStore
+  /** Story 9.3: liệt kê / xoá theo prefix cho lượt dọn file mồ côi. */
+  inventory: MediaInventory
 }
 
 /** Phần config adapter cần (khớp `Config` / `MediaEnv` của platform/config). */
@@ -244,6 +284,7 @@ export function createMediaStores(config: MediaConfig, options: MediaStoresOptio
       configured: false,
       publicStore: { put: notConfigured, delete: notConfigured },
       privateStore: { put: notConfigured, get: notConfigured, delete: notConfigured },
+      inventory: { prefix: (kind) => storedFilePrefix(config.CLOUDINARY_FOLDER, kind), list: notConfigured, delete: notConfigured },
     }
   }
   const folder = config.CLOUDINARY_FOLDER
@@ -384,5 +425,45 @@ export function createMediaStores(config: MediaConfig, options: MediaStoresOptio
     },
   }
 
-  return { configured: true, publicStore, privateStore }
+  const KIND_SPEC: Record<StoredFileKind, { resourceType: 'image' | 'raw'; type: 'upload' | 'authenticated'; prefix: string }> = {
+    public_image: { resourceType: 'image', type: 'upload', prefix: storedFilePrefix(folder, 'public_image') },
+    private_image: { resourceType: 'image', type: 'authenticated', prefix: storedFilePrefix(folder, 'private_image') },
+    private_raw: { resourceType: 'raw', type: 'authenticated', prefix: storedFilePrefix(folder, 'private_raw') },
+  }
+  // Admin API xác thực bằng HTTP Basic (api_key:api_secret), không ký tham số như Upload API.
+  const basicAuth = `Basic ${Buffer.from(`${creds.apiKey}:${creds.apiSecret}`).toString('base64')}`
+
+  const inventory: MediaInventory = {
+    prefix: (kind) => KIND_SPEC[kind].prefix,
+    async list(kind, cursor, maxResults = LIST_MAX_RESULTS) {
+      const spec = KIND_SPEC[kind]
+      const query = new URLSearchParams({ prefix: spec.prefix, max_results: String(Math.min(Math.max(1, Math.floor(maxResults)), LIST_MAX_RESULTS)) })
+      if (cursor) query.set('next_cursor', cursor)
+      const result = await call(
+        `${apiBase}/resources/${spec.resourceType}/${spec.type}?${query}`,
+        { method: 'GET', headers: { Accept: 'application/json', Authorization: basicAuth } },
+        timeoutMs,
+      )
+      if (!result.ok) return result
+      const json = await readJson(result.res)
+      if (!json || !Array.isArray(json.resources)) return { ok: false, kind: 'TRANSIENT', status: result.res.status }
+      const files: StoredFile[] = []
+      for (const r of json.resources as unknown[]) {
+        const item = (typeof r === 'object' && r !== null ? r : {}) as Json
+        // Phòng thủ: chỉ nhận file đúng prefix của loại (prefix là tham số của chính adapter, không do caller đưa).
+        if (typeof item.public_id !== 'string' || !item.public_id.startsWith(spec.prefix)) continue
+        const at = typeof item.created_at === 'string' ? new Date(item.created_at) : null
+        files.push({ publicId: item.public_id, createdAt: at && !Number.isNaN(at.getTime()) ? at : null })
+      }
+      const next = typeof json.next_cursor === 'string' && json.next_cursor !== '' ? json.next_cursor : null
+      return { ok: true, files, nextCursor: next }
+    },
+    delete(kind, publicId) {
+      const spec = KIND_SPEC[kind]
+      if (!publicId.startsWith(spec.prefix) || publicId.length === spec.prefix.length) return Promise.resolve({ ok: false, kind: 'INVALID_REQUEST' })
+      return destroy(spec.resourceType, publicId, spec.type, true)
+    },
+  }
+
+  return { configured: true, publicStore, privateStore, inventory }
 }

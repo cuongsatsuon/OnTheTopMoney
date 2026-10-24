@@ -96,5 +96,7 @@ export const aiUsage = pgTable(
     check('ai_usage_feature_check', sql`${t.feature} in (${FEATURE_LIST})`),
     check('ai_usage_month_check', sql`${t.month} ~ ${MONTH_RE}`),
     index('ai_usage_month_feature_idx').on(t.month, t.feature),
+    // Story 9.3: cron dọn tham chiếu quá hạn — index một phần nên dòng đã bỏ `ref` rời khỏi index.
+    index('ai_usage_ref_created_at_idx').on(t.createdAt).where(sql`${t.ref} is not null`),
   ],
 )

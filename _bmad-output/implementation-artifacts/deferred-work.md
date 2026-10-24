@@ -26,9 +26,6 @@
   summary: Test CI "build web lỗi → IMAGE_TAG và container đang chạy giữ nguyên".
   evidence: Bước CI "xuất bản web lỗi → không đổi current" bị bỏ cùng cơ chế WEB_ROOT; cần cách cố ý làm hỏng build `ottm-web` (vd nginx -t lỗi) trong CI.
 - source_spec: `spec-media-cloudinary.md`
-  summary: Dọn file mồ côi trên Cloudinary (liệt kê `<folder>/private|public/*`, so với tham chiếu trong DB), kể cả sau khi khôi phục backup.
-  evidence: Adapter chưa có thao tác liệt kê theo prefix; runbook chỉ nêu chiều ngược lại. Story 6.3 thêm cron `content.media_gc` nhưng chỉ dọn theo DB (dòng `media_assets` không gắn bài quá 7 ngày + file của dòng đó); file mà DB không còn trỏ tới (xoá file lỗi lúc dọn — `fileErrors` trong log, ghi DB lỗi sau khi tải lên, khôi phục backup) vẫn nằm trên kho.
-- source_spec: `spec-media-cloudinary.md`
   summary: Job CI tuỳ chọn chạy `runMediaCheck` với tài khoản Cloudinary thử (secret `CLOUDINARY_URL_TEST`).
   evidence: Fake ký bằng chính `signParams` của adapter; tải file `authenticated` qua API download chưa được kiểm với Cloudinary thật.
 - source_spec: `spec-2-4-han-token-va-ket-noi-lai.md`
@@ -37,9 +34,6 @@
 - source_spec: `spec-3-1-ho-so-thuong-hieu.md`
   summary: Guard điều hướng TRONG APP khi form có thay đổi chưa lưu (hiện chỉ beforeunload cho đóng/tải lại tab) — áp cả app.
   evidence: React Router chưa dùng data API/useBlocker; AutoReply cũng chỉ beforeunload. Làm khi nâng router hoặc thêm cơ chế confirm điều hướng dùng chung.
-- source_spec: `spec-4-1-cong-webhook.md`
-  summary: GC/retention cho bảng `webhook_events` (payload chứa nội dung tin của khách — PII, tăng vô hạn).
-  evidence: 4.1 ghi mọi mục webhook vĩnh viễn, chưa có cron dọn. Làm cùng vòng đời dữ liệu AD-22 / Story 9.3 (privacy retention).
 - source_spec: `spec-4-1-cong-webhook.md`
   summary: Nhật ký webhook ở Cài đặt phân trang "xem thêm" (hiện cap 50 mục mới nhất; API đã trả nextCursor).
   evidence: useWebhookEvents chưa đọc nextCursor; panel chẩn đoán nên đủ 50 trước mắt.
@@ -52,9 +46,6 @@
 - source_spec: `spec-4-2-dang-ky-webhook-va-suc-khoe.md`
   summary: Gỡ trang thì huỷ đăng ký `DELETE /{page}/subscribed_apps` ở Meta.
   evidence: `removePage` xoá credential nhưng Meta vẫn gửi sự kiện của trang đã gỡ, và chúng được tính là sự kiện thật trong health.
-- source_spec: `spec-4-3-tin-dm-vao-hop-thu.md`
-  summary: Dọn file đính kèm trên Cloudinary khi đính kèm tải lên xong nhưng transaction ghi `stored` thất bại (phần "khi xoá khách / hội thoại" đã làm ở Story 9.2 — `inbox/purge.ts` xoá file trước khi xoá dòng).
-  evidence: `inbox/attachments.ts` chỉ xoá file vừa tải khi `UPDATE … WHERE status='pending'` không khớp; lỗi DB khi ghi `stored` để file mồ côi. Gộp với việc dọn mồ côi theo prefix.
 - source_spec: `spec-4-4-binh-luan-vao-hop-thu.md`
   summary: Sửa/thu hồi tin DM (Messenger `message_edit`, IG `is_deleted`) → `inbox.updateMessageText` / `markMessageRemoved`.
   evidence: Hàm đã có từ 4.4 nhưng parser 4.1 cho IG `is_deleted` cùng khoá `messages:<mid>` với tin gốc (bị chặn như trùng) và Messenger `message_edit` thành field `messaging`; cần khoá riêng + chuẩn hoá ở `webhook-message.ts`. Hiện vẫn `ignored`.
@@ -331,9 +322,6 @@
 - source_spec: `spec-9-1-chinh-sach-va-callback-xoa.md`
   summary: Callback gỡ app / xoá dữ liệu của Threads app (Uninstall Callback URL, Delete Callback URL trong cài đặt Threads app) — 9.1 chỉ làm cho Meta App (Facebook Login).
   evidence: `server/src/app/privacy.ts` chỉ verify bằng `META_APP_SECRET`. Threads có thể đòi hai URL này khi nộp review; nếu cần thì thêm `POST /privacy/threads/{uninstall,delete}` verify bằng `THREADS_APP_SECRET` (dạng `signed_request` cần xác nhận với tài liệu Threads) — đối chiếu ở 9.4.
-- source_spec: `spec-9-1-chinh-sach-va-callback-xoa.md`
-  summary: Trang chính sách nêu thời hạn lưu theo AD-22 (payload webhook 30 ngày, lượt AI 90 ngày) nhưng cron dọn chưa có — đúng sau Story 9.3 (phần "trang gỡ quá 30 ngày" đã có từ 9.2: cron `privacy.removed_pages`). Nên xong trước khi nộp App Review.
-  evidence: `server/src/app/privacy-pages.ts` mục 5; chưa có queue `privacy.retention`.
 - source_spec: `spec-9-2-xoa-du-lieu.md`
   summary: Kiểm bằng trình duyệt "Xoá khách" ở `/khach-hang?id=` với phiên chủ shop + worker: hộp xác nhận (ô "Tôi hiểu…" bắt buộc), khách biến mất khỏi danh sách / Hộp thư, link "Xem trạng thái xoá" mở `/privacy/status/<code>` trên host api (cả chế độ tách) và chuyển "Đã xoá xong".
   evidence: Chỉ có test API (Postgres thật, pg-boss thật, Cloudinary giả — `server/test/privacy-purge.test.ts`) và test helper web (`web/src/lib/contacts.test.ts`); chưa chạy UI (dev không có mật khẩu mẫu).
@@ -344,17 +332,20 @@
   summary: Yêu cầu `scope=all` của 9.1 tạo trước bản này (không có `page_ids`) không được phát lại — cron `privacy.purge_resume` bỏ qua + log cảnh báo; cần xử lý tay nếu production có dòng như vậy.
   evidence: `privacy/coordinator.ts` `resumeStalledRequests` (`skippedLegacy`). Kiểm `select id from deletion_requests where scope='all' and page_ids is null and status <> 'completed'` trước khi lên bản.
 - source_spec: `spec-9-2-xoa-du-lieu.md`
-  summary: Cửa sổ đua nhỏ khi xoá khách: tin có đính kèm tới giữa vòng lô và transaction cuối bị xoá theo cascade mà không xoá file (file mồ côi); hội thoại mới của khách tạo sau ảnh chụp để lại `autoreply_runs` / `ai_usage.ref` (chỉ id, không PII) — dọn theo hạn ở 9.3.
-  evidence: `inbox/purge.ts` `purgeContact` (transaction cuối xoá nốt tin theo định danh, không gọi kho); module giai đoạn 1 dùng `conversationIds` chụp lúc ghi.
-- source_spec: `spec-9-2-xoa-du-lieu.md`
   summary: Xoá `scope=page|all` không phát sự kiện realtime theo khách → Hộp thư / Khách hàng của trang vẫn đang mở (vd trang bị ngắt ở `all`) chỉ đổi khi refetch.
   evidence: `inbox/purge.ts` chỉ phát `contact.deleted` cho `scope=contact`. Hướng làm: một sự kiện tổng `privacy.purge_completed` realtime=true hoặc `conversation`/`contact` hint theo trang.
 - source_spec: `spec-9-2-xoa-du-lieu.md`
   summary: Xoá khách là tác giả bình luận gốc thì cả hội thoại bình luận bị xoá, gồm trả lời của khách KHÁC trong luồng đó (và payload thô của chúng, vì `webhooks` khớp `thread_key` = id bình luận gốc) — cần quyết định sản phẩm (review lượt 1).
   evidence: `inbox/schema.ts` `conversations.contact_identity_id` NOT NULL `on delete cascade` tới định danh tác giả gốc; `inbox/purge.ts` `purgeContact` xoá theo `conversationIds`, `purgeMatchKeys` đưa `thread_key` + id tin của mọi tin trong hội thoại. Hướng làm: chuyển hội thoại cho định danh của người trả lời sớm nhất (giữ tin của họ, chỉ xoá tin của khách bị xoá) hoặc ghi rõ là chấp nhận trong chính sách.
 - source_spec: `spec-9-2-xoa-du-lieu.md`
-  summary: `webhook_events` của khách tới sau khi phần `webhooks` (giai đoạn 1) chạy mà trước giai đoạn cuối (khách đang chờ xoá vẫn nhắn; pipeline kẹt thì cửa sổ dài) không bị xoá — cron resume chỉ phát lại giai đoạn cuối (review lượt 1).
-  evidence: `webhooks/purge.ts` cần `inbox.purgeMatchKeys` nên chạy trước `inbox`; `privacy/coordinator.ts` `resumeStalledRequests` khi `final_requested_at` khác null chỉ phát `purge_final_requested`. Retention payload 30 ngày của 9.3 sẽ dọn; hoặc chặn ingest / route tin của khách đang chờ xoá.
-- source_spec: `spec-9-2-xoa-du-lieu.md`
   summary: `scope=all` từ callback "xin xoá dữ liệu" (không gỡ app) xoá `meta_accounts` nhưng trang vẫn chạy → `page_credentials.meta_account_id = null`; callback deauthorize / xoá dữ liệu sau đó của cùng người thành "người lạ" (`matched=false`) → không ngắt trang, không xoá dữ liệu nhận thêm (review lượt 1).
   evidence: `connections/purge.ts` (khoá ngoại `set null`), `connections/deauthorize.ts` `findAccountId` theo `meta_accounts.fb_user_id`. Gộp với việc hoãn "token / ngắt trang khi `all`": ngắt trang ở data-deletion, hoặc giữ `fb_user_id` dạng băm để vẫn khớp.
+- source_spec: `spec-9-3-don-du-lieu-theo-thoi-han.md`
+  summary: Kiểm bằng trình duyệt Cài đặt › Webhook › Nhật ký sự kiện: dòng phụ "Nội dung thô chỉ giữ 30 ngày…", sự kiện đã dọn hiện "· đã dọn nội dung" và không có nút "Xử lý lại" (kể cả khi `failed`).
+  evidence: Chỉ có test API (`server/test/webhooks.test.ts`) và test helper web (`web/src/lib/webhooks.test.ts`); chưa chạy UI (dev không có mật khẩu mẫu).
+- source_spec: `spec-9-3-don-du-lieu-theo-thoi-han.md`
+  summary: Xác nhận `MediaInventory.list` với Cloudinary thật: Admin API `resources/<resource_type>/<type>?prefix=` (Basic auth), sắp theo public_id khi có prefix, dạng `created_at`, `next_cursor`, hạn mức Admin API (gói Free ~500 lời gọi/giờ — một lượt dùng tối đa 15 trang + 100 lệnh xoá).
+  evidence: `server/src/adapters/media/index.ts` (`inventory`) chỉ chạy với Cloudinary giả (`fake.ts`). Gộp với việc hoãn "job CI tuỳ chọn chạy `runMediaCheck` với tài khoản thử" — thêm bước liệt kê vào `media:check`.
+- source_spec: `spec-9-3-don-du-lieu-theo-thoi-han.md`
+  summary: Dòng metadata của `webhook_events` (sau khi payload về null) giữ vô hạn theo AD-22 ("giữ metadata") — bảng vẫn tăng, `dedupe_key` mang id tin Meta. Cân nhắc xoá hẳn dòng quá N tháng (giữ đủ cho chống trùng + sức khoẻ: vài ngày là đủ).
+  evidence: `server/src/modules/webhooks/retention.ts` chỉ đặt `payload = null`; sức khoẻ chỉ đọc `max(received_at)`, chống trùng chỉ cần cửa sổ Meta gửi lại.

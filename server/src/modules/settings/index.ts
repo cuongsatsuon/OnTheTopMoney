@@ -7,6 +7,7 @@ export {
   SESSION_RENEW_BELOW_DAYS,
   createSession,
   deleteAllSessions,
+  deleteExpiredSessions,
   deleteSession,
   isSessionValid,
   normalizePassword,
@@ -17,6 +18,9 @@ export {
 } from './auth.ts'
 
 export { NOTIFICATION_PREFS_KEY, getNotificationPrefs, setNotificationPrefs } from './prefs.ts'
+
+// Story 9.3: trạng thái nội bộ của cron (con trỏ dọn file mồ côi).
+export { getStateValue, setStateValue } from './state.ts'
 
 export {
   DEFAULT_OPENAI_PREFS,

@@ -27,6 +27,7 @@ export const MODULE = 'inbox'
 export {
   InboxPurgeRetryableError,
   handleInboxPurge,
+  isSenderPendingDeletion,
   markContactForDeletion,
   purgeMatchKeys,
   type InboxPurgeDeps,
@@ -211,3 +212,6 @@ export {
   type Paged,
 } from './queries.ts'
 export { aiReplyStats, countCustomerMessages, type AiReplyStats } from './stats.ts'
+
+// Story 9.3: tra public_id còn dòng `message_attachments` (lượt dọn file mồ côi).
+export { referencedAttachmentFiles } from './file-refs.ts'

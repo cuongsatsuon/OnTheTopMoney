@@ -38,6 +38,7 @@ import { errorMessage, errorMessageOf } from '../lib/error-messages'
 import { useNotificationPrefs, useSaveNotificationPrefs } from '../lib/notifications'
 import { metaAppPrivacyFields, usePrivacyConfig } from '../lib/privacy'
 import {
+  WEBHOOK_LOG_SUBTITLE,
   WEBHOOK_PRODUCT_LABEL,
   canRetry,
   lastEventLabel,
@@ -765,7 +766,7 @@ export default function Settings() {
               <Card>
                 <CardHeader
                   title="Nhật ký sự kiện"
-                  subtitle="Các sự kiện webhook gần nhất"
+                  subtitle={WEBHOOK_LOG_SUBTITLE}
                   action={
                     <div className="flex gap-2">
                       <Button
@@ -817,12 +818,15 @@ export default function Settings() {
                                   <span className="text-muted-foreground">{ev.test ? '— (thử)' : '—'}</span>
                                 )}
                               </td>
-                              <td className="px-4 py-2.5 font-mono text-[13px]">{webhookFieldLabel(ev)}</td>
+                              <td className="px-4 py-2.5 font-mono text-[13px]">
+                                {webhookFieldLabel(ev)}
+                                {ev.payloadPurged && <span className="ml-2 font-sans text-muted-foreground">· đã dọn nội dung</span>}
+                              </td>
                               <td className="px-4 py-2.5">
                                 <Chip tone={status.tone}>{status.label}</Chip>
                               </td>
                               <td className="px-4 py-2.5 text-right">
-                                {canRetry(ev.status) && (
+                                {canRetry(ev) && (
                                   <Button
                                     size="sm"
                                     variant="secondary"

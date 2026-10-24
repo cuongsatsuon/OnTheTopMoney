@@ -62,6 +62,8 @@ x-app-env: &app-env
   # cloudinary://<api_key>:<api_secret>@<cloud_name>; trống → tính năng media báo chưa cấu hình.
   CLOUDINARY_URL: ${CLOUDINARY_URL:-}
   CLOUDINARY_FOLDER: ${CLOUDINARY_FOLDER:-}
+  # Cron dọn file Cloudinary mồ côi (Story 9.3): off | dry_run | on | force; trống → dry_run (cả production).
+  MEDIA_ORPHAN_SWEEP: ${MEDIA_ORPHAN_SWEEP:-}
 
 x-server: &server
   image: ottm-server:${IMAGE_TAG:-latest}

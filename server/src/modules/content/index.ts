@@ -106,3 +106,6 @@ export { listFailedPosts, listUpcomingPosts, type OverviewPostsInput } from './o
 
 /** Chỉ để `analytics` khai khoá ngoại `post_metrics.post_target_id` (Drizzle cần đối tượng bảng); không truy vấn trực tiếp. */
 export { postTargets as postTargetsTable } from './schema.ts'
+
+// Story 9.3: tra public_id còn dòng `media_assets` (lượt dọn file mồ côi).
+export { referencedMediaFiles } from './file-refs.ts'

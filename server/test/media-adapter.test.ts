@@ -229,6 +229,85 @@ describe('adapters/media — PrivateFileStore (riêng tư)', () => {
   })
 })
 
+describe('adapters/media — MediaInventory (liệt kê / xoá theo prefix, Story 9.3)', () => {
+  /** Đặt thẳng một file vào kho giả (vd file của thư mục khác, hay của app nhưng không do adapter tạo). */
+  function seed(fake: ReturnType<typeof createFakeCloudinary>, resourceType: 'image' | 'raw', type: 'upload' | 'authenticated', publicId: string) {
+    fake.assets.set(`${resourceType}/${type}/${publicId}`, {
+      publicId, resourceType, type, format: resourceType === 'image' ? 'png' : null, data: FAKE_PNG, width: 2, height: 2, version: 1, createdAt: new Date('2026-01-02T03:04:05Z'),
+    })
+  }
+
+  it('liệt kê đúng loại + prefix của app, Basic auth, created_at → Date; không lộ secret', async () => {
+    const { fake, stores } = setup()
+    const pub = await stores.publicStore.put({ data: FAKE_PNG, mime: 'image/png' })
+    const priv = await stores.privateStore.put({ data: FAKE_PNG, mime: 'image/png' })
+    const raw = await stores.privateStore.put({ data: PDF, mime: 'application/pdf' })
+    if (!pub.ok || !priv.ok || !raw.ok) throw new Error('upload hỏng')
+    seed(fake, 'image', 'upload', 'thu-muc-khac/public/x')
+    seed(fake, 'image', 'upload', 'ottm-test-2/public/y')
+
+    const listed = await stores.inventory.list('public_image', null)
+    if (!listed.ok) throw new Error(listed.kind)
+    expect(listed.files.map((f) => f.publicId)).toEqual([pub.publicId])
+    expect(listed.files[0]!.createdAt).toBeInstanceOf(Date)
+    expect(listed.nextCursor).toBeNull()
+    const pi = await stores.inventory.list('private_image', null)
+    const pr = await stores.inventory.list('private_raw', null)
+    expect(pi.ok && pi.files.map((f) => f.publicId)).toEqual([priv.publicId])
+    expect(pr.ok && pr.files.map((f) => f.publicId)).toEqual([raw.publicId])
+    const req = fake.requests.at(-1)!
+    expect(req.url).toBe(`https://api.cloudinary.com/v1_1/${CREDS.cloudName}/resources/raw/authenticated`)
+    expect(req.params).toMatchObject({ prefix: 'ottm-test/private/' })
+    noSecret(req.params)
+    noSecret(listed)
+  })
+
+  it('phân trang bằng con trỏ, sắp theo public_id', async () => {
+    const { stores } = setup()
+    const ids: string[] = []
+    for (let i = 0; i < 3; i++) {
+      const r = await stores.publicStore.put({ data: FAKE_PNG, mime: 'image/png' })
+      if (r.ok) ids.push(r.publicId)
+    }
+    const p1 = await stores.inventory.list('public_image', null, 2)
+    if (!p1.ok) throw new Error(p1.kind)
+    expect(p1.files.map((f) => f.publicId)).toEqual(ids.slice(0, 2))
+    expect(p1.nextCursor).not.toBeNull()
+    const p2 = await stores.inventory.list('public_image', p1.nextCursor, 2)
+    expect(p2.ok && p2.files.map((f) => f.publicId)).toEqual(ids.slice(2))
+    expect(p2.ok && p2.nextCursor).toBeNull()
+  })
+
+  it('xoá chỉ trong prefix của loại; ngoài prefix → INVALID_REQUEST, không gọi mạng', async () => {
+    const { fake, stores } = setup()
+    const priv = await stores.privateStore.put({ data: PDF, mime: 'application/pdf' })
+    if (!priv.ok) throw new Error(priv.kind)
+    seed(fake, 'image', 'upload', 'thu-muc-khac/public/x')
+    const before = fake.requests.length
+    expect(await stores.inventory.delete('public_image', 'thu-muc-khac/public/x')).toEqual({ ok: false, kind: 'INVALID_REQUEST' })
+    expect(await stores.inventory.delete('public_image', priv.publicId)).toEqual({ ok: false, kind: 'INVALID_REQUEST' })
+    expect(await stores.inventory.delete('private_raw', 'ottm-test/private/')).toEqual({ ok: false, kind: 'INVALID_REQUEST' })
+    expect(fake.requests.length).toBe(before)
+    expect(await stores.inventory.delete('private_raw', priv.publicId)).toEqual({ ok: true })
+    expect(fake.assets.has(`raw/authenticated/${priv.publicId}`)).toBe(false)
+    expect(fake.assets.has('image/upload/thu-muc-khac/public/x')).toBe(true)
+  })
+
+  it('sai khoá → AUTH_FAILED; lỗi tạm / 420 phân loại; chưa cấu hình → MEDIA_NOT_CONFIGURED', async () => {
+    const wrong = createFakeCloudinary({ ...CREDS, apiSecret: 'khac' })
+    const stores = createMediaStores(config, { fetch: wrong.fetch })
+    expect(await stores.inventory.list('public_image', null)).toMatchObject({ ok: false, kind: 'AUTH_FAILED' })
+    const { fake, stores: ok } = setup()
+    fake.failNext(420)
+    expect(await ok.inventory.list('public_image', null)).toMatchObject({ ok: false, kind: 'RATE_LIMITED' })
+    fake.failNext('bad-json')
+    expect(await ok.inventory.list('public_image', null)).toMatchObject({ ok: false, kind: 'TRANSIENT' })
+    const none = createMediaStores({ CLOUDINARY_FOLDER: 'ottm' })
+    expect(await none.inventory.list('private_raw', null)).toEqual({ ok: false, kind: 'MEDIA_NOT_CONFIGURED' })
+    expect(await none.inventory.delete('private_raw', 'ottm/private/a')).toEqual({ ok: false, kind: 'MEDIA_NOT_CONFIGURED' })
+  })
+})
+
 describe('adapters/media — lỗi', () => {
   it('chưa cấu hình: mọi thao tác → MEDIA_NOT_CONFIGURED, không gọi mạng', async () => {
     let calls = 0

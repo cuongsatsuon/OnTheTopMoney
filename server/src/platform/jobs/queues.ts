@@ -4,6 +4,7 @@
 // - `send()` từ chối tên không có trong registry (`UNKNOWN_QUEUE`).
 // - Consumer sự kiện (AD-3): queue khai báo `subscribes` — `ensureQueues` đồng bộ subscription pg-boss.
 // - Job hết retry phát `job.failed`; `critical: true` → thông báo `system_error` cho chủ shop.
+// - Job đã xong / lỗi / huỷ bị pg-boss xoá sau `RETENTION.jobDays` (Story 9.3, AD-22) — `ensureQueues` đặt cho mọi queue.
 import { isEventName, type EventName } from '@ottm/shared'
 import type { Db as BossDb, PgBoss, SendOptions } from 'pg-boss'
 import type { EventEnvelope } from '../events/index.ts'
@@ -96,6 +97,10 @@ export interface QueuePayloads {
   'events.privacy': EventEnvelope
   'privacy.purge_resume': Record<string, never>
   'privacy.removed_pages': Record<string, never>
+  /** Story 9.3: dọn theo hạn (payload webhook, lượt AI, tham chiếu chi phí AI, phiên hết hạn). */
+  'privacy.retention': Record<string, never>
+  /** Story 9.3: dọn file Cloudinary mồ côi theo prefix. */
+  'privacy.orphan_files': Record<string, never>
   /** Story 4.5: tin của chính trang chưa khớp tin nào của app — bản chuẩn hoá (dạng JSON) để thử khớp lại. */
   'inbox.echo_match': {
     pageId: string
@@ -573,6 +578,26 @@ export const QUEUES = {
     concurrency: 1,
     expireInSeconds: 300,
     cron: { expression: '30 2 * * *', tz: CRON_TZ },
+  },
+  // Story 9.3 (AD-22, AD-1): 3h30 sáng (giờ VN) dọn theo hạn — mỗi module chủ bảng tự dọn (handler ghép ở worker/retention.ts):
+  // payload thô `webhook_events` quá 30 ngày → null (giữ metadata), `autoreply_runs` quá 90 ngày, `ai_usage.ref` quá 90 ngày,
+  // phiên hết hạn. Theo lô có trần mỗi lượt; idempotent (lượt sau làm tiếp) → retry 1. Hạn 900 giây cho lượt đầu nhiều dòng.
+  'privacy.retention': {
+    policy: 'standard',
+    retryLimit: 1,
+    concurrency: 1,
+    expireInSeconds: 900,
+    cron: { expression: '30 3 * * *', tz: CRON_TZ },
+  },
+  // Story 9.3 (AD-22, AD-14): 5h sáng (giờ VN) dọn file Cloudinary không còn dòng nào tham chiếu, sau `content.media_gc`
+  // (4h). Chốt an toàn: chỉ prefix của app, file ≥ 7 ngày tuổi, trần 100 file / 5 trang mỗi loại mỗi lượt, cầu dao tỉ lệ mồ
+  // côi, env `MEDIA_ORPHAN_SWEEP`. Lỗi kho không ném (lượt sau đi tiếp từ con trỏ) → retry 1.
+  'privacy.orphan_files': {
+    policy: 'standard',
+    retryLimit: 1,
+    concurrency: 1,
+    expireInSeconds: 900,
+    cron: { expression: '0 5 * * *', tz: CRON_TZ },
   },
 } as const satisfies { [N in keyof QueuePayloads]: QueueDef }
 

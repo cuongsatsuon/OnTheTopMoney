@@ -38,3 +38,5 @@ export { ASK_HUMAN_PHRASES, foldForMatch, matchHandoffRule, type HandoffRuleConf
 export { runAutoreplyTest } from './test-run.ts'
 // Story 9.2: phần `autoreply` của luồng xoá dữ liệu (queue `autoreply.purge`).
 export { handleAutoreplyPurge, type AutoreplyPurgeDeps } from './purge.ts'
+// Story 9.3: xoá lượt AI quá hạn (cron `privacy.retention`).
+export { purgeExpiredRuns } from './retention.ts'

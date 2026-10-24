@@ -3,8 +3,9 @@
 // của api (`PRIVACY_CSP`) chỉ cần `style-src 'self'`. Mọi giá trị từ env / DB đều qua `escapeHtml`.
 // Nội dung pháp lý là khung theo AD-22 (dữ liệu, OpenAI `store: false`, thời hạn lưu, cách xoá) — chủ dự án rà lại
 // trước khi nộp App Review; tên đơn vị vận hành + email lấy từ env, thiếu thì hiện chỗ trống đánh dấu rõ.
+// Story 9.3: mục 5 (thời gian lưu trữ) dựng từ `RETENTION` của `packages/shared` — cùng nguồn với các cron dọn dữ liệu.
 import type { DeletionRequestStatus } from '../modules/privacy/index.ts'
-import { PRIVACY_PATHS } from '@ottm/shared'
+import { PRIVACY_PATHS, RETENTION as R } from '@ottm/shared'
 
 /** Ngày cập nhật hiện trên trang chính sách — đổi khi sửa nội dung bên dưới. */
 export const POLICY_UPDATED_AT = '24/10/2026'
@@ -96,10 +97,12 @@ export function policyHtml(operator: PolicyOperator): string {
 <section>
   <h2>5. Thời gian lưu trữ</h2>
   <ul>
-    <li>Tin nhắn, bình luận và hồ sơ khách: tới khi chủ cửa hàng xoá, khi có yêu cầu xoá, hoặc tối đa 30 ngày sau khi trang được gỡ khỏi ứng dụng.</li>
-    <li>Bản sao sự kiện Meta gửi tới: 30 ngày; sau đó chỉ giữ thông tin kỹ thuật, không giữ nội dung.</li>
-    <li>Nhật ký các lượt AI trả lời: 90 ngày.</li>
-    <li>Phiên đăng nhập hết hạn: xoá ngay.</li>
+    <li>Tin nhắn, bình luận và hồ sơ khách: tới khi chủ cửa hàng xoá, khi có yêu cầu xoá, hoặc tối đa ${R.removedPageDays} ngày sau khi trang được gỡ khỏi ứng dụng.</li>
+    <li>Bản sao sự kiện Meta gửi tới: ${R.webhookPayloadDays} ngày; sau đó chỉ giữ thông tin kỹ thuật (thời điểm, trang, loại sự kiện, trạng thái xử lý), không giữ nội dung.</li>
+    <li>Nhật ký các lượt AI trả lời: ${R.autoreplyRunDays} ngày. Nhật ký chi phí AI giữ số liệu chi phí nhưng bỏ liên kết tới hội thoại hoặc bài viết sau ${R.aiUsageRefDays} ngày.</li>
+    <li>Hàng đợi tác vụ nền (có thể chứa nội dung tin đang được xử lý): ${R.jobDays} ngày sau khi tác vụ kết thúc.</li>
+    <li>Ảnh bài đăng tải lên hoặc tạo ra mà không dùng: ${R.unattachedImageDays} ngày. Tệp trên Cloudinary không còn gắn với dữ liệu nào trong ứng dụng: xoá sau ít nhất ${R.orphanFileMinAgeDays} ngày.</li>
+    <li>Phiên đăng nhập: hết hiệu lực ngay khi hết hạn và bị xoá trong vòng một ngày.</li>
     <li>Bản sao lưu cơ sở dữ liệu do chủ cửa hàng tự tạo và tự giữ; dữ liệu đã xoá có thể còn trong bản sao lưu cũ tới khi bản đó bị huỷ.</li>
   </ul>
 </section>

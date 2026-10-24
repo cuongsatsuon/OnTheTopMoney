@@ -40,6 +40,8 @@ export const WebhookEventDto = z.object({
   errorCode: z.string().nullable(),
   /** Sự kiện do nút "Gửi sự kiện thử" tạo (chỉ ghi nhật ký, không route tới trang). */
   test: z.boolean(),
+  /** Story 9.3: payload thô đã bị dọn theo hạn (`RETENTION.webhookPayloadDays`) — chỉ còn metadata, không xử lý lại được. */
+  payloadPurged: z.boolean(),
   receivedAt: IsoDateTime,
   routedAt: IsoDateTime.nullable(),
 })

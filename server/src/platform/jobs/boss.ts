@@ -1,4 +1,5 @@
 // Tạo pg-boss và đồng bộ queue/cron từ registry (chỉ worker gọi `ensureQueues`).
+import { RETENTION } from '@ottm/shared'
 import { sql } from 'drizzle-orm'
 import { PgBoss, type Job, type JobWithMetadata } from 'pg-boss'
 import type { DbExecutor } from '../db/index.ts'
@@ -7,6 +8,8 @@ import type { Logger } from '../log/index.ts'
 import { QUEUES, validateRegistry, type QueueName, type QueueRegistry } from './queues.ts'
 
 export const BOSS_SCHEMA = 'pgboss'
+/** Story 9.3: giây giữ job đã kết thúc trước khi pg-boss xoá (`RETENTION.jobDays`). */
+export const JOB_DELETE_AFTER_SECONDS = RETENTION.jobDays * 24 * 60 * 60
 /** Queue nội bộ của pg-boss (vd `__pgboss__send-it` cho cron) — không thuộc registry. */
 export const BOSS_INTERNAL_PREFIX = '__pgboss__'
 
@@ -45,6 +48,9 @@ export async function ensureQueues(
       retryDelay: def.retryDelay ?? 0,
       retryBackoff: def.retryBackoff ?? false,
       expireInSeconds: def.expireInSeconds ?? 900,
+      // Story 9.3 (AD-22): job đã xong / lỗi / huỷ (payload có thể mang nội dung tin) bị pg-boss xoá sau hạn này — đặt
+      // tường minh, không dựa mặc định của thư viện.
+      deleteAfterSeconds: JOB_DELETE_AFTER_SECONDS,
     }
     const existing = await boss.getQueue(name)
     if (!existing) {

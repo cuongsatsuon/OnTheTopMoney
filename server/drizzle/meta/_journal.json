@@ -288,6 +288,13 @@
       "when": 1792818268421,
       "tag": "0040_conscious_clea",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1792821261917,
+      "tag": "0041_loose_black_widow",
+      "breakpoints": true
     }
   ]
 }

@@ -10,7 +10,7 @@
 // - Yêu cầu của cron trang gỡ (`source=page_removed`) mà trang đã được kết nối lại (review 9.2) → đóng yêu cầu thay vì
 //   phát giai đoạn cuối / phát lại: không xoá dữ liệu của trang đang dùng (kể cả tin mới sau khi kết nối lại).
 // Log chỉ mang id yêu cầu, module, số đếm (AD-12).
-import { PURGE_FINAL_MODULE, PURGE_MODULES, PURGE_MODULE_NAMES, type DeletionScope, type PurgeModule } from '@ottm/shared'
+import { DAY_MS, PURGE_FINAL_MODULE, PURGE_MODULES, PURGE_MODULE_NAMES, RETENTION, type DeletionScope, type PurgeModule } from '@ottm/shared'
 import { eq, sql } from 'drizzle-orm'
 import { getPage, listRemovedBefore } from '../pages/index.ts'
 import type { Db, DbExecutor } from '../../platform/db/index.ts'
@@ -20,7 +20,7 @@ import { latestTargetRequest, publishPurgeRequested, requestTargetDeletion, type
 import { deletionRequestParts, deletionRequests } from './schema.ts'
 
 /** Trang gỡ quá mức này thì dữ liệu khách / hội thoại bị xoá (AD-22 retention [ASSUMPTION]). */
-export const REMOVED_PAGE_RETENTION_MS = 30 * 24 * 60 * 60_000
+export const REMOVED_PAGE_RETENTION_MS = RETENTION.removedPageDays * DAY_MS
 /** Yêu cầu mở không có hoạt động quá mức này → cron phát lại giai đoạn đang dở. */
 export const PURGE_STALL_MS = 60 * 60_000
 

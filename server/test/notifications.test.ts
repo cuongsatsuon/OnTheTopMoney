@@ -414,6 +414,8 @@ describe('worker thật: publish → events.notifications → thông báo; job h
         'events.privacy': async () => {},
         'privacy.purge_resume': async () => {},
         'privacy.removed_pages': async () => {},
+        'privacy.retention': async () => {},
+        'privacy.orphan_files': async () => {},
         'events.notifications': async (job) => {
           await handleEvent(workerDeps, parseEventEnvelope(job.data))
         },

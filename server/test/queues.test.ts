@@ -118,6 +118,8 @@ describe('pg-boss thật — worker khởi động chỉ tạo queue trong regis
     expect(queues.map((q) => q.name).sort()).toEqual(Object.keys(QUEUES).sort())
     const heartbeat = queues.find((q) => q.name === 'platform.heartbeat')
     expect(heartbeat).toMatchObject({ policy: 'standard', retryLimit: 1 })
+    // Story 9.3 (AD-22): job đã kết thúc bị pg-boss xoá sau 7 ngày — mọi queue.
+    for (const q of queues) expect([q.name, q.deleteAfterSeconds]).toEqual([q.name, 7 * 24 * 60 * 60])
 
     const schedules = await boss.getSchedules()
     const cronQueues = Object.entries(QUEUES as QueueRegistry)

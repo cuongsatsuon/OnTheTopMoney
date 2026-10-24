@@ -3,7 +3,7 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { hash, verify } from '@node-rs/argon2'
 import { and, eq, gt, lte, sql } from 'drizzle-orm'
-import type { Db } from '../../platform/db/index.ts'
+import type { Db, DbExecutor } from '../../platform/db/index.ts'
 import { secrets, sessions } from './schema.ts'
 
 export const OWNER_PASSWORD_SECRET = 'owner_password'
@@ -72,8 +72,8 @@ export async function verifyOwnerPassword(db: Db, password: string): Promise<boo
 export async function createSession(db: Db): Promise<{ token: string; session: OwnerSession }> {
   const token = randomBytes(32).toString('base64url')
   const expiresAt = new Date(Date.now() + SESSION_TTL_DAYS * DAY_MS)
-  // Một chủ sở hữu → bảng nhỏ; dọn phiên hết hạn mỗi lần đăng nhập.
-  await db.delete(sessions).where(lte(sessions.expiresAt, sql`now()`))
+  // Một chủ sở hữu → bảng nhỏ; dọn phiên hết hạn mỗi lần đăng nhập (và hằng ngày qua `deleteExpiredSessions`).
+  await deleteExpiredSessions(db)
   const [row] = await db
     .insert(sessions)
     .values({ tokenHash: hashToken(token), expiresAt })
@@ -123,4 +123,13 @@ export async function deleteSession(db: Db, token: string | undefined): Promise<
 
 export async function deleteAllSessions(db: Db): Promise<void> {
   await db.delete(sessions)
+}
+
+/**
+ * Story 9.3 (AD-22 "session hết hạn xoá ngay"): xoá mọi phiên đã hết hạn — cron `privacy.retention` gọi hằng ngày, đăng
+ * nhập cũng gọi. Một chủ sở hữu nên bảng nhỏ, một câu lệnh. Trả số phiên đã xoá.
+ */
+export async function deleteExpiredSessions(db: DbExecutor): Promise<number> {
+  const rows = await db.delete(sessions).where(lte(sessions.expiresAt, sql`now()`)).returning({ id: sessions.id })
+  return rows.length
 }

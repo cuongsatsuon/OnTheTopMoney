@@ -3,7 +3,7 @@
 //   enqueue `webhook.route` mỗi mục trong CÙNG transaction (AD-2). Sai/thiếu chữ ký → KHÔNG ghi gì.
 // - `listWebhookEvents`, `createTestEvent`, `retryEvent`, `markEventFailed`: cho REST api + worker.
 import type { Platform, WebhookEventDto, WebhookLogResponse, WebhookProduct } from '@ottm/shared'
-import { and, desc, eq, lt, sql } from 'drizzle-orm'
+import { and, desc, eq, isNotNull, isNull, lt, sql } from 'drizzle-orm'
 import { verifyWebhookSignature } from '../../adapters/meta/index.ts'
 import { bossDbFor, newId, type Db, type DbExecutor } from '../../platform/db/index.ts'
 import type { JobSender } from '../../platform/jobs/index.ts'
@@ -107,9 +107,11 @@ export type RetryOutcome =
   | { status: 'not_found' }
   /** Mục không ở `failed` (api → 409): chỉ mục `failed` mới được xử lý lại (AD-4), không reset received/routed/ignored. */
   | { status: 'not_failed' }
+  /** Story 9.3: mục `failed` nhưng payload thô đã dọn theo hạn (api → 409) — không còn gì để route. */
+  | { status: 'purged' }
 
 /**
- * "Xử lý lại" một mục (AD-4): CHỈ mục `status='failed'` — đưa về `received`, xoá `error_code`/`routed_at`,
+ * "Xử lý lại" một mục (AD-4): CHỈ mục `status='failed'` còn payload thô (Story 9.3) — đưa về `received`, xoá `error_code`/`routed_at`,
  * enqueue route lại. Idempotent theo khoá mục (route tính lại trạng thái xác định). Mục received/routed/ignored
  * KHÔNG bị reset/re-route (trả `not_failed`).
  */
@@ -118,15 +120,19 @@ export async function retryEvent(deps: IngestDeps, id: string): Promise<RetryOut
     const [row] = await tx
       .update(webhookEvents)
       .set({ status: 'received', errorCode: null, routedAt: null })
-      .where(and(eq(webhookEvents.id, id), eq(webhookEvents.status, 'failed')))
+      .where(and(eq(webhookEvents.id, id), eq(webhookEvents.status, 'failed'), isNotNull(webhookEvents.payload)))
       .returning()
     if (row) {
       await deps.jobs.send('webhook.route', { eventId: row.id }, { db: bossDbFor(tx) })
       return { status: 'retried', event: toDto(row, null) }
     }
     // Không cập nhật được: phân biệt không tồn tại với không-phải-failed.
-    const [existing] = await tx.select({ id: webhookEvents.id }).from(webhookEvents).where(eq(webhookEvents.id, id))
-    return existing ? { status: 'not_failed' } : { status: 'not_found' }
+    const [existing] = await tx
+      .select({ status: webhookEvents.status, purged: isNull(webhookEvents.payload) })
+      .from(webhookEvents)
+      .where(eq(webhookEvents.id, id))
+    if (!existing) return { status: 'not_found' }
+    return existing.status === 'failed' && existing.purged ? { status: 'purged' } : { status: 'not_failed' }
   })
 }
 
@@ -152,6 +158,7 @@ export function toDto(row: Row, page: PageJoin): WebhookEventDto {
     status: row.status as WebhookEventDto['status'],
     errorCode: row.errorCode,
     test: row.test,
+    payloadPurged: row.payload === null,
     receivedAt: row.receivedAt.toISOString(),
     routedAt: row.routedAt ? row.routedAt.toISOString() : null,
   }

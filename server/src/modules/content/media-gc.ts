@@ -1,9 +1,11 @@
 // Cron `content.media_gc` (Story 6.3, AD-14): xoá ảnh bài không gắn vào bài nào quá 7 ngày [ASSUMPTION] — ảnh AI chủ
 // shop không chọn, ảnh tải lên rồi bỏ, ô ảnh AI lỗi / kẹt không có file. Ảnh đang gắn vào target (nháp, đã lên lịch,
-// đã đăng) luôn giữ. Chỉ dọn theo DB; file mồ côi trên Cloudinary không có dòng nào trỏ tới thì chưa dọn (việc hoãn).
+// đã đăng) luôn giữ. Chỉ dọn theo DB; file trên Cloudinary không có dòng nào trỏ tới do cron `privacy.orphan_files` dọn
+// (Story 9.3).
 // Mỗi dòng: xoá dòng trước (điều kiện "không gắn" lặp lại ngay trong lệnh xoá), rồi xoá file — ngược lại thì một ảnh
 // vừa được gắn có thể mất file. Lưu nháp khoá dòng ảnh `FOR KEY SHARE` (`posts.ts`) nên lệnh xoá chen vào chỉ gặp lỗi
 // khoá ngoại → bỏ qua dòng đó.
+import { DAY_MS, RETENTION } from '@ottm/shared'
 import { and, asc, eq, lt, notExists, sql } from 'drizzle-orm'
 import type { MediaStores } from '../../adapters/media/index.ts'
 import type { Db } from '../../platform/db/index.ts'
@@ -11,7 +13,7 @@ import type { Logger } from '../../platform/log/index.ts'
 import { mediaAssets, postTargetMedia } from './schema.ts'
 
 /** Ảnh không gắn bài cũ hơn mức này thì bị dọn [ASSUMPTION AD-14]. */
-export const MEDIA_GC_AFTER_MS = 7 * 24 * 60 * 60_000
+export const MEDIA_GC_AFTER_MS = RETENTION.unattachedImageDays * DAY_MS
 /** Số dòng tối đa mỗi lần chạy (cron hằng ngày — phần còn lại để ngày sau). */
 export const MEDIA_GC_BATCH = 500
 

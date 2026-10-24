@@ -3,6 +3,7 @@
 // UNIQUE(product, dedupe_key): Meta gửi lại gom khác vẫn một dòng. Payload thô chỉ là MỤC (không phải cả body),
 // không chứa chữ ký (AD-12). `status` do job `webhook.route` đặt; `error_code` chẩn đoán khi lỗi.
 // Story 4.2: `webhook_health` — trạng thái sức khoẻ mỗi sản phẩm do cron `webhooks.health` ghi.
+// Story 9.3: payload thô chỉ giữ 30 ngày (AD-22), sau đó `null`.
 import { WEBHOOK_EVENT_STATUSES, WEBHOOK_HEALTH_STATUSES, WEBHOOK_PRODUCTS } from '@ottm/shared'
 import { sql } from 'drizzle-orm'
 import { boolean, check, index, jsonb, pgTable, text, timestamp, unique, uuid } from 'drizzle-orm/pg-core'
@@ -26,8 +27,11 @@ export const webhookEvents = pgTable(
     field: text('field').notNull(),
     /** Khoá chống trùng của mục (`mid`/`comment_id`/id media, hoặc `sha256:<hash>` của mục). */
     dedupeKey: text('dedupe_key').notNull(),
-    /** Mục đã tách (JSON), KHÔNG phải cả body. Payload thô cả body giữ ở đâu không cần cho 4.1. */
-    payload: jsonb('payload').notNull(),
+    /**
+     * Mục đã tách (JSON), KHÔNG phải cả body. Story 9.3: cron `privacy.retention` đặt `null` sau
+     * `RETENTION.webhookPayloadDays` (nội dung tin của khách) — dòng còn lại là metadata cho nhật ký / sức khoẻ.
+     */
+    payload: jsonb('payload'),
     status: text('status').notNull().default('received'),
     /** Mã lỗi chẩn đoán khi `status=failed` (chuỗi tự do, không thuộc `ErrorCode` của API). */
     errorCode: text('error_code'),
@@ -45,6 +49,8 @@ export const webhookEvents = pgTable(
     // index riêng: khoá chính `id` phục vụ quét ngược cho `order by id desc` / `id < cursor`.
     // Story 4.2: `max(received_at)` theo sản phẩm (cron sức khoẻ 5 phút + API sức khoẻ) không quét cả bảng.
     index('webhook_events_product_received_at_idx').on(t.product, t.receivedAt),
+    // Story 9.3: cron dọn payload tìm dòng cũ còn payload — index một phần nên dòng đã dọn rời khỏi index.
+    index('webhook_events_payload_received_at_idx').on(t.receivedAt).where(sql`${t.payload} is not null`),
   ],
 )
 

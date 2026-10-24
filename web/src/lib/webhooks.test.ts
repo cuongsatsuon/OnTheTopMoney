@@ -1,8 +1,9 @@
 // Story 4.1 — helper thuần của Cài đặt › Webhook (nhãn/tone/thời gian).
 import { describe, expect, it } from 'vitest'
-import { WEBHOOK_SUBSCRIBE_ERRORS } from '@ottm/shared'
+import { RETENTION, WEBHOOK_SUBSCRIBE_ERRORS } from '@ottm/shared'
 import {
   WEBHOOK_HEALTH_KEY,
+  WEBHOOK_LOG_SUBTITLE,
   WEBHOOK_SETTINGS_PATH,
   canRetry,
   lastEventLabel,
@@ -34,8 +35,14 @@ describe('webhookStatusView', () => {
 
 describe('canRetry', () => {
   it('chỉ mục failed mới cho Xử lý lại', () => {
-    expect(canRetry('failed')).toBe(true)
-    for (const s of ['received', 'routed', 'ignored'] as const) expect(canRetry(s)).toBe(false)
+    expect(canRetry({ status: 'failed', payloadPurged: false })).toBe(true)
+    for (const s of ['received', 'routed', 'ignored'] as const) expect(canRetry({ status: s, payloadPurged: false })).toBe(false)
+  })
+  it('Story 9.3: mục failed đã dọn nội dung thô thì không Xử lý lại', () => {
+    expect(canRetry({ status: 'failed', payloadPurged: true })).toBe(false)
+  })
+  it('dòng phụ nhật ký nêu đúng hạn giữ nội dung thô', () => {
+    expect(WEBHOOK_LOG_SUBTITLE).toContain(`${RETENTION.webhookPayloadDays} ngày`)
   })
 })
 

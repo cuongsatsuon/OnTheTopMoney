@@ -4,6 +4,8 @@
 //   `deletion_requested_at` (ẩn khỏi danh sách / chi tiết / ⌘K / gộp), trả hội thoại hiện có để `privacy` chụp lại.
 // - `purgeMatchKeys`: id nền tảng của khách (id người dùng các định danh, `thread_key`, id tin) cho `webhooks` tìm payload
 //   thô — chỉ trả trong bộ nhớ, không log, không vào payload job.
+// - `isSenderPendingDeletion` (Story 9.3): tin vừa ingest thuộc khách đang chờ xoá → `webhooks` bỏ payload thô của mục đó
+//   ngay (mục tới sau khi phần `webhooks` của giai đoạn 1 đã chạy thì không còn ai xoá nó).
 // - `handleInboxPurge` (queue `inbox.purge`): xoá theo lô — tin (+ `message_attachments`) → hội thoại → định danh → khách.
 //   `contact`: tin trong hội thoại của khách (ảnh chụp + hội thoại hiện có của các định danh) và tin khách viết ở luồng bình
 //   luận của người khác. `page|all`: mọi tin / hội thoại / định danh của `pageIds`; khách chỉ bị xoá khi không còn định
@@ -221,4 +223,15 @@ export async function handleInboxPurge(deps: InboxPurgeDeps, data: unknown): Pro
     await purgePages(deps, p.id, p.pageIds ?? [], out)
   }
   return out
+}
+
+/** Story 9.3: người gửi tin `messageId` là khách đang chờ xoá (`deletion_requested_at` đã đặt). Không có tin → false. */
+export async function isSenderPendingDeletion(db: DbExecutor, messageId: string): Promise<boolean> {
+  const [row] = await db
+    .select({ id: contacts.id })
+    .from(messages)
+    .innerJoin(contactIdentities, eq(contactIdentities.id, messages.senderIdentityId))
+    .innerJoin(contacts, eq(contacts.id, contactIdentities.contactId))
+    .where(and(eq(messages.id, messageId), sql`${contacts.deletionRequestedAt} is not null`))
+  return row !== undefined
 }
