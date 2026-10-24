@@ -13,6 +13,7 @@ export {
   PREVIEW_CONCURRENCY,
   PreviewRetryableError,
   applySlotAction,
+  campaignPlan,
   getPreview,
   handlePreviewJob,
   previewPlan,
@@ -21,3 +22,5 @@ export {
   type PreviewDeps,
   type PreviewResult,
 } from './preview.ts'
+// Bắt đầu chiến dịch (Story 7.3): kiểm lại, chụp trang đích, tạo phần slot còn lại; danh sách theo phạm vi (read-model).
+export { listCampaigns, startCampaign, type StartCampaignResult } from './start.ts'

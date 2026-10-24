@@ -9,7 +9,7 @@ export { createPost, getPost, updateDraftPost, type CreateManualPostInput, type 
 // Luật nền tảng phía server (cùng bảng `packages/shared` với FE) — gọi trước mọi chuyển tới `scheduled`.
 export { assertPublishable } from './publishable.ts'
 // Lên lịch và đăng (Story 6.4, AD-13): chuyển trạng thái do chủ shop bấm; job `publish.target`; cron `content.requeue`.
-export { transitionPostTargets, transitionTarget, type TargetTransition, type TransitionDeps } from './transitions.ts'
+export { lockDailyLimits, transitionPostTargets, transitionTarget, type TargetTransition, type TransitionDeps } from './transitions.ts'
 export {
   CONTAINER_POLL_MAX,
   CONTAINER_POLL_MS,
@@ -42,6 +42,9 @@ export {
   type SlotOutcome,
   type SlotPlan,
 } from './slots.ts'
+// "Bắt đầu chiến dịch" (Story 7.3): tạo phần slot còn lại, bỏ `held` bài xem trước ("Tự đăng" → duyệt); tiến độ cho read-model.
+export { startCampaignSlots, type StartSlotsResult } from './slots-start.ts'
+export { campaignProgress, type CampaignProgress } from './slots-progress.ts'
 // Sinh ảnh AI (Story 6.3, AD-14): yêu cầu 4 ô + job `content.image.generate`; cron dọn ảnh không gắn bài.
 export {
   ImageGenerateRetryableError,

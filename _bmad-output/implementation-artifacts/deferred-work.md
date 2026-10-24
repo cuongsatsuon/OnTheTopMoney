@@ -204,11 +204,8 @@
     - ngăn chi tiết: Đổi giờ, Bỏ lịch, Xoá (xác nhận), Mở ở Soạn bài, Xem bài.
   evidence: Chỉ có test API (Postgres thật, `server/test/content-calendar.test.ts`) và test helper web (`web/src/lib/calendar.test.ts`); chưa chạy UI (dev không có mật khẩu mẫu). Kéo thả HTML5 không dùng được trên màn cảm ứng — ngăn chi tiết có ô ngày giờ thay thế.
 - source_spec: `spec-6-5-lich-noi-dung.md`
-  summary: Lịch ở tab / máy khác không tự cập nhật khi đổi giờ / bỏ lịch / lên lịch (chỉ `post_target.published|failed|cancelled` có sự kiện realtime).
-  evidence: `transitionTarget` chỉ phát sự kiện khi xoá; web làm cũ `['post_targets']` sau mỗi lần tự chuyển trạng thái. Nếu Epic 7 tự lên lịch slot thì cần sự kiện kiểu `post_target.scheduled` (shared `events.ts`) để lịch đang mở thấy ngay.
-- source_spec: `spec-6-5-lich-noi-dung.md`
-  summary: Kéo thả một ô slot chiến dịch (nhiều bài 1 : 1 gom theo giờ) gửi mỗi bài một request — không nguyên tử: một bài lỗi (409 / giới hạn/24h) thì các bài trước đã đổi giờ.
-  evidence: `web/src/lib/calendar.ts` `groupCalls`; route chuyển trạng thái theo từng bài. Hiện `campaignId` luôn `null` (cột có ở Epic 7). Khi Epic 7 thêm slot: cân nhắc route chuyển trạng thái theo danh sách target nhiều bài, hoặc chấp nhận và báo "Đã dời n/m bài".
+  summary: Lịch ở tab / máy khác không tự cập nhật khi đổi giờ / bỏ lịch / lên lịch bằng tay (chỉ `post_target.published|failed|cancelled|updated` và `campaign.*` có sự kiện realtime).
+  evidence: `transitionTarget` không phát sự kiện cho `schedule|reschedule|unschedule|retry|approve`; web làm cũ `['post_targets']` sau mỗi lần tự chuyển trạng thái. Story 7.3: "Bắt đầu chiến dịch" phát `campaign.started` (lịch đang mở tải lại cả slot vừa tạo). Còn lại cần sự kiện kiểu `post_target.scheduled` (shared `events.ts`) — 7.4 duyệt bài cũng sẽ cần.
 - source_spec: `spec-7-1-wizard-chien-dich.md`
   summary: Kiểm bằng trình duyệt wizard `/chien-dich/tao` với phiên chủ shop và trang thật:
     - 3 bước theo nhóm / từng trang; trang mất kết nối / thiếu hồ sơ mờ kèm lý do;
@@ -219,8 +216,8 @@
   summary: Ước tính chi phí AI thật ở cột Tóm tắt của wizard. Đã bỏ số giả "~700đ/bài"; hướng làm: tính theo model đang chọn bằng `ai.estimateTextCost` / `estimateImageCost` × số bài / số bài có ảnh.
   evidence: Story 7.2 đã có lời gọi `campaign_generate` thật (ghi `ai_usage` với `ref` = target cho caption, `ref` = ô ảnh cho ảnh của slot), nên đo được chi phí thật của 7 bài xem trước. Chưa làm vì AC 7.2 không cần; hướng làm: cộng `ai_usage` theo `ref` của slot xem trước, nhân theo tổng bài / bài có ảnh ở cột Tóm tắt (hoặc ước tính bằng `estimateTextCost` / `estimateImageCost` khi chưa có bài xem trước).
 - source_spec: `spec-7-1-wizard-chien-dich.md`
-  summary: Danh sách chiến dịch nháp. Nháp chỉ mở lại được qua `/chien-dich/tao?id=<id>`; `/chien-dich` (tab "Bản nháp") vẫn chạy dữ liệu mẫu; chưa xoá được nháp.
-  evidence: Danh sách chiến dịch + read-model tiến độ thuộc Story 7.3, xoá thuộc Story 7.5. Story 7.1 chỉ lưu và đọc từng nháp.
+  summary: Chưa xoá được chiến dịch nháp (danh sách nháp ở tab "Bản nháp" của `/chien-dich` đã có từ Story 7.3, nút Xoá khoá "Sắp có").
+  evidence: Xoá chiến dịch thuộc Story 7.5 (`content.cancelCampaignTargets`, xác nhận). Nháp có bài xem trước `held` — xoá nháp cần dọn cả slot (bài chưa từng đăng).
 - source_spec: `spec-7-1-wizard-chien-dich.md`
   summary: Trang chọn được (`GET /campaigns/page-options`) không tự cập nhật khi hồ sơ thương hiệu đổi, vì lưu hồ sơ không phát sự kiện realtime. Chỉ `page.*` làm cũ danh sách này.
   evidence: Wizard mở lâu có thể vẫn thấy "Chưa có hồ sơ thương hiệu" dù vừa tạo hồ sơ ở tab khác. Server vẫn kiểm lại khi lưu, nên không lưu sai.
@@ -232,13 +229,25 @@
   evidence: Chỉ có test API (Postgres thật, `server/test/campaigns-preview.test.ts`) và test helper web (`web/src/lib/campaigns.test.ts`); chưa chạy UI (dev không có mật khẩu mẫu).
 - source_spec: `spec-7-2-xem-truoc-7-bai.md`
   summary: Slot xem trước kẹt `planned` nếu job `campaigns.preview` / `content.image.generate` mất hẳn (không phải lỗi — lỗi đã về `pending_approval` kèm mã). Bước 4 khi đó hiện "AI đang viết…" mãi và hỏi lại 5 giây; "Tạo lại" chỉ mở cho `pending_approval`.
-  evidence: `content/slots.ts` chỉ rời `planned` khi job chạy xong; ô ảnh chờ quá 15 phút đọc ra `failed` ở `GET /media-assets/generated` nhưng không đẩy slot. Hướng sửa (7.4 dùng chung): cron `campaigns.generate_window` coi slot `planned` có ô ảnh `pending` quá `IMAGE_PENDING_MS` là `IMAGE_FAILED`, và enqueue lại slot chưa sinh.
+  evidence: `content/slots.ts` chỉ rời `planned` khi job chạy xong; ô ảnh chờ quá 15 phút đọc ra `failed` ở `GET /media-assets/generated` nhưng không đẩy slot. Hướng sửa (7.4 dùng chung): cron `campaigns.generate_window` coi slot `planned` có ô ảnh `pending` quá `IMAGE_PENDING_MS` là `IMAGE_FAILED`, và enqueue lại slot chưa sinh. Story 7.3: bắt đầu vẫn được khi còn bài đang viết — slot kẹt khi đó thành `planned` trên Lịch ("Chờ AI soạn") và cũng chờ cron `campaigns.generate_window` (7.4) sinh lại; job `campaigns.preview` bỏ qua chiến dịch đã chạy.
 - source_spec: `spec-7-2-xem-truoc-7-bai.md`
   summary: Job ảnh luôn đẩy slot sang `pending_approval` khi ảnh xong. Chế độ "Tự đăng" (7.4) cần đích `scheduled` qua `assertPublishable`, nên phải truyền chế độ vào `settleSlotImage` hoặc để `campaigns` chuyển tiếp.
   evidence: `content` không đọc `campaigns` (AD-1); bài xem trước (7.2) luôn chờ duyệt nên chưa cần.
 - source_spec: `spec-7-2-xem-truoc-7-bai.md`
   summary: Bước 4 chỉ sửa được caption của bài xem trước, chưa đổi / bỏ / thêm ảnh. Muốn ảnh khác thì phải "Tạo lại" (viết lại cả caption).
   evidence: AC 7.2 chỉ nêu sửa / xoá / tạo lại. Hành động `edit` của `transitionTarget` chỉ nhận `caption`; "Bài chờ duyệt" (7.4) nên có sửa ảnh cùng hành động này.
-- source_spec: `spec-7-2-xem-truoc-7-bai.md`
-  summary: Job `campaigns.preview` lấy danh sách slot cần sinh (`listSlotsToGenerate`) sau khi đã nhả khoá `FOR SHARE` của dòng chiến dịch. Lưu nháp chen vào giữa thì slot mới được sinh theo kế hoạch cũ: `withImage` không có trong map nên thành `false` (cả trang Instagram), mục tiêu là mục tiêu cũ.
-  evidence: `campaigns/preview.ts` `runPreview`: `withImage.get(...) ?? false`. Cửa sổ chỉ dài một câu truy vấn, và lượt job do lần lưu enqueue sẽ bỏ qua slot đã sinh. Hướng sửa: đọc `todo` trong cùng transaction `FOR SHARE`, hoặc slot không có trong kế hoạch thì bỏ qua để lượt sau sinh.
+- source_spec: `spec-7-3-bat-dau-chien-dich.md`
+  summary: Kiểm bằng trình duyệt luồng bắt đầu chiến dịch với phiên chủ shop + worker:
+    - bước 4 → "Bắt đầu chiến dịch" → toast + `/lich` có đủ slot chấm tím "AI tạo" ("AI sẽ viết · <chủ đề>" cho bài chưa viết);
+    - `/chien-dich` (tab, KPI, thẻ "0/N bài", "Bài tiếp theo", nháp → "Tiếp tục thiết lập") và thẻ "Chiến dịch đang chạy" ở Tổng quan;
+    - trang mất kết nối giữa lúc lưu và lúc bắt đầu → về bước 2 kèm câu dưới trang; chế độ "Tự đăng" → bài xem trước lên lịch xanh.
+  evidence: Chỉ có test API (Postgres thật, `server/test/campaigns-start.test.ts`) và test helper web (`web/src/lib/campaigns.test.ts`, `calendar.test.ts`); chưa chạy UI (dev không có mật khẩu mẫu).
+- source_spec: `spec-7-3-bat-dau-chien-dich.md`
+  summary: `trend` của thẻ chiến dịch là số bài đã đăng mỗi ngày (7 ngày), không phải tương tác — nhãn thẻ đổi thành "Bài đã đăng 7 ngày". UX gốc là "Tương tác 7 ngày ±x%".
+  evidence: Chưa có số liệu tương tác (`post_metrics` — Story 8.1). Khi có: `content.campaignProgress` (hoặc read-model) ghép tương tác theo ngày từ `analytics`, đổi lại nhãn + % thay đổi.
+- source_spec: `spec-7-3-bat-dau-chien-dich.md`
+  summary: Lý do tạm dừng trên thẻ chiến dịch và nút Tạm dừng / Tiếp tục ở `/chien-dich` + Tổng quan còn khoá "Sắp có"; thẻ tạm dừng chỉ ghi "Chiến dịch đang tạm dừng". `Group.activeCampaigns` (Trang & Nhóm, Chi tiết nhóm) và `pages.affectedByMove().campaigns` vẫn là dữ liệu mẫu / rỗng.
+  evidence: Chưa có cột `pause_reason` (Story 7.5 / 7.6). Read-model `app/read-models/campaigns.ts` là chỗ ghép `Group.activeCampaigns` khi Trang & Nhóm bỏ dữ liệu mẫu.
+- source_spec: `spec-7-3-bat-dau-chien-dich.md`
+  summary: Chế độ "Tự đăng": bài xem trước còn đang viết lúc bấm bắt đầu (job `campaigns.preview` đang chạy dở, hoặc đang chờ ảnh) xong thì về `pending_approval` thay vì tự lên lịch; bài chờ duyệt trên Lịch chưa duyệt / đổi giờ được ("Mở ở Soạn bài" / "Bỏ lịch" ẩn với slot chiến dịch).
+  evidence: `content/slots.ts` `settle` / `settleSlotImage` luôn đích `pending_approval` (đã ghi ở mục "Tự đăng" của 7.2). Hướng làm ở 7.4: `campaigns` duyệt tiếp (`transitionTarget approve`, có sẵn) slot không lỗi của chiến dịch `auto` sau khi sinh; Lịch / "Bài chờ duyệt" dùng cùng `approve` (`SCHEDULE_IN_PAST` → hỏi giờ mới).

@@ -1,0 +1,2 @@
+ALTER TABLE "campaigns" ADD COLUMN "started_at" timestamp (3) with time zone;--> statement-breakpoint
+ALTER TABLE "campaigns" ADD CONSTRAINT "campaigns_started_at_check" CHECK (("campaigns"."status" = 'draft') = ("campaigns"."started_at" is null));

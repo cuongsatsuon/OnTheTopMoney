@@ -2,8 +2,11 @@
 // nhiệt, bài có ảnh — Instagram luôn có ảnh), lỗi validate (web + server) → đúng bước + dưới ô, Phạm vi → đích ban đầu.
 // Story 7.2: bước 4 xem trước (bài đang viết / đang tạo ảnh / sẵn sàng / đã bỏ, giờ VN, ghi chú theo mã lỗi, hành động
 // được phép), `baseUpdatedAt`, SSE `post_target.*` làm cũ xem trước.
+// Story 7.3: toast bắt đầu, lỗi bắt đầu (trang / ngày) → đúng bước, thẻ chiến dịch (tiến độ, "Bài tiếp theo", đếm tab,
+// thẻ Tổng quan), SSE `campaign.*` làm cũ danh sách.
 import {
   CampaignDto,
+  CampaignSummaryDto,
   SaveCampaignRequest,
   campaignImageRatio,
   campaignPostsOnDay,
@@ -18,14 +21,19 @@ import {
   CAMPAIGN_PAGE_OPTIONS_KEY,
   activePages,
   addDaysKey,
+  activeCampaigns,
   autoName,
   buildCampaignBody,
+  campaignCounts,
+  campaignPct,
   campaignPreviewKey,
+  campaignsListKey,
   dailyPlan,
   dayLabel,
   formFromCampaign,
   hasInstagram,
   initialForm,
+  nextPostLabel,
   planTotals,
   previewView,
   serverCampaignErrors,
@@ -35,9 +43,12 @@ import {
   slotPhase,
   slotWhen,
   splitEven,
+  startCampaignErrors,
+  startedToast,
   stepHasErrors,
   targetPages,
   topicSum,
+  trendTotal,
   validateCampaign,
   type CampaignForm,
   type PageOptions,
@@ -123,7 +134,7 @@ describe('body và nạp lại nháp', () => {
       mode: 'review',
     })
     expect(SaveCampaignRequest.safeParse(body).success).toBe(true)
-    const dto = CampaignDto.parse({ ...body, id: id(99), status: 'draft', createdAt: '2026-10-24T03:00:00.000Z', updatedAt: '2026-10-24T03:00:00.000Z' })
+    const dto = CampaignDto.parse({ ...body, id: id(99), status: 'draft', startedAt: null, createdAt: '2026-10-24T03:00:00.000Z', updatedAt: '2026-10-24T03:00:00.000Z' })
     const again = formFromCampaign(dto)
     expect(buildCampaignBody(again, activePages(again, PAGES, OPTIONS), again.name)).toEqual(body)
   })
@@ -132,7 +143,7 @@ describe('body và nạp lại nháp', () => {
     const f = form({ targetMode: 'pages', picked: [SOLO.id] })
     const body = buildCampaignBody(f, activePages(f, PAGES, OPTIONS), 'Tên')
     expect(body.groupId).toBeNull()
-    const dto = CampaignDto.parse({ ...body, mode: 'review', id: id(98), status: 'draft', createdAt: '2026-10-24T03:00:00.000Z', updatedAt: '2026-10-24T03:00:00.000Z' })
+    const dto = CampaignDto.parse({ ...body, mode: 'review', id: id(98), status: 'draft', startedAt: null, createdAt: '2026-10-24T03:00:00.000Z', updatedAt: '2026-10-24T03:00:00.000Z' })
     expect(formFromCampaign(dto)).toMatchObject({ targetMode: 'pages', picked: [SOLO.id], groupId: null })
   })
 })
@@ -274,5 +285,70 @@ describe('xem trước 7 bài đầu', () => {
     expect('baseUpdatedAt' in buildCampaignBody(form, active, 'Tên')).toBe(false)
     expect(SaveCampaignRequest.safeParse({ ...buildCampaignBody(form, active, 'Tên', 'hôm qua') }).success).toBe(false)
     expect(hintInvalidates(campaignPreviewKey('x')[0], 'post_target', 'post_target.updated')).toBe(true)
+  })
+})
+
+describe('bắt đầu chiến dịch + danh sách (Story 7.3)', () => {
+  const summary = (over: Partial<CampaignSummaryDto> = {}): CampaignSummaryDto =>
+    CampaignSummaryDto.parse({
+      ...buildCampaignBody(form({ targetMode: 'pages', picked: [FB.id] }), [FB], 'Nuôi page 30 ngày'),
+      mode: 'review',
+      id: id(90),
+      status: 'running',
+      startedAt: '2026-10-24T03:00:00.000Z',
+      createdAt: '2026-10-23T03:00:00.000Z',
+      updatedAt: '2026-10-24T03:00:00.000Z',
+      postsTotal: 30,
+      postsDone: 0,
+      postsPending: 6,
+      nextPost: '2026-10-25T04:30:00.000Z',
+      trend: [0, 0, 0, 0, 0, 0, 0],
+      daysDone: 0,
+      ...over,
+    })
+
+  it('toast: bắt đầu "0/N bài trên Lịch" / đã bắt đầu từ trước', () => {
+    expect(startedToast({ campaign: summary(), alreadyStarted: false })).toBe('Đã bắt đầu “Nuôi page 30 ngày” — 30 bài trên Lịch nội dung')
+    expect(startedToast({ campaign: summary(), alreadyStarted: true })).toBe('“Nuôi page 30 ngày” đã bắt đầu từ trước')
+  })
+
+  it('lỗi bắt đầu (trang mất kết nối / ngày đã qua) → về bước 2 / 1 như khi lưu', () => {
+    const body = buildCampaignBody(form({ targetMode: 'pages', picked: [FB.id, IG.id] }), [FB, IG], 'Tên')
+    const pageErr = new ApiError('VALIDATION_FAILED', 400, 'x', [{ path: ['pages', 1, 'pageId'], message: 'Trang đã mất kết nối — kết nối lại để chọn', code: 'PAGE_DISCONNECTED' }])
+    expect(serverCampaignErrors(pageErr, body)).toMatchObject({ step: 2, pages: { [IG.id]: 'Trang đã mất kết nối — kết nối lại để chọn' } })
+    const dateErr = new ApiError('VALIDATION_FAILED', 400, 'x', [{ path: ['startDate'], message: 'Ngày bắt đầu đã qua' }])
+    expect(serverCampaignErrors(dateErr, body)).toMatchObject({ step: 1, fields: { startDate: 'Ngày bắt đầu đã qua' } })
+  })
+
+  it('lỗi bắt đầu theo trang đánh chỉ số theo trang ĐÃ LƯU: form đã bỏ trang vừa mất kết nối thì câu lỗi không rơi sang trang khác', () => {
+    // Đã lưu [IG, FB]; IG mất kết nối → form chỉ còn FB (`activePages`), server báo `pages[0]` = IG.
+    const body = buildCampaignBody(form({ targetMode: 'pages', picked: [IG.id, FB.id] }), [FB], 'Tên')
+    const saved = { pages: [IG, FB].map((p) => ({ pageId: p.id, frequency: null })) }
+    const err = new ApiError('VALIDATION_FAILED', 400, 'x', [{ path: ['pages', 0, 'pageId'], message: 'Trang đã mất kết nối — kết nối lại để chọn', code: 'PAGE_DISCONNECTED' }])
+    expect(startCampaignErrors(err, body, saved)).toEqual({ fields: {}, pages: { [IG.id]: 'Trang đã mất kết nối — kết nối lại để chọn' }, step: 2 })
+    expect(startCampaignErrors(err, body, undefined)).toMatchObject({ pages: { [FB.id]: expect.any(String) } })
+  })
+
+  it('thẻ: % theo bài, "Bài tiếp theo" theo giờ VN / trạng thái, tổng bài 7 ngày', () => {
+    expect(campaignPct(summary())).toBe(0)
+    expect(campaignPct(summary({ postsDone: 12, postsTotal: 30 }))).toBe(40)
+    expect(campaignPct(summary({ postsTotal: 0 }))).toBe(0)
+    expect(nextPostLabel(summary(), NOW)).toBe('Mai 11:30')
+    expect(nextPostLabel(summary({ nextPost: '2026-10-24T12:30:00.000Z' }), NOW)).toBe('Hôm nay 19:30')
+    expect(nextPostLabel(summary({ nextPost: '2026-10-26T04:30:00.000Z' }), NOW)).toBe('T2, 26/10 · 11:30')
+    expect(nextPostLabel(summary({ nextPost: null }), NOW)).toBe('Chưa có bài sắp đăng')
+    expect(nextPostLabel(summary({ status: 'draft', startedAt: null }), NOW)).toBe('Chưa bắt đầu')
+    expect(nextPostLabel(summary({ status: 'paused' }), NOW)).toBe('Đang tạm dừng')
+    expect(trendTotal([0, 1, 0, 2, 0, 0, 1])).toBe(4)
+  })
+
+  it('đếm tab; Tổng quan chỉ lấy đang chạy + tạm dừng; khoá danh sách theo phạm vi; SSE campaign.* làm cũ', () => {
+    const items = [summary(), summary({ id: id(91), status: 'draft', startedAt: null }), summary({ id: id(92), status: 'paused' })]
+    expect(campaignCounts(items)).toEqual({ all: 3, draft: 1, running: 1, paused: 1, done: 0 })
+    expect(activeCampaigns(items).map((c) => c.id)).toEqual([id(90), id(92)])
+    const key = campaignsListKey('all')
+    expect(key).toEqual(['campaigns', 'list', 'all'])
+    expect(hintInvalidates(key[0], 'campaign')).toBe(true)
+    expect(hintInvalidates(key[0], 'post_target')).toBe(true)
   })
 })

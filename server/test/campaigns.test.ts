@@ -216,7 +216,7 @@ describe('POST / GET / PUT /api/v1/campaigns', () => {
     expect((await api('GET', `/api/v1/campaigns/${unknown}`)).statusCode).toBe(404)
     expect((await api('PUT', `/api/v1/campaigns/${unknown}`, body({ pages: [{ pageId: fb, frequency: null }] }))).statusCode).toBe(404)
     const c = await created(body({ pages: [{ pageId: fb, frequency: null }] }))
-    await handle.sql`update campaigns set status = 'running' where id = ${c.id}`
+    await handle.sql`update campaigns set status = 'running', started_at = now() where id = ${c.id}`
     const res = await api('PUT', `/api/v1/campaigns/${c.id}`, body({ name: 'Khác', pages: [{ pageId: fb, frequency: null }] }))
     expect(res.statusCode).toBe(409)
     expect(ErrorResponse.parse(res.json()).error.code).toBe('VERSION_CONFLICT')

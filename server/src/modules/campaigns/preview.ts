@@ -51,17 +51,24 @@ export const PREVIEW_CONCURRENCY = 3
 const COMPOSE_GOAL: Record<CampaignGoal, ComposeGoal> = { engage: 'engagement', follow: 'engagement', sell: 'sales', launch: 'announce' }
 
 const keyOf = (pageId: string, slotAt: string) => `${pageId}|${slotAt}`
-const toSlotPlan = (s: CampaignSlot): SlotPlan => ({ pageId: s.pageId, slotAt: new Date(s.slotAt), topic: s.topic })
 
-/** Kế hoạch `CAMPAIGN_PREVIEW_COUNT` slot đầu theo cấu hình đã lưu: trang chưa gỡ, theo thứ tự lưu. */
-export async function previewPlan(db: DbExecutor, campaign: CampaignDto): Promise<CampaignSlot[]> {
+/**
+ * Kế hoạch slot theo cấu hình đã lưu (`limit` slot đầu; mặc định cả thời lượng): trang chưa gỡ, theo thứ tự lưu. Story
+ * 7.3 dùng kế hoạch đầy đủ khi "Bắt đầu" và để đếm tổng bài của nháp.
+ */
+export async function campaignPlan(db: DbExecutor, campaign: CampaignDto, limit?: number): Promise<CampaignSlot[]> {
   const pages: { pageId: string; platform: Platform; frequency: CampaignDto['pages'][number]['frequency'] }[] = []
   for (const p of campaign.pages) {
     const page = await getPage(db, p.pageId)
     if (page) pages.push({ pageId: p.pageId, platform: page.platform, frequency: p.frequency })
   }
-  return campaignSlots({ ...campaign, pages }, CAMPAIGN_PREVIEW_COUNT)
+  return campaignSlots({ ...campaign, pages }, limit)
 }
+
+/** Kế hoạch `CAMPAIGN_PREVIEW_COUNT` slot đầu (bài xem trước). */
+export const previewPlan = (db: DbExecutor, campaign: CampaignDto): Promise<CampaignSlot[]> => campaignPlan(db, campaign, CAMPAIGN_PREVIEW_COUNT)
+
+export const toSlotPlan = (s: CampaignSlot): SlotPlan => ({ pageId: s.pageId, slotAt: new Date(s.slotAt), topic: s.topic })
 
 /**
  * Đồng bộ bài xem trước với cấu hình nháp vừa lưu (chạy trong transaction lưu): slot không còn khớp (trang / giờ / chủ
@@ -98,20 +105,25 @@ export async function runPreview(
   campaignId: string,
   opts: { finalAttempt: boolean; signal?: AbortSignal | undefined; concurrency?: number },
 ): Promise<PreviewResult> {
-  // Đọc cấu hình + ensure dưới khoá `FOR SHARE` của dòng chiến dịch: lưu nháp (khoá `FOR UPDATE`) đang chạy thì chờ nó
-  // xong rồi đọc cấu hình MỚI — lượt cũ không dựng lại slot vừa bị dọn.
+  // Đọc cấu hình + ensure + danh sách slot cần sinh dưới khoá `FOR SHARE` của dòng chiến dịch: lưu nháp / bắt đầu (khoá
+  // `FOR UPDATE`) đang chạy thì chờ nó xong rồi đọc bản MỚI — lượt cũ không dựng lại slot vừa bị dọn, và slot cần sinh
+  // luôn khớp kế hoạch vừa đọc (Story 7.3 đóng việc hoãn: đọc `todo` sau khi nhả khoá).
   const loaded = await deps.db.transaction(async (tx) => {
     const [row] = await tx.select({ id: campaigns.id }).from(campaigns).where(eq(campaigns.id, campaignId)).for('share')
     const campaign = row ? await getCampaign(tx, campaignId) : null
     if (!campaign || campaign.status !== ('draft' satisfies CampaignStatus)) return null
     const plan = await previewPlan(tx, campaign)
     await ensureCampaignSlots(tx, campaignId, plan.map(toSlotPlan), { held: true, onCalendar: false })
-    return { campaign, plan }
+    const livePages = new Set<string>()
+    for (const p of campaign.pages) if (await getPage(tx, p.pageId)) livePages.add(p.pageId)
+    return { campaign, plan, livePages, todo: await listSlotsToGenerate(tx, campaignId) }
   })
   if (!loaded) return 'skipped'
   const { campaign, plan } = loaded
   const withImage = new Map(plan.map((s) => [keyOf(s.pageId, s.slotAt), s.withImage]))
-  const todo = await listSlotsToGenerate(deps.db, campaignId)
+  // Slot của trang còn dùng mà không có trong kế hoạch vừa đọc → bỏ qua (không sinh theo luật ảnh đoán mò; lượt của lần
+  // lưu sau tự sinh). Slot của trang đã gỡ (không có trong kế hoạch) vẫn đi tiếp để chốt `PAGE_REMOVED`.
+  const todo = loaded.todo.filter((s) => withImage.has(keyOf(s.pageId, s.slotAt.toISOString())) || !loaded.livePages.has(s.pageId))
   const goal = COMPOSE_GOAL[campaign.goal]
 
   let stopCode: ErrorCode | null = null

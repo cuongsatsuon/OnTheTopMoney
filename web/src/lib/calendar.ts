@@ -102,6 +102,8 @@ export interface CalendarGroup {
   /** Có nội dung do AI sinh → nhãn chữ "AI tạo" (UX-DR10). */
   ai: boolean
   title: string | null
+  /** Story 7.3: chủ đề — slot chiến dịch chưa viết hiện "AI sẽ viết · <chủ đề>". */
+  topic: string | null
   thumbnailUrl: string | null
 }
 
@@ -121,6 +123,7 @@ export function groupCalendarItems(items: readonly CalendarItemDto[]): CalendarG
       if (!g.postIds.includes(it.postId)) g.postIds.push(it.postId)
       g.ai ||= it.ai
       g.title ??= it.title
+      g.topic ??= it.topic
       g.thumbnailUrl ??= it.thumbnailUrl
       continue
     }
@@ -137,6 +140,7 @@ export function groupCalendarItems(items: readonly CalendarItemDto[]): CalendarG
       items: [it],
       ai: it.ai,
       title: it.title,
+      topic: it.topic,
       thumbnailUrl: it.thumbnailUrl,
     })
   }
@@ -256,8 +260,26 @@ export function moveRefusal(plan: MovePlan): string | null {
   return null
 }
 
-/** Tiêu đề ô: đầu caption; bài chỉ có ảnh. */
-export const groupTitle = (g: Pick<CalendarGroup, 'title'>): string => g.title ?? 'Bài chỉ có ảnh'
+/** Tiêu đề ô: đầu caption; slot chiến dịch AI chưa viết (Story 7.3) → "AI sẽ viết · <chủ đề>"; còn lại bài chỉ có ảnh. */
+export function groupTitle(g: Pick<CalendarGroup, 'title' | 'status' | 'topic'>): string {
+  if (g.title) return g.title
+  if (g.status === 'planned') return g.topic ? `AI sẽ viết · ${g.topic}` : 'AI sẽ viết'
+  return 'Bài chỉ có ảnh'
+}
+
+/**
+ * Slot chiến dịch (Story 7.3): không "Bỏ lịch" (slot không thành bài nháp — server trả 409) và không "Mở ở Soạn bài"
+ * (bài của chiến dịch sửa ở Chiến dịch nuôi page).
+ */
+export const isCampaignGroup = (g: Pick<CalendarGroup, 'campaignId'>): boolean => g.campaignId !== null
+
+/**
+ * Câu báo khi chạy nhiều request (mỗi bài một request) mà lỗi giữa chừng: các bài trước đã đổi, không hoàn tác — nói rõ
+ * đã xong bao nhiêu (đóng việc hoãn 6.5 "kéo ô gom nhiều bài chiến dịch"). Chưa bài nào xong → chỉ câu lỗi.
+ */
+export function partialRunMessage(done: number, total: number, error: string): string {
+  return done > 0 && total > 1 ? `Đã xong ${done}/${total} bài — ${error}` : error
+}
 
 /** Đếm cho thanh chú giải: số ô lỗi / chờ duyệt. */
 export function calendarCounts(groups: readonly CalendarGroup[]): { failed: number; pending: number } {

@@ -25,7 +25,6 @@ import {
   platformLabel,
 } from '../components/ui'
 import {
-  campaigns,
   compact,
   contactById,
   conversations,
@@ -34,11 +33,11 @@ import {
   pageById,
   pages,
   posts,
-  type CampaignStatus,
   type Platform,
   type Post,
 } from '../data/mock'
 import { useApp } from '../lib/app-context'
+import { activeCampaigns as activeOf, campaignPct, goalOf, nextPostLabel, useCampaigns } from '../lib/campaigns'
 import { needsReconnect } from '../lib/connections'
 
 type Range = '7d' | '30d' | 'month'
@@ -74,10 +73,11 @@ function whenLabel(post: Post) {
 }
 
 export default function Dashboard() {
-  const { scopedPages, scopeLabel, inScope, notify } = useApp()
+  const { scope, scopedPages, scopeLabel, inScope, notify } = useApp()
   const [range, setRange] = useState<Range>('30d')
   const [autoReply, setAutoReply] = useState<Record<string, boolean>>(() => Object.fromEntries(pages.map((p) => [p.id, p.autoReply])))
-  const [campaignStatus, setCampaignStatus] = useState<Record<string, CampaignStatus>>(() => Object.fromEntries(campaigns.map((c) => [c.id, c.status])))
+  // Story 7.3: chiến dịch thật theo Phạm vi (đang chạy + tạm dừng) kèm tiến độ từ read-model.
+  const campaignList = useCampaigns(scope)
 
   // Tỉ lệ người theo dõi của phạm vi so với tổng — dùng để quy đổi số liệu mẫu theo phạm vi.
   const scopeShare = useMemo(() => {
@@ -119,12 +119,7 @@ export default function Dashboard() {
     .sort((a, b) => `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`))
     .slice(0, 5)
 
-  const activeCampaigns = campaigns.filter((c) => (c.status === 'running' || c.status === 'paused') && inScope(c.pageIds))
-  const toggleCampaign = (id: string, name: string) => {
-    const next = campaignStatus[id] === 'running' ? 'paused' : 'running'
-    setCampaignStatus((s) => ({ ...s, [id]: next }))
-    notify(next === 'paused' ? `Đã tạm dừng "${name}"` : `Đã tiếp tục "${name}"`)
-  }
+  const activeCampaigns = activeOf(campaignList.data ?? [])
 
   const rangeLabel = RANGES.find((r) => r.id === range)!.label.toLowerCase()
 
@@ -343,9 +338,8 @@ export default function Dashboard() {
           ) : (
             <ul className="divide-y divide-border">
               {activeCampaigns.map((c) => {
-                const status = campaignStatus[c.id]
-                const running = status === 'running'
-                const pct = Math.round((c.postsDone / c.postsTotal) * 100)
+                const running = c.status === 'running'
+                const pct = campaignPct(c)
                 return (
                   <li key={c.id} className="px-4 py-3.5">
                     <div className="flex items-start justify-between gap-3">
@@ -357,20 +351,21 @@ export default function Dashboard() {
                         <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
                           {c.groupId && <GroupChip groupId={c.groupId} size="sm" />}
                           <span>
-                            {c.goal} · {c.mode === 'review' ? 'Duyệt trước khi đăng' : 'Tự đăng'}
+                            {goalOf(c.goal).label} · {c.mode === 'review' ? 'Duyệt trước khi đăng' : 'Tự đăng'}
                           </span>
                         </div>
                       </div>
-                      <Button size="sm" icon={running ? <Pause size={14} /> : <Play size={14} />} onClick={() => toggleCampaign(c.id, c.name)}>
+                      {/* Tạm dừng / Tiếp tục: Story 7.5. */}
+                      <Button size="sm" icon={running ? <Pause size={14} /> : <Play size={14} />} disabled title="Sắp có">
                         {running ? 'Tạm dừng' : 'Tiếp tục'}
                       </Button>
                     </div>
                     <Progress value={pct} className={cn('mt-3', !running && 'opacity-60')} />
                     <div className="tabular mt-1.5 flex justify-between text-xs text-muted-foreground">
                       <span>
-                        {c.postsDone}/{c.postsTotal} bài · ngày {c.daysDone}/{c.daysTotal}
+                        {c.postsDone}/{c.postsTotal} bài · ngày {c.daysDone}/{c.durationDays}
                       </span>
-                      <span>{running ? `Bài tiếp: ${c.nextPost === 'Tạm dừng' ? 'đang xếp lịch' : c.nextPost}` : (c.pauseReason ?? 'Đang tạm dừng')}</span>
+                      <span>{running ? `Bài tiếp: ${nextPostLabel(c)}` : 'Đang tạm dừng'}</span>
                     </div>
                   </li>
                 )

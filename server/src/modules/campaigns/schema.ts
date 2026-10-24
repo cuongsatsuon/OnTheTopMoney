@@ -1,7 +1,7 @@
 // Bảng của module `campaigns` (AD-1, AD-15 — Story 7.1): `campaigns`, `campaign_topics`, `campaign_pages`. Chỉ
 // `campaigns` ghi; module khác đi qua `campaigns/index.ts`.
 // - Story 7.1 lưu cấu hình wizard ở `draft`. `campaign_pages` lúc nháp = đích đã chọn (trang + tần suất đặt riêng);
-//   "Bắt đầu chiến dịch" (7.3) chụp lại khi chuyển `running`.
+//   "Bắt đầu chiến dịch" (7.3) chụp lại khi chuyển `running` (chốt tần suất hiệu lực vào `frequency`).
 // - `group_id` chỉ là nhãn (AD-15): xoá nhóm thì về `null`, chiến dịch giữ nguyên trang.
 // - FK tới `pages` `on delete cascade`: trang chỉ bị xoá cứng khi xoá dữ liệu theo yêu cầu (gỡ trang là soft-delete).
 import { CAMPAIGN_DURATIONS, CAMPAIGN_FREQUENCIES, CAMPAIGN_GOALS, CAMPAIGN_MODES, CAMPAIGN_POST_TIMES_MAX, CAMPAIGN_STATUSES } from '@ottm/shared'
@@ -33,6 +33,8 @@ export const campaigns = pgTable(
     imageRatio: integer('image_ratio').notNull(),
     /** Khung giờ đăng `HH:MM` theo giờ VN, tăng dần. */
     postTimes: text('post_times').array().notNull(),
+    /** Story 7.3: lúc bấm "Bắt đầu chiến dịch" — có đúng khi đã rời `draft`. */
+    startedAt: timestamp('started_at', { withTimezone: true, precision: 3 }),
     createdAt: timestamp('created_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
   },
@@ -44,6 +46,7 @@ export const campaigns = pgTable(
     check('campaigns_duration_check', sql`${t.durationDays} in (${inList(CAMPAIGN_DURATIONS)})`),
     check('campaigns_default_frequency_check', sql`${t.defaultFrequency} in (${inList(CAMPAIGN_FREQUENCIES)})`),
     check('campaigns_image_ratio_check', sql`${t.imageRatio} between 0 and 100`),
+    check('campaigns_started_at_check', sql`(${t.status} = 'draft') = (${t.startedAt} is null)`),
     check('campaigns_post_times_check', sql`cardinality(${t.postTimes}) between 1 and ${sql.raw(String(CAMPAIGN_POST_TIMES_MAX))}`),
   ],
 )

@@ -6,7 +6,20 @@
 // - Story 7.2: lưu nháp đồng bộ 7 bài xem trước (slot `planned` + `held`) và enqueue `campaigns.preview` cùng
 //   transaction; `GET /campaigns/:id/preview` đọc bài xem trước; `POST /campaigns/:id/slots/:targetId/transition` Sửa /
 //   Xoá / Tạo lại (qua `content.transitionTarget` với `version` — cần `jobs` + `events`).
-import { CampaignPageOptionsResponse, CampaignSlotActionRequest, SaveCampaignRequest, type CampaignDto, type CampaignPreviewResponse } from '@ottm/shared'
+// - Story 7.3: `GET /campaigns?scope=` danh sách kèm tiến độ (read-model `read-models/campaigns.ts`, phạm vi giải bằng
+//   `pages.resolveScope`); `POST /campaigns/:id/start` bắt đầu chiến dịch trong MỘT transaction (cần `jobs` + `events`:
+//   "Tự đăng" enqueue `publish.target`, phát `campaign.started`). Bấm hai lần → 200 `alreadyStarted`.
+import {
+  CampaignListQuery,
+  CampaignPageOptionsResponse,
+  CampaignSlotActionRequest,
+  SaveCampaignRequest,
+  StartCampaignRequest,
+  type CampaignDto,
+  type CampaignListResponse,
+  type CampaignPreviewResponse,
+  type StartCampaignResponse,
+} from '@ottm/shared'
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import {
@@ -14,14 +27,18 @@ import {
   createCampaignDraft,
   getCampaign,
   getPreview,
+  listCampaigns,
   listPageOptions,
+  startCampaign,
   syncPreviewSlots,
   updateCampaignDraft,
 } from '../modules/campaigns/index.ts'
+import { resolveScope } from '../modules/pages/index.ts'
 import type { Db } from '../platform/db/index.ts'
 import { AppError } from '../platform/errors/index.ts'
 import type { EventPublisher } from '../platform/events/index.ts'
 import type { JobSender } from '../platform/jobs/index.ts'
+import { campaignSummaries } from './read-models/campaigns.ts'
 
 const IdParams = z.object({ id: z.uuid() })
 const SlotParams = z.object({ id: z.uuid(), targetId: z.uuid() })
@@ -41,6 +58,13 @@ export function registerCampaigns(app: FastifyInstance, deps: CampaignsDeps): vo
   const notFound = (id: string) => new AppError('NOT_FOUND', 404, { message: 'Chiến dịch không tồn tại', details: { campaignId: id } })
 
   app.get('/api/v1/campaigns/page-options', async (): Promise<CampaignPageOptionsResponse> => ({ items: await listPageOptions(db) }))
+
+  app.get('/api/v1/campaigns', async (req): Promise<CampaignListResponse> => {
+    const { scope } = CampaignListQuery.parse(req.query ?? {})
+    // Không phạm vi / "tất cả" → mọi chiến dịch; nhóm / trang → giao `campaign_pages` (nhóm / trang lạ → 404).
+    const pageIds = scope && scope.kind !== 'all' ? await resolveScope(db, scope) : null
+    return { items: await campaignSummaries(db, await listCampaigns(db, pageIds), now()) }
+  })
 
   app.post('/api/v1/campaigns', async (req, reply): Promise<CampaignDto> => {
     const input = SaveCampaignRequest.parse(req.body ?? {})
@@ -67,6 +91,15 @@ export function registerCampaigns(app: FastifyInstance, deps: CampaignsDeps): vo
   })
 
   if (jobs && events) {
+    app.post('/api/v1/campaigns/:id/start', async (req): Promise<StartCampaignResponse> => {
+      const { id } = IdParams.parse(req.params)
+      const input = StartCampaignRequest.parse(req.body ?? {})
+      const at = now()
+      const result = await db.transaction((tx) => startCampaign(tx, { jobs, events, now: () => at }, id, input, at))
+      const [campaign] = await campaignSummaries(db, [(await getCampaign(db, id))!], now())
+      return { campaign: campaign!, alreadyStarted: result.alreadyStarted }
+    })
+
     app.post('/api/v1/campaigns/:id/slots/:targetId/transition', async (req): Promise<CampaignPreviewResponse> => {
       const { id, targetId } = SlotParams.parse(req.params)
       const input = CampaignSlotActionRequest.parse(req.body ?? {})

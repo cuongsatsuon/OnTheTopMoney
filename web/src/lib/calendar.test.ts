@@ -17,10 +17,12 @@ import {
   groupPages,
   groupTitle,
   groupsByDay,
+  isCampaignGroup,
   mondayOf,
   monthGrid,
   moveRefusal,
   moveToast,
+  partialRunMessage,
   planMove,
   rangeOfDays,
   todayKey,
@@ -47,6 +49,7 @@ const item = (n: number, over: Partial<CalendarItemDto> = {}): CalendarItemDto =
   source: 'manual',
   campaignId: null,
   title: 'Ưu đãi cuối tuần',
+  topic: null,
   thumbnailUrl: null,
   ...over,
 })
@@ -101,7 +104,7 @@ describe('gom target thành bài trên lịch', () => {
     expect(groups[2]!.items.map((i) => i.pageId)).toEqual([id(1), id(2)])
     expect(groupsByDay(groups).get('2026-10-31')).toHaveLength(2)
     expect(calendarCounts(groups)).toEqual({ failed: 1, pending: 0 })
-    expect(groupTitle({ title: null })).toBe('Bài chỉ có ảnh')
+    expect(groupTitle({ title: null, status: 'scheduled', topic: null })).toBe('Bài chỉ có ảnh')
     expect(groupPages(groups[2]!, [{ id: id(2) }, { id: id(9) }, { id: id(1) }])).toEqual([{ id: id(2) }, { id: id(1) }])
   })
 
@@ -181,5 +184,31 @@ describe('ngăn chi tiết', () => {
     const key = calendarKey('all', SAT, SAT)
     expect(hintInvalidates(key[0], 'post_target')).toBe(true)
     expect(hintInvalidates(key[0], 'message')).toBe(false)
+  })
+
+  it('SSE campaign.* (bắt đầu chiến dịch) làm cũ lịch và danh sách chiến dịch', () => {
+    const key = calendarKey('all', SAT, SAT)
+    expect(hintInvalidates(key[0], 'campaign')).toBe(true)
+    expect(hintInvalidates('campaigns', 'campaign')).toBe(true)
+  })
+})
+
+describe('slot chiến dịch trên lịch (Story 7.3)', () => {
+  it('ô `planned` chưa viết → "AI sẽ viết · <chủ đề>"; đã có caption giữ tiêu đề; slot chiến dịch không bỏ lịch / mở Soạn bài', () => {
+    const [planned] = groupCalendarItems([item(1, { status: 'planned', title: null, topic: 'Mẹo hay', ai: true, source: 'campaign', campaignId: id(77) })])
+    expect(groupTitle(planned!)).toBe('AI sẽ viết · Mẹo hay')
+    expect(groupTitle({ title: null, status: 'planned', topic: null })).toBe('AI sẽ viết')
+    expect(groupTitle({ title: 'Bài AI đã viết', status: 'pending_approval', topic: 'Mẹo hay' })).toBe('Bài AI đã viết')
+    expect(planned!.ai).toBe(true)
+    expect(isCampaignGroup(planned!)).toBe(true)
+    expect(isCampaignGroup(groupCalendarItems([item(2)])[0]!)).toBe(false)
+    // Lịch chưa kéo được slot `planned` (7.4 có duyệt / đổi giờ).
+    expect(canDrag(planned!)).toBe(false)
+  })
+
+  it('chạy nhiều request lỗi giữa chừng → "Đã xong k/n bài — <lỗi>"; chưa bài nào xong / chỉ một bài → chỉ câu lỗi', () => {
+    expect(partialRunMessage(2, 3, 'Trạng thái bài vừa đổi')).toBe('Đã xong 2/3 bài — Trạng thái bài vừa đổi')
+    expect(partialRunMessage(0, 3, 'Lỗi')).toBe('Lỗi')
+    expect(partialRunMessage(0, 1, 'Lỗi')).toBe('Lỗi')
   })
 })

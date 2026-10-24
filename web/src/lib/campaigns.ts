@@ -6,12 +6,18 @@
 // Story 7.2: bước 4 xem trước 7 bài đầu (`GET /campaigns/:id/preview`, hỏi lại khi còn bài đang viết; SSE `post_target.*`
 // làm cũ) + Sửa / Xoá / Tạo lại (`POST /campaigns/:id/slots/:targetId/transition` với `version`); PUT mang
 // `baseUpdatedAt` để không đè nháp đã đổi ở tab khác.
+// Story 7.3: "Bắt đầu chiến dịch" (`POST /campaigns/:id/start` — lỗi trang / ngày về đúng bước như khi lưu) và danh sách
+// chiến dịch kèm tiến độ (`GET /campaigns?scope=`) cho `/chien-dich` + thẻ ở Tổng quan.
 // Phần thuần tách khỏi hook để test được (campaigns.test.ts).
 import {
   CampaignDto,
+  CampaignListResponse,
   CampaignPageOptionsResponse,
   CampaignPreviewResponse,
   SaveCampaignRequest,
+  StartCampaignResponse,
+  type CampaignStatus,
+  type CampaignSummaryDto,
   type CampaignSlotActionRequest,
   type CampaignSlotDto,
   type ErrorCode,
@@ -31,8 +37,9 @@ import {
 } from '@ottm/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiFetch, isApiError } from './api'
-import { todayKey } from './calendar'
+import { CALENDAR_ROOT_KEY, todayKey } from './calendar'
 import { aiErrorText, imageFailureText } from './composer'
+import { serverScope } from './inbox'
 
 /** Tham số URL của nháp đang mở (`/chien-dich/tao?id=<campaignId>`). */
 export const CAMPAIGN_PARAM = 'id'
@@ -344,6 +351,14 @@ export function serverCampaignErrors(err: unknown, body: SaveCampaignRequest): C
   return out.step === null ? null : out
 }
 
+/**
+ * Lỗi "Bắt đầu chiến dịch" (Story 7.3): server kiểm cấu hình ĐÃ LƯU nên `pages[i]` đánh theo thứ tự trang đã lưu — form
+ * có thể đã bỏ trang vừa mất kết nối / gỡ (`activePages`), map theo `body` thì câu lỗi rơi vào trang khác.
+ */
+export function startCampaignErrors(err: unknown, body: SaveCampaignRequest, saved: Pick<CampaignDto, 'pages'> | undefined): CampaignErrors | null {
+  return serverCampaignErrors(err, saved ? { ...body, pages: saved.pages } : body)
+}
+
 /* ---------- Xem trước 7 bài đầu (Story 7.2) ---------- */
 
 /** Khoảng hỏi lại khi còn bài AI đang viết / đang tạo ảnh (SSE vẫn làm cũ ngay khi có sự kiện). */
@@ -445,5 +460,83 @@ export function useSlotAction(campaignId: string) {
     onSuccess: (data) => qc.setQueryData(campaignPreviewKey(campaignId), data),
     // 409 (bài vừa đổi) → tải lại để thấy bản mới.
     onError: () => void qc.invalidateQueries({ queryKey: campaignPreviewKey(campaignId) }),
+  })
+}
+
+/* ---------- Bắt đầu chiến dịch + danh sách (Story 7.3) ---------- */
+
+export const CAMPAIGN_STATUS_TEXT: Record<CampaignStatus, string> = { running: 'Đang chạy', paused: 'Tạm dừng', done: 'Đã xong', draft: 'Bản nháp' }
+
+/** Toast sau khi bấm "Bắt đầu chiến dịch" (bấm hai lần → chiến dịch đã chạy từ trước, không đổi gì). */
+export function startedToast(res: StartCampaignResponse): string {
+  const c = res.campaign
+  return res.alreadyStarted ? `“${c.name}” đã bắt đầu từ trước` : `Đã bắt đầu “${c.name}” — ${c.postsTotal} bài trên Lịch nội dung`
+}
+
+/** % tiến độ theo bài (đã đăng / tổng). */
+export const campaignPct = (c: Pick<CampaignSummaryDto, 'postsDone' | 'postsTotal'>) => (c.postsTotal ? Math.round((c.postsDone / c.postsTotal) * 100) : 0)
+
+/** "Hôm nay 19:30" / "Mai 11:30" / "T2, 26/10 · 19:30" theo giờ VN. */
+export function relativeVnTime(iso: string, now = Date.now()): string {
+  const vn = new Date(Date.parse(iso) + 7 * 60 * 60_000).toISOString()
+  const day = vn.slice(0, 10)
+  const time = vn.slice(11, 16)
+  const today = todayKey(now)
+  if (day === today) return `Hôm nay ${time}`
+  if (day === addDaysKey(today, 1)) return `Mai ${time}`
+  return `${dayLabel(day)} · ${time}`
+}
+
+/** Dòng "Bài tiếp theo" của thẻ chiến dịch. */
+export function nextPostLabel(c: Pick<CampaignSummaryDto, 'status' | 'nextPost'>, now = Date.now()): string {
+  if (c.status === 'draft') return 'Chưa bắt đầu'
+  if (c.status === 'paused') return 'Đang tạm dừng'
+  if (c.status === 'done') return 'Đã xong'
+  return c.nextPost ? relativeVnTime(c.nextPost, now) : 'Chưa có bài sắp đăng'
+}
+
+/** Tổng bài đã đăng trong `trend` (7 ngày gần nhất). */
+export const trendTotal = (trend: readonly number[]) => trend.reduce((n, v) => n + v, 0)
+
+/** Số chiến dịch theo trạng thái + tổng (tab ở `/chien-dich`). */
+export function campaignCounts(items: readonly Pick<CampaignSummaryDto, 'status'>[]): Record<CampaignStatus | 'all', number> {
+  const out: Record<CampaignStatus | 'all', number> = { all: items.length, draft: 0, running: 0, paused: 0, done: 0 }
+  for (const c of items) out[c.status]++
+  return out
+}
+
+/** Thẻ "Chiến dịch đang chạy" ở Tổng quan: đang chạy + tạm dừng. */
+export const activeCampaigns = <T extends Pick<CampaignSummaryDto, 'status'>>(items: readonly T[]): T[] =>
+  items.filter((c) => c.status === 'running' || c.status === 'paused')
+
+export const CAMPAIGNS_LIST_ROOT = ['campaigns', 'list'] as const
+export const campaignsListKey = (scope: string | null) => [...CAMPAIGNS_LIST_ROOT, scope] as const
+
+const EMPTY_LIST: CampaignListResponse = { items: [] }
+
+/** Chiến dịch theo Phạm vi (mọi trạng thái). Phạm vi trỏ tới trang / nhóm của kho mẫu → rỗng (không hỏi server). */
+export function useCampaigns(scope: Scope) {
+  const param = serverScope(scope)
+  return useQuery({
+    queryKey: campaignsListKey(param),
+    queryFn: ({ signal }) => {
+      if (param === null) return Promise.resolve(EMPTY_LIST)
+      return apiFetch(`/campaigns?${new URLSearchParams({ scope: param })}`, { schema: CampaignListResponse, signal })
+    },
+    select: (data) => data.items,
+  })
+}
+
+/** "Bắt đầu chiến dịch": xong → làm cũ danh sách chiến dịch + Lịch nội dung (slot vừa tạo). */
+export function useStartCampaign() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, baseUpdatedAt }: { id: string; baseUpdatedAt?: string | undefined }) =>
+      apiFetch(`/campaigns/${id}/start`, { method: 'POST', body: baseUpdatedAt ? { baseUpdatedAt } : {}, schema: StartCampaignResponse }),
+    onSuccess: (res) => {
+      qc.setQueryData(campaignKey(res.campaign.id), res.campaign)
+      void qc.invalidateQueries({ queryKey: ['campaigns'] })
+      void qc.invalidateQueries({ queryKey: CALENDAR_ROOT_KEY })
+    },
   })
 }

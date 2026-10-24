@@ -58,6 +58,8 @@ export const EVENTS = {
   // Story 7.2: nội dung / trạng thái slot đổi ngoài request của chủ shop (AI sinh xong caption / ảnh) hoặc do Sửa / Tạo lại
   // — web làm cũ xem trước chiến dịch + Lịch.
   'post_target.updated': event(true, { pageId: Id, campaignId: Id.nullable() }),
+  // Story 7.3: chiến dịch vừa bắt đầu (cả lịch slot vừa được tạo) — web làm cũ danh sách chiến dịch + Lịch nội dung.
+  'campaign.started': event(true, {}),
   'campaign.paused': event(true, { reason: PauseReason }),
   'campaign.resumed': event(true, {}),
   'campaign.completed': event(true, {}),

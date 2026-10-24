@@ -49,6 +49,8 @@ export function entityMatches(root: unknown, entity: string): boolean {
  * - Story 7.1: `page` (mất kết nối / kết nối lại / gỡ) → trang chọn được của wizard chiến dịch `['campaigns', …]`.
  * - Story 7.2: `post_target` (AI viết xong bài xem trước `post_target.updated`, xoá, đăng) → xem trước chiến dịch
  *   `['campaigns', id, 'preview']`.
+ * - Story 7.3: `campaign` (`campaign.started` — cả lịch slot vừa tạo; tạm dừng / tiếp tục / xong) → danh sách chiến dịch
+ *   `['campaigns', …]` (chính thực thể) + Lịch nội dung `['post_targets', …]`.
  */
 export const ENTITY_ALSO_INVALIDATES: Readonly<Record<string, readonly string[]>> = {
   openai_key: ['settings', 'onboarding'],
@@ -60,6 +62,7 @@ export const ENTITY_ALSO_INVALIDATES: Readonly<Record<string, readonly string[]>
   conversation: ['message', 'contact'],
   // Story 6.4: target đăng xong / lỗi → bài đang mở ở Soạn bài `['posts', id]`. Story 7.2: bài xem trước chiến dịch.
   post_target: ['post', 'campaign'],
+  campaign: ['post_target'],
 }
 
 /**

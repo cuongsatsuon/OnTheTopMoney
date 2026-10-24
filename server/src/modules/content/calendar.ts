@@ -53,6 +53,7 @@ export async function listCalendar(db: DbExecutor, range: CalendarRange): Promis
       aiMedia,
       thumbnail,
       source: posts.source,
+      topic: posts.topic,
       campaignId: postTargets.campaignId,
     })
     .from(postTargets)
@@ -85,6 +86,7 @@ export async function listCalendar(db: DbExecutor, range: CalendarRange): Promis
       source: r.source as PostSource,
       campaignId: r.campaignId,
       title: calendarTitle(r.caption),
+      topic: r.topic,
       thumbnailUrl: r.thumbnail,
     }),
   )

@@ -3,7 +3,8 @@
 // trang tồn tại + chọn được (`pages.ts`), nhóm nhãn tồn tại và chứa các trang, ngày bắt đầu không ở quá khứ (giờ VN).
 // Mọi lỗi gom thành một `VALIDATION_FAILED` với `path` trỏ đúng ô (FE báo dưới ô, về đúng bước).
 // Story 7.2: bài xem trước đồng bộ theo cấu hình ở `preview.ts` (route gọi trong cùng transaction lưu). PUT mang
-// `baseUpdatedAt` khác bản hiện tại → 409 (nháp đã đổi ở tab khác). Chưa đổi trạng thái chiến dịch (7.3+).
+// `baseUpdatedAt` khác bản hiện tại → 409 (nháp đã đổi ở tab khác). Story 7.3: "Bắt đầu" (`start.ts`) kiểm lại cấu hình
+// đã lưu bằng chính `assertDraftValid` (trang có thể đã gỡ / mất kết nối / mất hồ sơ sau lúc lưu).
 import {
   CAMPAIGN_START_MAX_AHEAD_DAYS,
   type CampaignDto,
@@ -40,7 +41,7 @@ const VN_OFFSET_MS = 7 * 60 * 60_000
 /** Ngày lịch VN (`YYYY-MM-DD`) của thời điểm `at`, dời `days` ngày. */
 const vnDate = (at: Date, days = 0) => new Date(at.getTime() + VN_OFFSET_MS + days * DAY_MS).toISOString().slice(0, 10)
 
-async function assertDraftValid(db: DbExecutor, input: ParsedSaveCampaignRequest, now: Date): Promise<void> {
+export async function assertDraftValid(db: DbExecutor, input: ParsedSaveCampaignRequest, now: Date): Promise<void> {
   const issues: FieldIssue[] = []
   if (input.startDate < vnDate(now)) issues.push({ path: ['startDate'], message: 'Ngày bắt đầu đã qua' })
   else if (input.startDate > vnDate(now, CAMPAIGN_START_MAX_AHEAD_DAYS)) {
@@ -126,6 +127,7 @@ export async function getCampaign(db: DbExecutor, id: string): Promise<CampaignD
     topics: topics.map((t) => ({ name: t.name, share: t.share })),
     postTimes: row.postTimes,
     imageRatio: row.imageRatio,
+    startedAt: row.startedAt?.toISOString() ?? null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   }

@@ -3,7 +3,9 @@
 // (`failed → scheduled`), xoá (Story 6.5: mọi trạng thái trước `publishing` và `failed` → `cancelled` + `cancel_reason`,
 // phát `post_target.cancelled`). Story 7.2 (slot chiến dịch, AD-13): sửa caption bài chờ duyệt (`pending_approval →
 // pending_approval`) và tạo lại (`pending_approval → planned` — `campaigns` sinh lại), đều khoá `version` và phát
-// `post_target.updated`.
+// `post_target.updated`. Story 7.3: duyệt (`approve`: `pending_approval → scheduled`, cùng đường tới `scheduled`) — "Bắt
+// đầu chiến dịch" ở chế độ "Tự đăng" dùng cho bài xem trước (7.4 dùng cho "Bài chờ duyệt"); slot chiến dịch không bỏ lịch
+// được (không thành bài nháp).
 // - `transitionTarget`: MỘT target, khoá lạc quan `version`. Mọi chuyển tới `scheduled` gọi `assertPublishable` và kiểm
 //   giới hạn đăng/24h của nền tảng, rồi enqueue `publish.target {targetId, scheduleVersion}` `startAfter=scheduled_at`
 //   cùng transaction (AD-2). `schedule_version` tăng mỗi lần vào/rời `scheduled` hoặc đổi giờ — job cũ thấy lệch rồi bỏ
@@ -12,6 +14,7 @@
 // Phần job (`scheduled → publishing → published|failed`) ở `publish.ts`, cũng là `UPDATE` có điều kiện trạng thái.
 // Không gọi Meta ở đây.
 import {
+  CAMPAIGN_SLOT_MIN_LEAD_MS,
   PLATFORM_RULES,
   SCHEDULE_MAX_AHEAD_MS,
   type CancelReason,
@@ -48,6 +51,7 @@ export type TargetTransition =
   | { action: 'cancel'; reason: CancelReason }
   | { action: 'edit'; caption: string }
   | { action: 'regenerate' }
+  | { action: 'approve'; at: Date }
 
 /** Trạng thái nguồn hợp lệ của từng hành động (bảng AD-13). */
 const FROM: Record<TargetTransition['action'], readonly PostTargetStatus[]> = {
@@ -59,9 +63,10 @@ const FROM: Record<TargetTransition['action'], readonly PostTargetStatus[]> = {
   cancel: ['planned', 'draft', 'pending_approval', 'scheduled', 'failed'],
   edit: ['pending_approval'],
   regenerate: ['pending_approval'],
+  approve: ['pending_approval'],
 }
 
-/** Hành động đưa target tới `scheduled` (qua luật nền tảng + giới hạn/24h). */
+/** Hành động của chủ shop đưa target tới `scheduled` (qua luật nền tảng + giới hạn/24h); `approve` cũng vậy. */
 const TO_SCHEDULED: readonly TargetAction[] = ['schedule', 'reschedule', 'retry']
 
 const DAY_MS = 24 * 60 * 60_000
@@ -77,6 +82,16 @@ async function dailyLimitOf(tx: DbExecutor, pageId: string): Promise<number | nu
 /** Khoá advisory theo trang tới hết transaction (lấy lại trong cùng transaction không chờ). */
 async function lockDailyLimit(tx: DbExecutor, pageId: string): Promise<void> {
   await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`publish_limit:${pageId}`}, 0))`)
+}
+
+/**
+ * Lấy trước khoá giới hạn/24h của các trang (chỉ trang có `dailyPublishMax`) theo `pageId` tăng dần — bên gọi chuyển nhiều
+ * target tới `scheduled` trong một transaction gọi trước vòng lặp, để hai transaction không khoá chéo nhau.
+ */
+export async function lockDailyLimits(tx: DbExecutor, pageIds: readonly string[]): Promise<void> {
+  for (const pageId of [...new Set(pageIds)].sort()) {
+    if ((await dailyLimitOf(tx, pageId)) !== null) await lockDailyLimit(tx, pageId)
+  }
 }
 
 /**
@@ -174,6 +189,10 @@ export async function transitionTarget(
   }
 
   if (transition.action === 'unschedule') {
+    // Slot chiến dịch không về nháp (nháp là của Soạn bài); muốn bỏ bài thì Xoá.
+    if (target.campaignId !== null) {
+      throw new AppError('VERSION_CONFLICT', 409, { message: 'Bài chiến dịch không bỏ lịch được', details: { targetId, campaignId: target.campaignId } })
+    }
     await tx
       .update(postTargets)
       .set({
@@ -189,7 +208,9 @@ export async function transitionTarget(
 
   const at = transition.at === 'now' ? now : transition.at
   if (transition.at !== 'now') {
-    if (at.getTime() <= now.getTime()) {
+    // Duyệt bài chiến dịch: còn dưới `CAMPAIGN_SLOT_MIN_LEAD_MS` cũng coi là đã qua (AD-15) — FE hỏi giờ mới.
+    const lead = transition.action === 'approve' ? CAMPAIGN_SLOT_MIN_LEAD_MS : 0
+    if (at.getTime() <= now.getTime() + lead) {
       throw new AppError('SCHEDULE_IN_PAST', 422, { message: 'Thời gian đăng đã qua', details: { targetId } })
     }
     if (at.getTime() - now.getTime() > SCHEDULE_MAX_AHEAD_MS) {
@@ -239,11 +260,7 @@ export async function transitionPostTargets(
   const stranger = ids.find((id) => !ownedIds.has(id))
   if (stranger) throw new AppError('NOT_FOUND', 404, { message: 'Đích không thuộc bài này', details: { postId, targetId: stranger } })
 
-  if (TO_SCHEDULED.includes(input.action)) {
-    for (const pageId of [...new Set(owned.map((t) => t.pageId))].sort()) {
-      if ((await dailyLimitOf(tx, pageId)) !== null) await lockDailyLimit(tx, pageId)
-    }
-  }
+  if (TO_SCHEDULED.includes(input.action)) await lockDailyLimits(tx, owned.map((t) => t.pageId))
 
   const transition: TargetTransition =
     input.action === 'unschedule'

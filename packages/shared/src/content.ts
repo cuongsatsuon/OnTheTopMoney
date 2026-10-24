@@ -348,6 +348,8 @@ export const CalendarItemDto = z.object({
   source: PostSource,
   campaignId: z.uuid().nullable(),
   title: z.string().nullable(),
+  /** Story 7.3: ý tưởng / chủ đề của bài — slot chiến dịch chưa viết (`planned`, caption rỗng) hiện "AI sẽ viết · <chủ đề>". */
+  topic: z.string().nullable(),
   thumbnailUrl: z.url().nullable(),
 })
 export type CalendarItemDto = z.infer<typeof CalendarItemDto>

@@ -2,6 +2,8 @@
 // lịch" theo tuần / tháng giờ VN. Kéo thả và các nút ở ngăn chi tiết đều gọi `POST /posts/:id/targets/transition` có sẵn
 // (đổi giờ, đăng lại, bỏ lịch, xoá). Bài lỗi màu đỏ, mở ra thấy lý do theo `ErrorCode` + "Đăng lại". Logic lưới / gom /
 // kéo thả ở `lib/calendar.ts`.
+// Story 7.3: slot chiến dịch (chấm tím "AI tạo"; chưa viết → "AI sẽ viết · <chủ đề>") không "Bỏ lịch" / "Mở ở Soạn bài";
+// chạy nhiều request (ô gom nhiều bài) mà lỗi giữa chừng → báo đã xong bao nhiêu bài.
 import type { CalendarItemDto, PageDto, Platform, PostTargetStatus } from '@ottm/shared'
 import { AlertTriangle, CalendarX, Check, ChevronLeft, ChevronRight, Clock, ExternalLink, Loader2, Megaphone, Pencil, Plus, RotateCcw, Send, Trash2 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
@@ -24,11 +26,13 @@ import {
   groupPages,
   groupTitle,
   groupsByDay,
+  isCampaignGroup,
   mondayOf,
   monthGrid,
   monthOf,
   moveRefusal,
   moveToast,
+  partialRunMessage,
   planMove,
   rangeOfDays,
   todayKey,
@@ -129,14 +133,18 @@ export default function ContentCalendar() {
     if (view === 'week' && weekScroll.current && scrollRow.current) weekScroll.current.scrollTop = scrollRow.current.offsetTop
   }, [view])
 
-  /* --- Gọi chuyển trạng thái (mỗi bài một request) --- */
+  /* --- Gọi chuyển trạng thái (mỗi bài một request; lỗi giữa chừng → nói rõ đã xong bao nhiêu bài) --- */
   async function run(calls: TransitionCall[], done: string, after?: () => void) {
+    let ok = 0
     try {
-      for (const c of calls) await transition.mutateAsync(c)
+      for (const c of calls) {
+        await transition.mutateAsync(c)
+        ok++
+      }
       notify(done)
       after?.()
     } catch (err) {
-      notify(transitionErrorMessage(err, pages))
+      notify(partialRunMessage(ok, calls.length, transitionErrorMessage(err, pages)))
     }
   }
 
@@ -458,16 +466,18 @@ function GroupDrawer({
             </Button>
           )}
           <div className="ml-auto flex flex-wrap gap-2">
-            {group.postIds.length === 1 && (
+            {group.postIds.length === 1 && !isCampaignGroup(group) && (
               <Button size="sm" icon={<Pencil size={14} />} onClick={onEdit}>
                 Mở ở Soạn bài
               </Button>
             )}
             {group.status === 'scheduled' && (
               <>
-                <Button size="sm" icon={<CalendarX size={14} />} disabled={busy} onClick={() => onRun(groupCalls(group, 'unschedule'), `Đã bỏ lịch ${n} trang — bài về nháp ở Soạn bài`)}>
-                  Bỏ lịch
-                </Button>
+                {!isCampaignGroup(group) && (
+                  <Button size="sm" icon={<CalendarX size={14} />} disabled={busy} onClick={() => onRun(groupCalls(group, 'unschedule'), `Đã bỏ lịch ${n} trang — bài về nháp ở Soạn bài`)}>
+                    Bỏ lịch
+                  </Button>
+                )}
                 <Button
                   variant="primary"
                   size="sm"

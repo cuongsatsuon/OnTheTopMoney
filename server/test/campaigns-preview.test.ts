@@ -379,7 +379,7 @@ describe('job campaigns.preview — lỗi', () => {
   it('chiến dịch không còn nháp → job bỏ qua', async () => {
     const fb = await page('facebook')
     const c = await created(body([{ pageId: fb, frequency: null }]))
-    await handle.sql`update campaigns set status = 'running' where id = ${c.id}`
+    await handle.sql`update campaigns set status = 'running', started_at = now() where id = ${c.id}`
     expect(await runJob(c.id)).toBe('skipped')
     expect(openai.responseRequests).toHaveLength(0)
   })
@@ -469,7 +469,7 @@ describe('POST /campaigns/:id/slots/:targetId/transition', () => {
     const stranger = await action(other.id, s.id, { action: 'cancel', version: s.version })
     expect([stranger.statusCode, errorOf(stranger).code]).toEqual([404, 'NOT_FOUND'])
     expect((await api('GET', '/api/v1/campaigns/0190a000-0000-7000-8000-000000000000/preview')).statusCode).toBe(404)
-    await handle.sql`update campaigns set status = 'running' where id = ${c.id}`
+    await handle.sql`update campaigns set status = 'running', started_at = now() where id = ${c.id}`
     const running = await action(c.id, s.id, { action: 'cancel', version: s.version })
     expect([running.statusCode, errorOf(running).code]).toEqual([409, 'VERSION_CONFLICT'])
     expect((await api('GET', `/api/v1/campaigns/${c.id}/preview`, undefined, false)).statusCode).toBe(401)

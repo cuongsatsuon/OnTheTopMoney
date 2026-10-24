@@ -3,7 +3,9 @@
 // tỉ lệ ảnh AI, chế độ duyệt. Sang bước 4 thì lưu nháp (`POST`/`PUT /campaigns`, URL thành `?id=<id>` để mở lại);
 // lỗi validate (web kiểm sớm bằng schema shared, server kiểm lại) về đúng bước, báo dưới ô.
 // Story 7.2: bước 4 xem trước 7 bài đầu — AI viết trên worker (slot thật của chiến dịch, chưa đăng được), thẻ tự cập nhật
-// (SSE + hỏi lại khi còn bài đang viết); Sửa / Xoá / Tạo lại từng bài. "Bắt đầu chiến dịch" (Story 7.3) khoá "Sắp có".
+// (SSE + hỏi lại khi còn bài đang viết); Sửa / Xoá / Tạo lại từng bài.
+// Story 7.3: "Bắt đầu chiến dịch" — server kiểm lại trang / ngày (lỗi về đúng bước như khi lưu), tạo đủ lịch bài; xong thì
+// sang Lịch nội dung. Bấm hai lần không tạo trùng (server trả "đã bắt đầu").
 import { type CampaignDuration, type CampaignFrequency, type CampaignGoal, type CampaignSlotDto, type PageDto, CAMPAIGN_FREQUENCIES } from '@ottm/shared'
 import {
   ArrowLeft,
@@ -83,6 +85,8 @@ import {
   slotPhase,
   slotWhen,
   splitEven,
+  startCampaignErrors,
+  startedToast,
   stepHasErrors,
   targetPages,
   topicSum,
@@ -91,6 +95,7 @@ import {
   useCampaignPreview,
   useSaveCampaign,
   useSlotAction,
+  useStartCampaign,
   validateCampaign,
   type CampaignErrors,
   type CampaignForm,
@@ -124,6 +129,7 @@ export default function CampaignWizard() {
   const optionsQuery = useCampaignPageOptions()
   const campaignQuery = useCampaign(campaignId)
   const save = useSaveCampaign()
+  const startMut = useStartCampaign()
 
   const [step, setStep] = useState(1)
   const [maxStep, setMaxStep] = useState(1)
@@ -272,6 +278,28 @@ export default function CampaignWizard() {
         },
         onError: (err) => {
           const fromServer = serverCampaignErrors(err, body)
+          if (fromServer) {
+            setErrors(fromServer)
+            show(fromServer.step!)
+          } else notify(isApiError(err) && err.code === 'VERSION_CONFLICT' ? DRAFT_CONFLICT_TEXT : errorMessageOf(err))
+        },
+      },
+    )
+  }
+
+  /** "Bắt đầu chiến dịch": lỗi trang / ngày (server kiểm lại) → về đúng bước như khi lưu; xong → Lịch nội dung. */
+  const begin = () => {
+    if (!campaignId) return
+    startMut.mutate(
+      { id: campaignId, baseUpdatedAt: baseUpdatedAt ?? undefined },
+      {
+        onSuccess: (res) => {
+          notify(startedToast(res))
+          navigate('/lich')
+        },
+        onError: (err) => {
+          // Lỗi theo trang đánh chỉ số theo danh sách trang đã lưu (form có thể đã bỏ trang vừa mất kết nối).
+          const fromServer = startCampaignErrors(err, body, campaignQuery.data)
           if (fromServer) {
             setErrors(fromServer)
             show(fromServer.step!)
@@ -649,6 +677,12 @@ export default function CampaignWizard() {
                     <div className="mt-0.5 text-[13px] text-muted-foreground">
                       Quay lại các bước trước để chỉnh; mỗi lần sang bước này cấu hình được lưu lại và bài xem trước không còn khớp sẽ được viết lại.
                     </div>
+                    <div className="mt-1 text-[13px] text-muted-foreground">
+                      Bấm “Bắt đầu chiến dịch”: {totals.posts} bài lên Lịch nội dung,{' '}
+                      {form.mode === 'review'
+                        ? 'mỗi bài chỉ đăng sau khi bạn duyệt.'
+                        : 'bài xem trước đã viết xong được lên lịch đăng ngay; bài AI lỗi vẫn chờ bạn duyệt.'}
+                    </div>
                   </div>
                 </div>
                 {campaignId && <PreviewList campaignId={campaignId} pages={allPages} />}
@@ -765,8 +799,8 @@ export default function CampaignWizard() {
               {step === 3 ? (save.isPending ? 'Đang lưu…' : 'Lưu và tiếp tục') : 'Tiếp tục'} <ArrowRight size={15} />
             </Button>
           ) : (
-            <Button variant="primary" icon={<Rocket size={15} />} disabled title="Sắp có">
-              Bắt đầu chiến dịch
+            <Button variant="primary" icon={<Rocket size={15} />} disabled={!campaignId || save.isPending || startMut.isPending} onClick={begin}>
+              {startMut.isPending ? 'Đang bắt đầu…' : 'Bắt đầu chiến dịch'}
             </Button>
           )}
         </div>

@@ -4,7 +4,10 @@
 // Helper thuần (`campaignPostsOnDay`, `campaignImageRatio`) dùng cho tóm tắt ở wizard và cho việc tạo slot (7.2/7.3).
 // Story 7.2: luật slot chung `campaignSlots` (ngày/giờ, chủ đề theo tỉ lệ, slot nào có ảnh) — nguồn DUY NHẤT cho 7 bài
 // xem trước và phần slot còn lại lúc "Bắt đầu" (7.3), để hai lần tạo trùng khoá `(campaign_id, page_id, slot_at)`.
+// Story 7.3: "Bắt đầu chiến dịch" (`StartCampaignRequest`) + danh sách chiến dịch kèm tiến độ dẫn xuất
+// (`CampaignSummaryDto`, ghép ở read-model của server — AD-18) cho `/chien-dich` và Tổng quan.
 import { z } from 'zod'
+import { ScopeParam } from './scope.ts'
 import { MediaAssetDto, POST_CAPTION_MAX, POST_TARGETS_MAX } from './content.ts'
 import { CampaignFrequency, CampaignGoal, CampaignMode, CampaignStatus, PostTargetStatus, type Platform } from './enums.ts'
 import { ErrorCode } from './errors.ts'
@@ -207,6 +210,8 @@ export const CampaignDto = z.object({
   /** Giờ VN `HH:MM`, tăng dần. */
   postTimes: z.array(z.string()),
   imageRatio: z.number().int(),
+  /** Story 7.3: lúc bấm "Bắt đầu chiến dịch"; `null` khi còn nháp. */
+  startedAt: IsoDateTime.nullable(),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 })
@@ -276,3 +281,49 @@ export const CampaignSlotActionRequest = z.discriminatedUnion('action', [
 ])
 export type CampaignSlotActionRequest = z.input<typeof CampaignSlotActionRequest>
 export type ParsedCampaignSlotActionRequest = z.output<typeof CampaignSlotActionRequest>
+
+/* ---------- Bắt đầu chiến dịch + danh sách (Story 7.3) ---------- */
+
+/**
+ * Bài chiến dịch phải còn ít nhất chừng này tới giờ đăng mới lên lịch được (bắt đầu ở chế độ "Tự đăng", duyệt bài —
+ * AD-15: "giờ đã qua hoặc còn dưới 2 phút → `SCHEDULE_IN_PAST`"). Slot kế hoạch đã qua mốc này lúc bắt đầu thì không tạo.
+ */
+export const CAMPAIGN_SLOT_MIN_LEAD_MS = 2 * 60_000
+/** Số ngày của `trend` (bài đã đăng mỗi ngày VN, cũ → hôm nay). */
+export const CAMPAIGN_TREND_DAYS = 7
+
+/**
+ * Body `POST /api/v1/campaigns/:id/start`. `baseUpdatedAt` = `updatedAt` của nháp wizard đang xem — khác bản hiện tại →
+ * 409 (nháp đã đổi ở tab khác). Chiến dịch đã bắt đầu thì bỏ qua (bấm hai lần → `alreadyStarted`).
+ */
+export const StartCampaignRequest = z.object({ baseUpdatedAt: IsoDateTime.optional() }).strict()
+export type StartCampaignRequest = z.infer<typeof StartCampaignRequest>
+
+/**
+ * Chiến dịch kèm tiến độ dẫn xuất (AD-18, ghép ở `app/read-models/campaigns.ts`) cho thẻ ở `/chien-dich` và Tổng quan:
+ * - `postsTotal`: nháp = số bài theo kế hoạch; đã bắt đầu = slot chưa huỷ. `postsDone` = đã đăng.
+ * - `postsPending`: bài chờ duyệt (đã bắt đầu). `nextPost`: giờ đăng dự kiến sớm nhất còn tới (ISO), `null` khi không có.
+ * - `trend`: `CAMPAIGN_TREND_DAYS` số — bài đã đăng mỗi ngày VN, cũ → hôm nay (chưa có số liệu tương tác — Epic 8).
+ * - `daysDone`: số ngày chiến dịch đã qua (0 khi nháp / ngày đầu; `done` = `durationDays`).
+ */
+export const CampaignSummaryDto = CampaignDto.extend({
+  postsTotal: z.number().int().nonnegative(),
+  postsDone: z.number().int().nonnegative(),
+  postsPending: z.number().int().nonnegative(),
+  nextPost: IsoDateTime.nullable(),
+  trend: z.array(z.number().int().nonnegative()).length(CAMPAIGN_TREND_DAYS),
+  daysDone: z.number().int().nonnegative(),
+})
+export type CampaignSummaryDto = z.infer<typeof CampaignSummaryDto>
+
+/** `POST /api/v1/campaigns/:id/start` → 200. `alreadyStarted` = chiến dịch đã rời nháp từ trước (không đổi gì). */
+export const StartCampaignResponse = z.object({ campaign: CampaignSummaryDto, alreadyStarted: z.boolean() })
+export type StartCampaignResponse = z.infer<typeof StartCampaignResponse>
+
+/** Query `GET /api/v1/campaigns`: chiến dịch thuộc phạm vi khi `campaign_pages` giao tập trang của phạm vi (AD-18). */
+export const CampaignListQuery = z.object({ scope: ScopeParam.optional() }).strict()
+export type CampaignListQuery = z.input<typeof CampaignListQuery>
+
+/** `GET /api/v1/campaigns` → 200, mọi trạng thái (gồm nháp), mới tạo trước. */
+export const CampaignListResponse = z.object({ items: z.array(CampaignSummaryDto) })
+export type CampaignListResponse = z.infer<typeof CampaignListResponse>

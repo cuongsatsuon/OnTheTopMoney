@@ -232,6 +232,13 @@
       "when": 1792798477294,
       "tag": "0032_sweet_steve_rogers",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1792800524332,
+      "tag": "0033_aspiring_pete_wisdom",
+      "breakpoints": true
     }
   ]
 }
