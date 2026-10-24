@@ -367,6 +367,8 @@ describe('worker thật: publish → events.notifications → thông báo; job h
         'content.media_gc': async () => {},
         'publish.target': async () => {},
         'campaigns.preview': async () => {},
+        'campaigns.generate': async () => {},
+        'campaigns.generate_window': async () => {},
         'content.requeue': async () => {},
         'events.notifications': async (job) => {
           await handleEvent(workerDeps, parseEventEnvelope(job.data))

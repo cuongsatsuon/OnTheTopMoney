@@ -7,6 +7,7 @@ import { randomBytes } from 'node:crypto'
 import {
   CampaignDto,
   CampaignPreviewResponse,
+  CampaignSlotActionResponse,
   ErrorResponse,
   SaveBrandProfileRequest,
   campaignSlots,
@@ -74,7 +75,7 @@ async function cleanup() {
   await handle.sql`delete from secrets where name = 'openai_api_key'`
   await handle.sql`delete from settings where key = 'openai'`
   await handle.sql`delete from sessions`
-  await handle.sql`delete from pgboss.job where name in ('campaigns.preview', 'content.image.generate', 'publish.target')`
+  await handle.sql`delete from pgboss.job where name in ('campaigns.preview', 'campaigns.generate', 'content.image.generate', 'publish.target')`
 }
 
 beforeAll(async () => {
@@ -418,7 +419,7 @@ describe('POST /campaigns/:id/slots/:targetId/transition', () => {
     await handle.sql`update post_targets set error_code = 'AI_POLICY_BLOCKED' where id = ${s.id}`
     const res = await action(c.id, s.id, { action: 'edit', version: s.version, caption: '  Bài shop tự viết  ' })
     expect(res.statusCode, res.body).toBe(200)
-    const after = CampaignPreviewResponse.parse(res.json()).items[0]!
+    const after = CampaignSlotActionResponse.parse(res.json()).slot
     expect(after).toMatchObject({ status: 'pending_approval', caption: 'Bài shop tự viết', errorCode: null, version: s.version + 1, aiCaption: true })
     const stale = await action(c.id, s.id, { action: 'edit', version: s.version, caption: 'Khác' })
     expect([stale.statusCode, errorOf(stale).code]).toEqual([409, 'VERSION_CONFLICT'])
@@ -447,11 +448,11 @@ describe('POST /campaigns/:id/slots/:targetId/transition', () => {
 
     const res = await action(c.id, s.id, { action: 'regenerate', version: s.version })
     expect(res.statusCode, res.body).toBe(200)
-    const again = CampaignPreviewResponse.parse(res.json())
-    expect(again.items[0]).toMatchObject({ status: 'planned', caption: '', media: [], imagePending: false, errorCode: null, aiCaption: false })
-    expect(again.generating).toBe(true)
+    const again = CampaignSlotActionResponse.parse(res.json()).slot
+    expect(again).toMatchObject({ id: s.id, status: 'planned', caption: '', media: [], imagePending: false, errorCode: null, aiCaption: false })
+    expect((await preview(c.id)).generating).toBe(true)
     expect(await jobCount('campaigns.preview')).toBe(1)
-    const planned = await action(c.id, s.id, { action: 'regenerate', version: again.items[0]!.version })
+    const planned = await action(c.id, s.id, { action: 'regenerate', version: again.version })
     expect([planned.statusCode, errorOf(planned).code]).toEqual([409, 'VERSION_CONFLICT'])
 
     const calls = openai.responseRequests.length
@@ -460,7 +461,7 @@ describe('POST /campaigns/:id/slots/:targetId/transition', () => {
     expect((await preview(c.id)).items[0]).toMatchObject({ status: 'planned', imagePending: true })
   })
 
-  it('route sai: chiến dịch lạ 404; slot của chiến dịch khác 404; chiến dịch không còn nháp 409; chưa đăng nhập 401', async () => {
+  it('route sai: chiến dịch lạ 404; slot của chiến dịch khác 404; nháp không duyệt được 409; chiến dịch đã xong 409; chưa đăng nhập 401', async () => {
     const { c, fb, slots } = await ready()
     const other = await created(body([{ pageId: fb, frequency: null }], { name: 'Khác' }))
     const s = slots[0]!
@@ -469,9 +470,11 @@ describe('POST /campaigns/:id/slots/:targetId/transition', () => {
     const stranger = await action(other.id, s.id, { action: 'cancel', version: s.version })
     expect([stranger.statusCode, errorOf(stranger).code]).toEqual([404, 'NOT_FOUND'])
     expect((await api('GET', '/api/v1/campaigns/0190a000-0000-7000-8000-000000000000/preview')).statusCode).toBe(404)
-    await handle.sql`update campaigns set status = 'running', started_at = now() where id = ${c.id}`
-    const running = await action(c.id, s.id, { action: 'cancel', version: s.version })
-    expect([running.statusCode, errorOf(running).code]).toEqual([409, 'VERSION_CONFLICT'])
+    const approveDraft = await action(c.id, s.id, { action: 'approve', version: s.version })
+    expect([approveDraft.statusCode, errorOf(approveDraft).code]).toEqual([409, 'VERSION_CONFLICT'])
+    await handle.sql`update campaigns set status = 'done', started_at = now() where id = ${c.id}`
+    const done = await action(c.id, s.id, { action: 'cancel', version: s.version })
+    expect([done.statusCode, errorOf(done).code]).toEqual([409, 'VERSION_CONFLICT'])
     expect((await api('GET', `/api/v1/campaigns/${c.id}/preview`, undefined, false)).statusCode).toBe(401)
   })
 })

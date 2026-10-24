@@ -5,7 +5,8 @@
 //   Story 6.4 thêm cột đăng (`publishing_at`, `published_at`, `PublishedRef`); Story 6.5 thêm `ai_caption`.
 // - Story 7.2: slot chiến dịch (1 post : 1 target) có `campaign_id` + `slot_at` (giờ dự kiến ban đầu, bất biến) và khoá
 //   duy nhất `(campaign_id, page_id, slot_at)`; `held` do `campaigns` bật/tắt qua `content` (AD-15) — job đăng bỏ qua
-//   target `held`. `campaign_id` KHÔNG có FK: `content` không biết bảng `campaigns` (AD-1).
+//   target `held`. `campaign_id` KHÔNG có FK: `content` không biết bảng `campaigns` (AD-1). Story 7.4: `generate_lease_until`
+//   = job đang viết slot (chiếm trước khi gọi AI — hai job không cùng viết / cùng tính tiền một slot).
 // - `media_assets` chỉ chứa ảnh bài (không logo, không đính kèm của khách); ảnh gắn vào target qua `post_target_media`.
 // - FK tới `pages`/`posts` `on delete cascade`: trang chỉ bị xoá cứng khi xoá dữ liệu theo yêu cầu (gỡ trang là soft-delete).
 import { CANCEL_REASONS, IMAGE_ERROR_CODES, MEDIA_ASSET_SOURCES, MEDIA_ASSET_STATUSES, POST_SOURCES, POST_TARGET_STATUSES } from '@ottm/shared'
@@ -53,6 +54,8 @@ export const postTargets = pgTable(
     slotAt: timestamp('slot_at', { withTimezone: true, precision: 3 }),
     /** Giữ không đăng (AD-15): bài xem trước của chiến dịch nháp, chiến dịch tạm dừng. Job `publish.target` bỏ qua. */
     held: boolean('held').notNull().default(false),
+    /** Story 7.4: job sinh nội dung đang giữ slot tới lúc này (lease tự hết hạn khi job chết giữa chừng). */
+    generateLeaseUntil: timestamp('generate_lease_until', { withTimezone: true, precision: 3 }),
     /** Khoá lạc quan (AD-13): tăng mỗi lần target đổi. */
     version: integer('version').notNull().default(0),
     /** Tăng mỗi lần đổi `scheduled_at` hoặc vào/rời `scheduled` (Story 6.4). */

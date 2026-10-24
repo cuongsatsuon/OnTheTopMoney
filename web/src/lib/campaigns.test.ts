@@ -4,6 +4,8 @@
 // được phép), `baseUpdatedAt`, SSE `post_target.*` làm cũ xem trước.
 // Story 7.3: toast bắt đầu, lỗi bắt đầu (trang / ngày) → đúng bước, thẻ chiến dịch (tiến độ, "Bài tiếp theo", đếm tab,
 // thẻ Tổng quan), SSE `campaign.*` làm cũ danh sách.
+// Story 7.4: hàng đợi "Bài chờ duyệt" (quá giờ, chặn duyệt, "Duyệt tất cả", ô giờ mới, body duyệt, `SCHEDULE_IN_PAST`),
+// vá cache xem trước từ `{slot}`, SSE `post_target.*` làm cũ hàng đợi.
 import {
   CampaignDto,
   CampaignSummaryDto,
@@ -19,7 +21,19 @@ import { ApiError } from './api'
 import { hintInvalidates } from './realtime'
 import {
   CAMPAIGN_PAGE_OPTIONS_KEY,
+  OVERDUE_TEXT,
   activePages,
+  approveBlock,
+  approveBody,
+  approveInput,
+  approvedToast,
+  bulkApprovable,
+  isOverdue,
+  needsNewTime,
+  patchPreview,
+  pendingNote,
+  pendingSlotsKey,
+  slotTime,
   addDaysKey,
   activeCampaigns,
   autoName,
@@ -239,6 +253,7 @@ const slot = (over: Partial<CampaignSlotDto>): CampaignSlotDto => ({
   postId: '0190a000-0000-7000-8000-0000000000d1',
   pageId: '0190a000-0000-7000-8000-0000000000e1',
   slotAt: '2026-10-26T04:30:00.000Z',
+  scheduledAt: null,
   topic: 'Mẹo hay',
   status: 'pending_approval',
   caption: 'Bài AI',
@@ -350,5 +365,57 @@ describe('bắt đầu chiến dịch + danh sách (Story 7.3)', () => {
     expect(key).toEqual(['campaigns', 'list', 'all'])
     expect(hintInvalidates(key[0], 'campaign')).toBe(true)
     expect(hintInvalidates(key[0], 'post_target')).toBe(true)
+  })
+})
+
+describe('hàng đợi "Bài chờ duyệt" (Story 7.4)', () => {
+  // NOW = 10:00 24/10 giờ VN; bài 11:30 ngày 24 còn 90 phút.
+  const at = (iso: string) => slot({ scheduledAt: iso })
+  it('quá giờ = đã qua hoặc còn dưới 2 phút (theo `scheduledAt`, thiếu thì `slotAt`); ghi chú quá giờ trước mã lỗi', () => {
+    expect(isOverdue(at('2026-10-24T04:30:00.000Z'), NOW)).toBe(false)
+    expect(isOverdue(at('2026-10-24T03:01:59.000Z'), NOW)).toBe(true)
+    expect(isOverdue(at('2026-10-24T02:00:00.000Z'), NOW)).toBe(true)
+    expect(isOverdue(slot({ scheduledAt: null, slotAt: '2026-10-23T04:30:00.000Z' }), NOW)).toBe(true)
+    expect(slotTime(slot({ scheduledAt: '2026-10-27T12:00:00.000Z' }))).toBe('2026-10-27T12:00:00.000Z')
+    expect(pendingNote(at('2026-10-24T02:00:00.000Z'), NOW)).toBe(`${OVERDUE_TEXT}.`)
+    expect(pendingNote({ ...at('2026-10-25T04:30:00.000Z'), errorCode: 'AI_POLICY_BLOCKED' }, NOW)).toContain('Điều cần tránh')
+    expect(pendingNote(at('2026-10-25T04:30:00.000Z'), NOW)).toBeNull()
+  })
+
+  it('chặn duyệt: chưa có nội dung → "Tạo lại"; hậu kiểm chặn → sửa trước; "Duyệt tất cả" chỉ bài không lỗi, chưa quá giờ', () => {
+    const ok = slot({ id: 'ok', scheduledAt: '2026-10-25T04:30:00.000Z' })
+    const empty = slot({ id: 'empty', caption: '', errorCode: 'AI_BUDGET_EXCEEDED', scheduledAt: '2026-10-25T04:30:00.000Z' })
+    const blocked = slot({ id: 'blocked', errorCode: 'AI_POLICY_BLOCKED', scheduledAt: '2026-10-25T04:30:00.000Z' })
+    const late = slot({ id: 'late', scheduledAt: '2026-10-24T02:00:00.000Z' })
+    expect(approveBlock(ok)).toBeNull()
+    expect(approveBlock(empty)).toContain('Tạo lại')
+    expect(approveBlock(blocked)).toBe('Sửa bài trước khi duyệt.')
+    expect(bulkApprovable([ok, empty, blocked, late], NOW).map((s) => s.id)).toEqual(['ok'])
+  })
+
+  it('ô giờ: quá giờ → 19:00 tới gần nhất, còn giờ → giờ của bài; body chỉ mang `scheduledAt` khi đổi giờ; `SCHEDULE_IN_PAST` → hỏi giờ mới', () => {
+    expect(approveInput(at('2026-10-24T02:00:00.000Z'), NOW)).toEqual({ date: '2026-10-24', time: '19:00' })
+    expect(approveInput(at('2026-10-25T04:30:00.000Z'), NOW)).toEqual({ date: '2026-10-25', time: '11:30' })
+    const s = slot({ version: 4, scheduledAt: '2026-10-25T04:30:00.000Z' })
+    expect(approveBody(s)).toEqual({ action: 'approve', version: 4 })
+    expect(approveBody(s, '2026-10-25T04:30:00.000Z')).toEqual({ action: 'approve', version: 4 })
+    expect(approveBody(s, '2026-10-25T12:00:00.000Z')).toEqual({ action: 'approve', version: 4, scheduledAt: '2026-10-25T12:00:00.000Z' })
+    expect(needsNewTime(new ApiError('SCHEDULE_IN_PAST', 422, 'x'))).toBe(true)
+    expect(needsNewTime(new ApiError('VERSION_CONFLICT', 409, 'x'))).toBe(false)
+    expect(approvedToast(at('2026-10-24T12:30:00.000Z'), NOW)).toBe('Đã duyệt — bài sẽ đăng Hôm nay 19:30')
+  })
+
+  it('vá cache xem trước bằng slot trả về; khoá hàng đợi theo phạm vi; SSE `post_target.updated` làm cũ hàng đợi', () => {
+    const a = slot({ id: 'a', status: 'planned', caption: '' })
+    const b = slot({ id: 'b' })
+    const patched = patchPreview({ items: [a, b], generating: true }, { ...a, status: 'pending_approval', caption: 'Xong' })
+    expect(patched.items.map((s) => [s.id, s.status])).toEqual([
+      ['a', 'pending_approval'],
+      ['b', 'pending_approval'],
+    ])
+    expect(patched.generating).toBe(false)
+    const key = pendingSlotsKey('page:x')
+    expect(key).toEqual(['campaigns', 'pending', 'page:x'])
+    expect(hintInvalidates(key[0], 'post_target', 'post_target.updated')).toBe(true)
   })
 })

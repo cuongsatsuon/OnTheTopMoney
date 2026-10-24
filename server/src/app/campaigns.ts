@@ -9,15 +9,21 @@
 // - Story 7.3: `GET /campaigns?scope=` danh sách kèm tiến độ (read-model `read-models/campaigns.ts`, phạm vi giải bằng
 //   `pages.resolveScope`); `POST /campaigns/:id/start` bắt đầu chiến dịch trong MỘT transaction (cần `jobs` + `events`:
 //   "Tự đăng" enqueue `publish.target`, phát `campaign.started`). Bấm hai lần → 200 `alreadyStarted`.
+// - Story 7.4: `GET /campaigns/pending-slots?scope=` hàng đợi "Bài chờ duyệt" (read-model `read-models/campaign-queue.ts`);
+//   route hành động slot nhận thêm Duyệt / Từ chối cho chiến dịch đã bắt đầu (cùng endpoint cho hàng đợi và Lịch nội
+//   dung) và trả `{slot}` thay vì cả danh sách xem trước.
 import {
   CampaignListQuery,
   CampaignPageOptionsResponse,
   CampaignSlotActionRequest,
+  PendingSlotsQuery,
   SaveCampaignRequest,
   StartCampaignRequest,
   type CampaignDto,
   type CampaignListResponse,
   type CampaignPreviewResponse,
+  type CampaignSlotActionResponse,
+  type PendingSlotsResponse,
   type StartCampaignResponse,
 } from '@ottm/shared'
 import type { FastifyInstance } from 'fastify'
@@ -38,6 +44,7 @@ import type { Db } from '../platform/db/index.ts'
 import { AppError } from '../platform/errors/index.ts'
 import type { EventPublisher } from '../platform/events/index.ts'
 import type { JobSender } from '../platform/jobs/index.ts'
+import { pendingQueue } from './read-models/campaign-queue.ts'
 import { campaignSummaries } from './read-models/campaigns.ts'
 
 const IdParams = z.object({ id: z.uuid() })
@@ -64,6 +71,12 @@ export function registerCampaigns(app: FastifyInstance, deps: CampaignsDeps): vo
     // Không phạm vi / "tất cả" → mọi chiến dịch; nhóm / trang → giao `campaign_pages` (nhóm / trang lạ → 404).
     const pageIds = scope && scope.kind !== 'all' ? await resolveScope(db, scope) : null
     return { items: await campaignSummaries(db, await listCampaigns(db, pageIds), now()) }
+  })
+
+  app.get('/api/v1/campaigns/pending-slots', async (req): Promise<PendingSlotsResponse> => {
+    const { scope } = PendingSlotsQuery.parse(req.query ?? {})
+    // Luôn giải phạm vi (kể cả "Tất cả") để bỏ bài của trang đã gỡ — như Lịch nội dung.
+    return pendingQueue(db, await resolveScope(db, scope ?? { kind: 'all' }))
   })
 
   app.post('/api/v1/campaigns', async (req, reply): Promise<CampaignDto> => {
@@ -100,11 +113,11 @@ export function registerCampaigns(app: FastifyInstance, deps: CampaignsDeps): vo
       return { campaign: campaign!, alreadyStarted: result.alreadyStarted }
     })
 
-    app.post('/api/v1/campaigns/:id/slots/:targetId/transition', async (req): Promise<CampaignPreviewResponse> => {
+    app.post('/api/v1/campaigns/:id/slots/:targetId/transition', async (req): Promise<CampaignSlotActionResponse> => {
       const { id, targetId } = SlotParams.parse(req.params)
       const input = CampaignSlotActionRequest.parse(req.body ?? {})
-      await db.transaction((tx) => applySlotAction(tx, { jobs, events, ...(deps.now ? { now: deps.now } : {}) }, id, targetId, input))
-      return (await getPreview(db, id))!
+      const slot = await db.transaction((tx) => applySlotAction(tx, { jobs, events, ...(deps.now ? { now: deps.now } : {}) }, id, targetId, input))
+      return { slot }
     })
   }
 

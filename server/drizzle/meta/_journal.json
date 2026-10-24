@@ -239,6 +239,13 @@
       "when": 1792800524332,
       "tag": "0033_aspiring_pete_wisdom",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1792802484299,
+      "tag": "0034_broad_sphinx",
+      "breakpoints": true
     }
   ]
 }

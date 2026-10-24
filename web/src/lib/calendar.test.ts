@@ -1,8 +1,12 @@
 // Story 6.5 phía web: lưới tháng / tuần theo giờ VN, khoảng hỏi server, gom target thành "bài trên lịch", lọc, kế hoạch
 // kéo thả (đổi giờ / đăng lại / không hợp lệ), request của ngăn chi tiết (bỏ lịch, xoá), làm cũ lịch theo SSE.
+// Story 7.4: duyệt bài chiến dịch chờ duyệt trên lịch (quá giờ, request từng slot, kéo bài chưa duyệt → nhắc duyệt).
 import { TransitionTargetsRequest, type CalendarItemDto } from '@ottm/shared'
 import { describe, expect, it } from 'vitest'
 import {
+  approveCalls,
+  canApproveGroup,
+  isGroupOverdue,
   addMonths,
   calendarCounts,
   calendarKey,
@@ -148,7 +152,8 @@ describe('kéo thả', () => {
     for (const status of ['published', 'publishing', 'cancelled', 'pending_approval', 'planned'] as const) {
       const [g] = groupCalendarItems([item(1, { status })])
       expect(canDrag(g!), status).toBe(false)
-      expect(planMove(g!, '2026-11-02', undefined, NOW)).toEqual({ kind: 'locked' })
+      // Story 7.4: bài chiến dịch chờ duyệt / AI chưa viết → đổi giờ bằng "Duyệt" trong ngăn.
+      expect(planMove(g!, '2026-11-02', undefined, NOW)).toEqual({ kind: status === 'pending_approval' || status === 'planned' ? 'awaiting' : 'locked' })
     }
     expect(moveRefusal({ kind: 'locked' })).toBe('Bài đã đăng hoặc đang đăng nên không đổi lịch được')
     const past = planMove(scheduled!, '2026-10-24', 9, NOW) // 09:00 hôm nay đã qua (bây giờ 10:00)
@@ -210,5 +215,34 @@ describe('slot chiến dịch trên lịch (Story 7.3)', () => {
     expect(partialRunMessage(2, 3, 'Trạng thái bài vừa đổi')).toBe('Đã xong 2/3 bài — Trạng thái bài vừa đổi')
     expect(partialRunMessage(0, 3, 'Lỗi')).toBe('Lỗi')
     expect(partialRunMessage(0, 1, 'Lỗi')).toBe('Lỗi')
+  })
+})
+
+describe('duyệt bài chiến dịch trên lịch (Story 7.4)', () => {
+  it('ô chờ duyệt của chiến dịch duyệt được; quá giờ khi còn dưới 2 phút; mỗi slot một request, `scheduledAt` chỉ khi đổi giờ', () => {
+    const items = [
+      item(1, { status: 'pending_approval', campaignId: id(77), source: 'campaign', ai: true, version: 3, scheduledAt: '2026-10-24T04:30:00.000Z' }),
+      item(2, { status: 'pending_approval', campaignId: id(77), source: 'campaign', ai: true, version: 5, scheduledAt: '2026-10-24T04:30:00.000Z' }),
+    ]
+    const [g] = groupCalendarItems(items)
+    expect(canApproveGroup(g!)).toBe(true)
+    expect(canApproveGroup(groupCalendarItems([item(3, { status: 'pending_approval' })])[0]!)).toBe(false)
+    expect(isGroupOverdue(g!, NOW)).toBe(false)
+    expect(isGroupOverdue(g!, Date.parse('2026-10-24T04:29:00.000Z'))).toBe(true)
+    expect(approveCalls(g!)).toEqual([
+      { campaignId: id(77), targetId: items[0]!.id, body: { action: 'approve', version: 3 } },
+      { campaignId: id(77), targetId: items[1]!.id, body: { action: 'approve', version: 5 } },
+    ])
+    expect(approveCalls(g!, '2026-10-24T12:00:00.000Z').map((c) => c.body)).toEqual([
+      { action: 'approve', version: 3, scheduledAt: '2026-10-24T12:00:00.000Z' },
+      { action: 'approve', version: 5, scheduledAt: '2026-10-24T12:00:00.000Z' },
+    ])
+  })
+
+  it('kéo bài chờ duyệt / AI chưa viết → không gọi API, nhắc duyệt trong ngăn', () => {
+    const [g] = groupCalendarItems([item(1, { status: 'pending_approval', campaignId: id(77), source: 'campaign' })])
+    const plan = planMove(g!, '2026-10-30', undefined, NOW)
+    expect(plan).toEqual({ kind: 'awaiting' })
+    expect(moveRefusal(plan)).toBe('Bài chiến dịch chưa duyệt — mở bài để duyệt và chọn giờ đăng')
   })
 })

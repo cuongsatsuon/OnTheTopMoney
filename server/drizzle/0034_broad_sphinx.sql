@@ -1,0 +1,1 @@
+ALTER TABLE "post_targets" ADD COLUMN "generate_lease_until" timestamp (3) with time zone;

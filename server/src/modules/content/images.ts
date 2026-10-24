@@ -9,16 +9,20 @@
 // - `job.signal` (pg-boss huỷ khi job quá hạn) đi xuống gateway: huỷ thì ném lại, không ghi — lượt thử sau làm tiếp.
 // - Story 7.2: ô gắn sẵn vào slot chiến dịch → tính chi phí `campaign_generate` theo trang của slot; xong / lỗi thì đẩy slot
 //   `planned` sang `pending_approval` cùng transaction (`slots.settleSlotImage`).
+// - Story 7.4: payload `autoApprove` ("Tự đăng") → ảnh xong thì slot duyệt luôn (`scheduled`); ảnh lỗi vẫn về "Chờ duyệt".
+//   Cron `campaigns.generate_window` gọi `failStuckSlotImages`: ô gắn slot chờ quá `IMAGE_PENDING_MS` (job mất) → `failed
+//   IMAGE_FAILED` qua đúng đường lỗi của job (slot về "Chờ duyệt"); job tới muộn thấy ô không còn `pending` thì bỏ qua.
 // `ai` không chạm `media_assets` (gateway chỉ trả bytes + ghi `ai_usage`). Không log prompt / mô tả.
 import {
   IMAGE_GENERATE_COUNT,
+  IMAGE_PENDING_MS,
   type ErrorCode,
   type GeneratedImageDto,
   type ImageErrorCode,
   type ImageSize,
   type ParsedGenerateImagesRequest,
 } from '@ottm/shared'
-import { and, eq, inArray } from 'drizzle-orm'
+import { and, eq, inArray, lt } from 'drizzle-orm'
 import type { MediaStores } from '../../adapters/media/index.ts'
 import { bossDbFor, type Db, type DbExecutor } from '../../platform/db/index.ts'
 import { AppError } from '../../platform/errors/index.ts'
@@ -27,7 +31,7 @@ import { buildImagePrompt, generateImage, getBudgetSummary, getUsableOpenAiKey, 
 import { detectImageMime } from '../profiles/index.ts'
 import { getOpenAiPrefs } from '../settings/index.ts'
 import { toGeneratedImageDto } from './media.ts'
-import { mediaAssets } from './schema.ts'
+import { mediaAssets, postTargetMedia, postTargets } from './schema.ts'
 import { settleSlotImage, slotOfAsset } from './slots.ts'
 
 export interface RequestImagesDeps {
@@ -38,7 +42,8 @@ export interface RequestImagesDeps {
   now?: () => Date
 }
 
-export type ImageGenerateDeps = Pick<AiDeps, 'db' | 'events' | 'cipher' | 'openai' | 'log' | 'now'> & { media: MediaStores }
+/** `jobs` (Story 7.4): cần để duyệt luôn slot "Tự đăng" (enqueue `publish.target`); thiếu thì slot chờ lượt duyệt sau. */
+export type ImageGenerateDeps = Pick<AiDeps, 'db' | 'events' | 'cipher' | 'openai' | 'log' | 'now'> & { media: MediaStores; jobs?: JobSender | undefined }
 
 export type ImageGenerateOutcome = 'ready' | 'failed' | 'skipped'
 
@@ -99,7 +104,7 @@ export function postImageSize(size: ImageSize): ImageSize {
 const retryable = (err: AppError) => err.code === 'RATE_LIMITED' || (err.code === 'AI_PROVIDER_ERROR' && err.statusCode >= 500)
 
 /** `pending` → `failed` + sự kiện (chỉ khi ô còn chờ). `cause` = mã gốc, chỉ để log. */
-async function markFailed(deps: ImageGenerateDeps, id: string, code: ImageErrorCode, cause: string): Promise<ImageGenerateOutcome> {
+async function markFailed(deps: Pick<ImageGenerateDeps, 'db' | 'events' | 'log'>, id: string, code: ImageErrorCode, cause: string): Promise<ImageGenerateOutcome> {
   const changed = await deps.db.transaction(async (tx) => {
     const [row] = await tx
       .update(mediaAssets)
@@ -108,7 +113,7 @@ async function markFailed(deps: ImageGenerateDeps, id: string, code: ImageErrorC
       .returning({ id: mediaAssets.id })
     if (row) {
       await deps.events.publishEvent(tx, 'media_asset.failed', { id, errorCode: code })
-      await settleSlotImage(tx, deps.events, id, code)
+      await settleSlotImage(tx, deps, id, code)
     }
     return !!row
   })
@@ -123,7 +128,7 @@ async function markFailed(deps: ImageGenerateDeps, id: string, code: ImageErrorC
 export async function generateImageAsset(
   deps: ImageGenerateDeps,
   id: string,
-  opts: { finalAttempt: boolean; signal?: AbortSignal | undefined },
+  opts: { finalAttempt: boolean; signal?: AbortSignal | undefined; autoApprove?: boolean },
 ): Promise<ImageGenerateOutcome> {
   const [row] = await deps.db.select({ status: mediaAssets.status, prompt: mediaAssets.prompt }).from(mediaAssets).where(eq(mediaAssets.id, id))
   if (!row || row.status !== 'pending') return 'skipped'
@@ -169,7 +174,7 @@ export async function generateImageAsset(
         .returning({ id: mediaAssets.id })
       if (updated) {
         await deps.events.publishEvent(tx, 'media_asset.created', { id })
-        await settleSlotImage(tx, deps.events, id, null)
+        await settleSlotImage(tx, deps, id, null, { autoApprove: opts.autoApprove ?? false })
       }
       return !!updated
     })
@@ -185,16 +190,33 @@ export async function generateImageAsset(
   return 'ready'
 }
 
-export function parseImageGenerateJobData(data: unknown): { mediaAssetId: string } {
-  const id = (data as { mediaAssetId?: unknown } | null)?.mediaAssetId
+export function parseImageGenerateJobData(data: unknown): { mediaAssetId: string; autoApprove: boolean } {
+  const d = data as { mediaAssetId?: unknown; autoApprove?: unknown } | null
+  const id = d?.mediaAssetId
   if (typeof id !== 'string' || id === '') throw new Error('content.image.generate: thiếu mediaAssetId')
-  return { mediaAssetId: id }
+  return { mediaAssetId: id, autoApprove: d?.autoApprove === true }
 }
 
 export async function handleImageGenerateJob(
   deps: ImageGenerateDeps,
   job: { data: unknown; retryCount: number; retryLimit: number; signal?: AbortSignal | undefined },
 ): Promise<ImageGenerateOutcome> {
-  const { mediaAssetId } = parseImageGenerateJobData(job.data)
-  return generateImageAsset(deps, mediaAssetId, { finalAttempt: job.retryCount >= job.retryLimit, signal: job.signal })
+  const { mediaAssetId, autoApprove } = parseImageGenerateJobData(job.data)
+  return generateImageAsset(deps, mediaAssetId, { finalAttempt: job.retryCount >= job.retryLimit, signal: job.signal, autoApprove })
+}
+
+/**
+ * Ô ảnh gắn slot `planned` còn `pending` quá `IMAGE_PENDING_MS` (job mất / worker chết) → `failed IMAGE_FAILED`, slot về
+ * `pending_approval IMAGE_FAILED` (Story 7.4, cron `campaigns.generate_window`). Trả số ô đã chốt.
+ */
+export async function failStuckSlotImages(deps: Pick<ImageGenerateDeps, 'db' | 'events' | 'log'>, now: Date): Promise<number> {
+  const stuck = await deps.db
+    .selectDistinct({ id: mediaAssets.id })
+    .from(mediaAssets)
+    .innerJoin(postTargetMedia, eq(postTargetMedia.mediaAssetId, mediaAssets.id))
+    .innerJoin(postTargets, eq(postTargets.id, postTargetMedia.postTargetId))
+    .where(and(eq(mediaAssets.status, 'pending'), lt(mediaAssets.createdAt, new Date(now.getTime() - IMAGE_PENDING_MS)), eq(postTargets.status, 'planned')))
+  let failed = 0
+  for (const a of stuck) if ((await markFailed(deps, a.id, 'IMAGE_FAILED', 'STUCK')) === 'failed') failed++
+  return failed
 }

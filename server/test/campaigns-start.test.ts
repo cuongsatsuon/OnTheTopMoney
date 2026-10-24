@@ -75,7 +75,7 @@ async function cleanup() {
   await handle.sql`delete from secrets where name = 'openai_api_key'`
   await handle.sql`delete from settings where key = 'openai'`
   await handle.sql`delete from sessions`
-  await handle.sql`delete from pgboss.job where name in ('campaigns.preview', 'content.image.generate', 'publish.target')`
+  await handle.sql`delete from pgboss.job where name in ('campaigns.preview', 'campaigns.generate', 'content.image.generate', 'publish.target')`
 }
 
 const buildWith = (clock?: () => Date) =>

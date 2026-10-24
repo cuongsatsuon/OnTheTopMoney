@@ -4,6 +4,8 @@
 // kéo thả ở `lib/calendar.ts`.
 // Story 7.3: slot chiến dịch (chấm tím "AI tạo"; chưa viết → "AI sẽ viết · <chủ đề>") không "Bỏ lịch" / "Mở ở Soạn bài";
 // chạy nhiều request (ô gom nhiều bài) mà lỗi giữa chừng → báo đã xong bao nhiêu bài.
+// Story 7.4: bài chiến dịch chờ duyệt có "Duyệt" ngay trong ngăn (cùng route hành động slot với "Bài chờ duyệt"); quá giờ
+// hoặc server trả `SCHEDULE_IN_PAST` → hỏi giờ mới; ô quá giờ ghi "Quá giờ".
 import type { CalendarItemDto, PageDto, Platform, PostTargetStatus } from '@ottm/shared'
 import { AlertTriangle, CalendarX, Check, ChevronLeft, ChevronRight, Clock, ExternalLink, Loader2, Megaphone, Pencil, Plus, RotateCcw, Send, Trash2 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
@@ -16,8 +18,10 @@ import {
   CALENDAR_STATUS_TONE,
   addDays,
   addMonths,
+  approveCalls,
   calendarCounts,
   calendarTitle,
+  canApproveGroup,
   canCancel,
   canDrag,
   filterItems,
@@ -27,6 +31,7 @@ import {
   groupTitle,
   groupsByDay,
   isCampaignGroup,
+  isGroupOverdue,
   mondayOf,
   monthGrid,
   monthOf,
@@ -40,10 +45,12 @@ import {
   weekGrid,
   type CalendarFilter,
   type CalendarGroup,
+  type ApproveCall,
   type CalendarView,
   type DayKey,
   type TransitionCall,
 } from '../lib/calendar'
+import { OVERDUE_TEXT, needsNewTime, slotNote, useSlotAction } from '../lib/campaigns'
 import { POST_PARAM, usePost } from '../lib/composer'
 import { usePages } from '../lib/connections'
 import { errorMessage } from '../lib/error-messages'
@@ -110,6 +117,8 @@ export default function ContentCalendar() {
   const range = useMemo(() => rangeOfDays(days), [days])
   const calendar = useCalendar(scope, range)
   const transition = useTransitionTargets()
+  const slotAct = useSlotAction()
+  const busy = transition.isPending || slotAct.isPending
 
   const groups = useMemo(() => groupCalendarItems(filterItems(calendar.data?.items ?? [], filter, platformOf)), [calendar.data, filter, platformOf])
   const byDay = useMemo(() => groupsByDay(groups), [groups])
@@ -148,10 +157,26 @@ export default function ContentCalendar() {
     }
   }
 
+  /* --- Duyệt bài chiến dịch (Story 7.4): mỗi slot một request; giờ đã qua → ngăn hỏi giờ mới --- */
+  async function runApprove(calls: ApproveCall[], done: string, onNeedTime: () => void) {
+    let ok = 0
+    try {
+      for (const c of calls) {
+        await slotAct.mutateAsync(c)
+        ok++
+      }
+      notify(done)
+      setOpenKey(null)
+    } catch (err) {
+      if (needsNewTime(err)) onNeedTime()
+      notify(partialRunMessage(ok, calls.length, needsNewTime(err) ? `${OVERDUE_TEXT}.` : transitionErrorMessage(err, pages)))
+    }
+  }
+
   /* --- Kéo thả --- */
   const dragging = groups.find((g) => g.key === dragKey) ?? null
   const onDragStart = (e: DragEvent, g: CalendarGroup) => {
-    if (!canDrag(g) || transition.isPending) {
+    if (!canDrag(g) || busy) {
       e.preventDefault()
       return
     }
@@ -216,7 +241,7 @@ export default function ContentCalendar() {
           <Button size="sm" onClick={goToday} className="ml-1">
             Hôm nay
           </Button>
-          {(calendar.isFetching || transition.isPending) && <Loader2 size={15} className="ml-1 animate-spin text-muted-foreground" aria-label="Đang tải" />}
+          {(calendar.isFetching || busy) && <Loader2 size={15} className="ml-1 animate-spin text-muted-foreground" aria-label="Đang tải" />}
         </div>
         <div className="ml-auto flex items-center gap-2">
           <Select
@@ -380,9 +405,11 @@ export default function ContentCalendar() {
           key={open.key}
           group={open}
           pages={pages}
-          busy={transition.isPending}
+          busy={busy}
           onClose={() => setOpenKey(null)}
           onRun={(calls, done) => void run(calls, done, () => setOpenKey(null))}
+          onApprove={(calls, done, onNeedTime) => void runApprove(calls, done, onNeedTime)}
+          onOpenCampaigns={() => navigate('/chien-dich')}
           onDelete={() => setConfirmDelete(true)}
           onEdit={() => navigate(`/soan-bai?${POST_PARAM}=${open.postIds[0]}`)}
         />
@@ -399,7 +426,7 @@ export default function ContentCalendar() {
             <Button
               variant="danger"
               icon={<Trash2 size={14} />}
-              disabled={transition.isPending}
+              disabled={busy}
               onClick={() => {
                 if (!open) return
                 setConfirmDelete(false)
@@ -427,6 +454,8 @@ function GroupDrawer({
   busy,
   onClose,
   onRun,
+  onApprove,
+  onOpenCampaigns,
   onDelete,
   onEdit,
 }: {
@@ -435,13 +464,21 @@ function GroupDrawer({
   busy: boolean
   onClose: () => void
   onRun: (calls: TransitionCall[], done: string) => void
+  onApprove: (calls: ApproveCall[], done: string, onNeedTime: () => void) => void
+  onOpenCampaigns: () => void
   onDelete: () => void
   onEdit: () => void
 }) {
   // Mốc "bây giờ" lúc mở ngăn (ngăn mở ngắn; server vẫn kiểm giờ đã qua).
   const [now] = useState(() => Date.now())
-  // Ô ngày giờ (giờ VN): bài đã lên lịch → giờ hiện tại của bài; bài lỗi → mặc định 19:00 tới gần nhất.
-  const [when, setWhen] = useState(() => (group.status === 'scheduled' ? isoToVnInput(group.scheduledAt) : defaultScheduleInput(now)))
+  // Story 7.4: bài chiến dịch chờ duyệt; quá giờ (hoặc server vừa trả `SCHEDULE_IN_PAST`) → hỏi giờ mới.
+  const approvable = canApproveGroup(group)
+  const overdue = approvable && isGroupOverdue(group, now)
+  const [askTime, setAskTime] = useState(overdue)
+  // Ô ngày giờ (giờ VN): bài đã lên lịch / chờ duyệt còn giờ → giờ hiện tại của bài; bài lỗi / quá giờ → 19:00 tới gần nhất.
+  const [when, setWhen] = useState(() =>
+    group.status === 'scheduled' || (approvable && !overdue) ? isoToVnInput(group.scheduledAt) : defaultScheduleInput(now),
+  )
   const whenIssue = scheduleInputIssue(when.date, when.time, now)
   const at = vnToIso(when.date, when.time)
   const post = usePost(group.postIds.length === 1 ? group.postIds[0]! : null)
@@ -449,8 +486,11 @@ function GroupDrawer({
   const target = post.data?.targets.find((t) => t.id === first.id)
   const image = target?.media[0]?.url ?? group.thumbnailUrl
   const pageById = new Map(pages.map((p) => [p.id, p]))
-  const editable = group.status === 'scheduled' || group.status === 'failed'
+  const editable = group.status === 'scheduled' || group.status === 'failed' || (approvable && askTime)
   const n = group.items.length
+  const approveAt = askTime ? at : null
+  // Hậu kiểm chặn → sửa ở Chiến dịch trước khi duyệt (server cũng trả 422).
+  const policyBlocked = approvable && group.items.some((it) => it.errorCode === 'AI_POLICY_BLOCKED')
 
   return (
     <Drawer
@@ -486,6 +526,29 @@ function GroupDrawer({
                   onClick={() => at && onRun(groupCalls(group, 'reschedule', at), `Đã dời ${n} trang sang ${formatVnDateTime(at)}`)}
                 >
                   Đổi giờ
+                </Button>
+              </>
+            )}
+            {approvable && (
+              <>
+                <Button size="sm" icon={<Megaphone size={14} />} onClick={onOpenCampaigns}>
+                  Sửa ở Chiến dịch
+                </Button>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  icon={<Check size={14} />}
+                  disabled={busy || policyBlocked || (askTime && !!whenIssue)}
+                  title={policyBlocked ? 'Sửa bài trước khi duyệt.' : undefined}
+                  onClick={() =>
+                    onApprove(
+                      approveCalls(group, approveAt),
+                      `Đã duyệt ${n} bài — đăng lúc ${formatVnDateTime(approveAt ?? group.scheduledAt)}`,
+                      () => setAskTime(true),
+                    )
+                  }
+                >
+                  Duyệt
                 </Button>
               </>
             )}
@@ -531,6 +594,24 @@ function GroupDrawer({
           </div>
         )}
 
+        {approvable && (askTime || group.items.some((it) => it.errorCode)) && (
+          <div role="status" className="flex gap-2.5 rounded-md border border-amber-200 bg-warning-soft p-3 text-[13px] text-amber-900">
+            <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+            <div className="space-y-1">
+              {askTime && <div className="font-semibold">{OVERDUE_TEXT}</div>}
+              {group.items.map((it) => {
+                const note = it.errorCode && it.errorCode !== 'SCHEDULE_IN_PAST' ? slotNote(it.errorCode) : null
+                return note ? (
+                  <div key={it.id}>
+                    {n > 1 && <b>{pageById.get(it.pageId)?.name ?? 'Trang đã gỡ'}: </b>}
+                    {note}
+                  </div>
+                ) : null
+              })}
+            </div>
+          </div>
+        )}
+
         {image && <img src={image} alt="" className="aspect-square w-full rounded-lg border border-border object-cover" />}
 
         <div>
@@ -556,7 +637,7 @@ function GroupDrawer({
           </div>
           {editable && (
             <div className="border-t border-border pt-3">
-              <dt className="mb-1.5 text-muted-foreground">{group.status === 'failed' ? 'Đăng lại lúc' : 'Đổi sang'} (giờ Việt Nam)</dt>
+              <dt className="mb-1.5 text-muted-foreground">{group.status === 'failed' ? 'Đăng lại lúc' : approvable ? 'Duyệt và đăng lúc' : 'Đổi sang'} (giờ Việt Nam)</dt>
               <dd className="flex flex-wrap items-center gap-2">
                 <Input type="date" value={when.date} onChange={(e) => setWhen((w) => ({ ...w, date: e.target.value }))} className="w-[150px]" aria-label="Ngày đăng (giờ Việt Nam)" aria-invalid={!!whenIssue} />
                 <Input type="time" value={when.time} onChange={(e) => setWhen((w) => ({ ...w, time: e.target.value }))} className="w-[110px]" aria-label="Giờ đăng (giờ Việt Nam)" aria-invalid={!!whenIssue} />
@@ -631,7 +712,7 @@ function Pill({
   onOpen: () => void
 }) {
   const draggable = canDrag(group)
-  const statusText = CALENDAR_STATUS_LABEL[group.status]
+  const statusText = CALENDAR_STATUS_LABEL[group.status] + (canApproveGroup(group) && isGroupOverdue(group) ? ' · Quá giờ' : '')
   const platforms = [...new Set(groupPages(group, pages).map((p) => p.platform))] as Platform[]
   const title = groupTitle(group)
   return (

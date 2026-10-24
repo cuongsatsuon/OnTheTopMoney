@@ -29,25 +29,33 @@ export { POST_IMAGE_VALIDATION, recordMediaAsset, toGeneratedImageDto, toMediaAs
 // Viết caption bằng AI theo hồ sơ từng trang (Story 6.2) — chạy trong request, không lưu bài.
 export { AI_STOP_CODES, COMPOSE_CONCURRENCY, composeCaptionForPage, composeCaptions, type ComposeBrief, type ComposeDeps } from './compose.ts'
 // Slot chiến dịch (Story 7.2, AD-13, AD-15): tạo / dọn slot theo kế hoạch của `campaigns`, sinh caption + ảnh, đọc xem trước.
+// Story 7.4: lease khi sinh, cửa sổ cuốn chiếu (`listSlotsToGenerate({until})`), hàng đợi "Bài chờ duyệt", nháp kẹt.
 export {
+  SLOT_GENERATE_LEASE_MS,
   SlotGenerateRetryableError,
   ensureCampaignSlots,
   failSlot,
   generateSlot,
+  getCampaignSlot,
   listCampaignSlots,
+  listPendingSlots,
   listSlotsToGenerate,
   pruneCampaignSlots,
   slotCampaignOf,
+  staleSlotCampaigns,
   type SlotGenerateDeps,
   type SlotOutcome,
   type SlotPlan,
 } from './slots.ts'
+// "Tự đăng" (Story 7.3 / 7.4): duyệt luôn bài chờ duyệt không mã lỗi của chiến dịch.
+export { autoApproveCampaignSlots, type AutoApproveOutcome } from './slots-approve.ts'
 // "Bắt đầu chiến dịch" (Story 7.3): tạo phần slot còn lại, bỏ `held` bài xem trước ("Tự đăng" → duyệt); tiến độ cho read-model.
 export { startCampaignSlots, type StartSlotsResult } from './slots-start.ts'
 export { campaignProgress, type CampaignProgress } from './slots-progress.ts'
 // Sinh ảnh AI (Story 6.3, AD-14): yêu cầu 4 ô + job `content.image.generate`; cron dọn ảnh không gắn bài.
 export {
   ImageGenerateRetryableError,
+  failStuckSlotImages,
   generateImageAsset,
   handleImageGenerateJob,
   listGeneratedImages,

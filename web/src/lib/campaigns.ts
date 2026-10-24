@@ -8,14 +8,21 @@
 // `baseUpdatedAt` để không đè nháp đã đổi ở tab khác.
 // Story 7.3: "Bắt đầu chiến dịch" (`POST /campaigns/:id/start` — lỗi trang / ngày về đúng bước như khi lưu) và danh sách
 // chiến dịch kèm tiến độ (`GET /campaigns?scope=`) cho `/chien-dich` + thẻ ở Tổng quan.
+// Story 7.4: hàng đợi "Bài chờ duyệt" (`GET /campaigns/pending-slots?scope=`) + Duyệt / Từ chối / Sửa / Tạo lại qua
+// CÙNG route hành động slot với bước 4 và Lịch nội dung (route trả `{slot}` — vá cache xem trước, làm cũ danh sách / Lịch).
+// Bài quá giờ (hoặc còn dưới 2 phút) → "Quá giờ — chọn giờ mới"; server trả `SCHEDULE_IN_PAST` thì FE cũng hỏi giờ mới.
 // Phần thuần tách khỏi hook để test được (campaigns.test.ts).
 import {
+  CAMPAIGN_SLOT_MIN_LEAD_MS,
   CampaignDto,
   CampaignListResponse,
   CampaignPageOptionsResponse,
   CampaignPreviewResponse,
+  CampaignSlotActionResponse,
+  PendingSlotsResponse,
   SaveCampaignRequest,
   StartCampaignResponse,
+  type PendingSlotDto,
   type CampaignStatus,
   type CampaignSummaryDto,
   type CampaignSlotActionRequest,
@@ -40,6 +47,7 @@ import { apiFetch, isApiError } from './api'
 import { CALENDAR_ROOT_KEY, todayKey } from './calendar'
 import { aiErrorText, imageFailureText } from './composer'
 import { serverScope } from './inbox'
+import { defaultScheduleInput, isoToVnInput } from './publish'
 
 /** Tham số URL của nháp đang mở (`/chien-dich/tao?id=<campaignId>`). */
 export const CAMPAIGN_PARAM = 'id'
@@ -451,16 +459,37 @@ export function useCampaignPreview(id: string | null) {
   })
 }
 
-/** Sửa / Xoá / Tạo lại một bài xem trước; kết quả là danh sách mới (ghi thẳng vào cache). */
-export function useSlotAction(campaignId: string) {
+/**
+ * Hành động trên một slot chiến dịch (bước 4, "Bài chờ duyệt", Lịch nội dung — một route). `campaignId` cố định (bước 4)
+ * hoặc theo từng lần gọi (hàng đợi gom nhiều chiến dịch). Xong → vá slot trong cache xem trước, làm cũ hàng đợi / danh
+ * sách chiến dịch / Lịch; lỗi (409 bài vừa đổi…) → tải lại.
+ */
+export function useSlotAction(fixedCampaignId?: string) {
   const qc = useQueryClient()
+  const refresh = (campaignId: string) => {
+    void qc.invalidateQueries({ queryKey: PENDING_SLOTS_ROOT })
+    void qc.invalidateQueries({ queryKey: CAMPAIGNS_LIST_ROOT })
+    void qc.invalidateQueries({ queryKey: CALENDAR_ROOT_KEY })
+    return campaignId
+  }
   return useMutation({
-    mutationFn: ({ targetId, body }: { targetId: string; body: CampaignSlotActionRequest }) =>
-      apiFetch(`/campaigns/${campaignId}/slots/${targetId}/transition`, { method: 'POST', body, schema: CampaignPreviewResponse }),
-    onSuccess: (data) => qc.setQueryData(campaignPreviewKey(campaignId), data),
-    // 409 (bài vừa đổi) → tải lại để thấy bản mới.
-    onError: () => void qc.invalidateQueries({ queryKey: campaignPreviewKey(campaignId) }),
+    mutationFn: ({ campaignId = fixedCampaignId, targetId, body }: { campaignId?: string | undefined; targetId: string; body: CampaignSlotActionRequest }) =>
+      apiFetch(`/campaigns/${campaignId}/slots/${targetId}/transition`, { method: 'POST', body, schema: CampaignSlotActionResponse }),
+    onSuccess: ({ slot }, vars) => {
+      const campaignId = refresh(vars.campaignId ?? fixedCampaignId ?? '')
+      qc.setQueryData<CampaignPreviewResponse>(campaignPreviewKey(campaignId), (old) => (old ? patchPreview(old, slot) : old))
+    },
+    onError: (_err, vars) => {
+      const campaignId = refresh(vars.campaignId ?? fixedCampaignId ?? '')
+      void qc.invalidateQueries({ queryKey: campaignPreviewKey(campaignId) })
+    },
   })
+}
+
+/** Thay slot vừa đổi trong danh sách xem trước (giữ thứ tự); `generating` tính lại. */
+export function patchPreview(data: CampaignPreviewResponse, slot: CampaignSlotDto): CampaignPreviewResponse {
+  const items = data.items.map((s) => (s.id === slot.id ? slot : s))
+  return { items, generating: items.some((s) => s.status === 'planned') }
 }
 
 /* ---------- Bắt đầu chiến dịch + danh sách (Story 7.3) ---------- */
@@ -540,3 +569,63 @@ export function useStartCampaign() {
     },
   })
 }
+
+/* ---------- Hàng đợi "Bài chờ duyệt" (Story 7.4) ---------- */
+
+export const PENDING_SLOTS_ROOT = ['campaigns', 'pending'] as const
+export const pendingSlotsKey = (scope: string | null) => [...PENDING_SLOTS_ROOT, scope] as const
+
+const EMPTY_PENDING: PendingSlotsResponse = { items: [], truncated: false }
+
+/** Bài chờ duyệt theo Phạm vi (SSE `post_target.*` làm cũ `['campaigns', …]`). Phạm vi của kho mẫu → rỗng. */
+export function usePendingSlots(scope: Scope) {
+  const param = serverScope(scope)
+  return useQuery({
+    queryKey: pendingSlotsKey(param),
+    queryFn: ({ signal }) => {
+      if (param === null) return Promise.resolve(EMPTY_PENDING)
+      return apiFetch(`/campaigns/pending-slots?${new URLSearchParams({ scope: param })}`, { schema: PendingSlotsResponse, signal })
+    },
+  })
+}
+
+/** Giờ đăng hiện tại của bài chờ duyệt (lên Lịch); bài xem trước của nháp chưa có thì theo giờ dự kiến. */
+export const slotTime = (slot: Pick<CampaignSlotDto, 'scheduledAt' | 'slotAt'>): string => slot.scheduledAt ?? slot.slotAt
+
+/** Quá giờ: giờ đăng đã qua hoặc còn dưới 2 phút — duyệt phải chọn giờ mới (server trả `SCHEDULE_IN_PAST`). */
+export const isOverdue = (slot: Pick<CampaignSlotDto, 'scheduledAt' | 'slotAt'>, now = Date.now()): boolean =>
+  Date.parse(slotTime(slot)) <= now + CAMPAIGN_SLOT_MIN_LEAD_MS
+
+export const OVERDUE_TEXT = 'Quá giờ — chọn giờ mới'
+
+/** Vì sao chưa duyệt được (`null` = duyệt được): AI chưa viết được nội dung; hậu kiểm chặn → sửa trước. */
+export function approveBlock(slot: Pick<CampaignSlotDto, 'caption' | 'media' | 'errorCode'>): string | null {
+  if (!slot.caption && !slot.media.length) return 'AI chưa viết được bài này — bấm “Tạo lại”.'
+  if (slot.errorCode === 'AI_POLICY_BLOCKED') return 'Sửa bài trước khi duyệt.'
+  return null
+}
+
+/** Ghi chú dưới bài chờ duyệt: quá giờ trước, rồi mã lỗi (AI / ảnh / hậu kiểm / luật đăng). */
+export function pendingNote(slot: Pick<CampaignSlotDto, 'scheduledAt' | 'slotAt' | 'errorCode'>, now = Date.now()): string | null {
+  if (isOverdue(slot, now)) return `${OVERDUE_TEXT}.`
+  return slotNote(slot.errorCode)
+}
+
+/** "Duyệt tất cả": bài không mã lỗi, chưa quá giờ, đã có nội dung — bài còn lại cần chủ shop xem từng bài. */
+export const bulkApprovable = <T extends Pick<CampaignSlotDto, 'scheduledAt' | 'slotAt' | 'errorCode' | 'caption' | 'media'>>(items: readonly T[], now = Date.now()): T[] =>
+  items.filter((s) => s.errorCode === null && !isOverdue(s, now) && approveBlock(s) === null)
+
+/** Ô ngày giờ khi duyệt: bài quá giờ → 19:00 tới gần nhất; còn lại → giờ hiện tại của bài. */
+export const approveInput = (slot: Pick<CampaignSlotDto, 'scheduledAt' | 'slotAt'>, now = Date.now()): { date: string; time: string } =>
+  isOverdue(slot, now) ? defaultScheduleInput(now) : isoToVnInput(slotTime(slot))
+
+/** Body duyệt: `scheduledAt` chỉ khi chủ shop chọn giờ khác giờ hiện tại của bài. */
+export function approveBody(slot: Pick<CampaignSlotDto, 'version' | 'scheduledAt' | 'slotAt'>, at?: string | null): CampaignSlotActionRequest {
+  return at && at.slice(0, 16) !== slotTime(slot).slice(0, 16) ? { action: 'approve', version: slot.version, scheduledAt: at } : { action: 'approve', version: slot.version }
+}
+
+/** Lỗi của "Duyệt" cần hỏi giờ mới. */
+export const needsNewTime = (err: unknown): boolean => isApiError(err) && err.code === 'SCHEDULE_IN_PAST'
+
+/** Toast sau khi duyệt một bài. */
+export const approvedToast = (slot: Pick<PendingSlotDto, 'scheduledAt' | 'slotAt'>, now = Date.now()): string => `Đã duyệt — bài sẽ đăng ${relativeVnTime(slotTime(slot), now)}`

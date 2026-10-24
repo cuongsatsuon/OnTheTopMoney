@@ -65,14 +65,17 @@ export interface QueuePayloads {
   'inbox.contact_summary': { contactId: string }
   /** Story 5.2: trích văn bản một file kho kiến thức — xử lý theo file (mọi mục `processing` trỏ cùng file). */
   'profiles.knowledge.extract': { knowledgeItemId: string; filePublicId: string }
-  /** Story 6.3: sinh một ô ảnh AI (`media_assets` đang `pending`). */
-  'content.image.generate': { mediaAssetId: string }
+  /** Story 6.3: sinh một ô ảnh AI (`media_assets` đang `pending`). Story 7.4: `autoApprove` = slot "Tự đăng" duyệt luôn khi ảnh xong. */
+  'content.image.generate': { mediaAssetId: string; autoApprove?: boolean }
   'content.media_gc': Record<string, never>
   /** Story 6.4: đăng một target đúng phiên bản lịch (lệch → job bỏ qua im lặng). */
   'publish.target': { targetId: string; scheduleVersion: number }
   'content.requeue': Record<string, never>
   /** Story 7.2: sinh bài xem trước của một chiến dịch nháp (stately theo `campaignId`). */
   'campaigns.preview': { campaignId: string }
+  /** Story 7.4: một lượt sinh cuốn chiếu của chiến dịch đang chạy (stately theo `campaignId`). */
+  'campaigns.generate': { campaignId: string }
+  'campaigns.generate_window': Record<string, never>
   /** Story 4.5: tin của chính trang chưa khớp tin nào của app — bản chuẩn hoá (dạng JSON) để thử khớp lại. */
   'inbox.echo_match': {
     pageId: string
@@ -396,6 +399,30 @@ export const QUEUES = {
     concurrency: 2,
     expireInSeconds: 900,
     pollingIntervalSeconds: 0.5,
+  },
+  // Module `campaigns` (Story 7.4, AD-15, AD-24): một lượt sinh cuốn chiếu của chiến dịch `running` — slot `planned` trong 3
+  // ngày tới, theo lô 9 slot (còn thì lượt tự enqueue lượt sau), 3 slot song song; "Tự đăng" duyệt luôn bài xong. `stately`
+  // theo `campaignId`: cron / "Tạo lại" / "Bắt đầu" trong lúc đang chạy gộp vào đúng MỘT lượt kế tiếp. Idempotent: slot đã
+  // sinh bỏ qua, lease chặn hai lượt cùng viết một slot. Chỉ lỗi tạm của OpenAI ném để retry; lần cuối ghi mã lên slot.
+  // Retry 2 backoff, concurrency 2 (AD-24). Hạn 900 giây > 9 slot / 3 song song × 2 lời gọi (mỗi lời ≤120 giây).
+  'campaigns.generate': {
+    policy: 'stately',
+    singletonKey: (data: { campaignId: string }) => data.campaignId,
+    retryLimit: 2,
+    retryDelay: 10,
+    retryBackoff: true,
+    concurrency: 2,
+    expireInSeconds: 900,
+    pollingIntervalSeconds: 0.5,
+  },
+  // Module `campaigns` (Story 7.4, AD-15): hằng giờ (giờ VN) chốt ô ảnh slot kẹt, enqueue `campaigns.generate` cho mọi
+  // chiến dịch đang chạy và `campaigns.preview` cho nháp có bài xem trước kẹt. Idempotent; cron chạy lại giờ sau → retry 1.
+  'campaigns.generate_window': {
+    policy: 'standard',
+    retryLimit: 1,
+    concurrency: 1,
+    expireInSeconds: 120,
+    cron: { expression: '0 * * * *', tz: CRON_TZ },
   },
 } as const satisfies { [N in keyof QueuePayloads]: QueueDef }
 

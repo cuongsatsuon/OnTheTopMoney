@@ -8,7 +8,7 @@ import { QUEUES, createBoss, createJobSender, ensureQueues, isCriticalQueue, sta
 import { createSecretCipher } from '../adapters/crypto/index.ts'
 import { createMediaStores } from '../adapters/media/index.ts'
 import { gcReservations, handleAiEvent } from '../modules/ai/index.ts'
-import { handlePreviewJob } from '../modules/campaigns/index.ts'
+import { handleGenerateJob, handlePreviewJob, runGenerateWindow } from '../modules/campaigns/index.ts'
 import { handleRunJob, handleTriageEvent } from '../modules/autoreply/index.ts'
 import {
   cleanupExpiredOAuth,
@@ -208,7 +208,7 @@ try {
       // Story 6.3: sinh một ô ảnh AI (gateway → kho công khai). Lỗi tạm của OpenAI ném lại; lần cuối / lỗi khác ghi `failed`.
       'content.image.generate': async (job) => {
         const result = await handleImageGenerateJob(
-          { db: dbHandle.db, events, cipher, media, log: logger.child({ component: 'image_generate' }) },
+          { db: dbHandle.db, events, jobs, cipher, media, log: logger.child({ component: 'image_generate' }) },
           job as JobWithMetadata<unknown>,
         )
         logger.debug({ jobId: job.id, result }, 'content.image.generate')
@@ -221,6 +221,21 @@ try {
           job as JobWithMetadata<unknown>,
         )
         logger.debug({ jobId: job.id, result }, 'campaigns.preview')
+      },
+      // Story 7.4: một lượt sinh cuốn chiếu (slot `planned` trong 3 ngày tới, theo lô; "Tự đăng" duyệt luôn). Khoá / hạn mức
+      // AI chặn → dừng không gọi AI; lỗi tạm của OpenAI ném lại sau khi lô xong; lần cuối ghi mã lên slot.
+      'campaigns.generate': async (job) => {
+        const result = await handleGenerateJob(
+          { db: dbHandle.db, events, jobs, cipher, log: logger.child({ component: 'campaigns_generate' }) },
+          job as JobWithMetadata<unknown>,
+        )
+        logger.debug({ jobId: job.id, result }, 'campaigns.generate')
+      },
+      // Story 7.4: hằng giờ chốt ô ảnh slot kẹt, enqueue `campaigns.generate` cho chiến dịch đang chạy, vá bài xem trước kẹt.
+      'campaigns.generate_window': async () => {
+        const result = await runGenerateWindow({ db: dbHandle.db, events, jobs, log: logger.child({ component: 'campaigns_window' }) })
+        if (result.stuckImages > 0 || result.preview > 0) logger.warn(result, 'campaigns: vá slot kẹt')
+        else logger.debug(result, 'campaigns.generate_window')
       },
       // Story 6.3: xoá ảnh bài không gắn vào bài nào quá 7 ngày (dòng + file Cloudinary).
       'content.media_gc': async () => {

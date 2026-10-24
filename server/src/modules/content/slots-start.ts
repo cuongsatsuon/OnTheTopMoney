@@ -9,12 +9,12 @@
 // Thứ tự khoá: dòng slot (theo id) → khoá advisory giới hạn/24h (theo `pageId` tăng dần) — cùng chiều `transitionPostTargets`.
 // Không gọi Meta / OpenAI.
 import { CAMPAIGN_SLOT_MIN_LEAD_MS, type PostTargetStatus } from '@ottm/shared'
-import { and, asc, eq, inArray, isNull, sql } from 'drizzle-orm'
+import { and, asc, eq, inArray, sql } from 'drizzle-orm'
 import type { DbExecutor } from '../../platform/db/index.ts'
-import { AppError } from '../../platform/errors/index.ts'
 import { postTargets } from './schema.ts'
+import { autoApproveCampaignSlots } from './slots-approve.ts'
 import { ensureCampaignSlots, type SlotPlan } from './slots.ts'
-import { lockDailyLimits, transitionTarget, type TransitionDeps } from './transitions.ts'
+import type { TransitionDeps } from './transitions.ts'
 
 export interface StartSlotsResult {
   /** Slot mới tạo (`planned`). */
@@ -51,29 +51,7 @@ export async function startCampaignSlots(
   // Bài đã xoá ở bước 4: chỉ bỏ cờ giữ (không lên Lịch — lịch bỏ qua `cancelled`).
   await tx.update(postTargets).set({ held: false }).where(and(eq(postTargets.campaignId, campaignId), eq(postTargets.held, true)))
 
-  let scheduled = 0
-  let needsReview = 0
-  if (opts.autoPublish) {
-    const ready = await tx
-      .select({ id: postTargets.id, pageId: postTargets.pageId, slotAt: postTargets.slotAt, version: postTargets.version })
-      .from(postTargets)
-      .where(and(eq(postTargets.campaignId, campaignId), eq(postTargets.status, 'pending_approval' satisfies PostTargetStatus), isNull(postTargets.errorCode)))
-      .orderBy(asc(postTargets.slotAt), asc(postTargets.id))
-    await lockDailyLimits(tx, ready.map((t) => t.pageId))
-    for (const t of ready) {
-      try {
-        // Savepoint: một bài không duyệt được chỉ hoàn tác phần của bài đó.
-        await tx.transaction((sp) => transitionTarget(sp, fixed, t.id, { action: 'approve', at: t.slotAt! }, t.version))
-        scheduled++
-      } catch (err) {
-        if (!(err instanceof AppError) || err.statusCode !== 422) throw err
-        await tx
-          .update(postTargets)
-          .set({ errorCode: err.code, version: sql`${postTargets.version} + 1`, updatedAt: sql`now()` })
-          .where(and(eq(postTargets.id, t.id), eq(postTargets.status, 'pending_approval' satisfies PostTargetStatus)))
-        needsReview++
-      }
-    }
-  }
-  return { created, released: released.length, scheduled, needsReview }
+  // "Tự đăng": bài xem trước đã viết xong, không mã lỗi → duyệt (savepoint từng bài — `slots-approve.ts`).
+  const approved = opts.autoPublish ? await autoApproveCampaignSlots(tx, fixed, campaignId) : { scheduled: 0, needsReview: 0 }
+  return { created, released: released.length, ...approved }
 }

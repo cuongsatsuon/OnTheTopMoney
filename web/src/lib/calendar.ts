@@ -1,12 +1,15 @@
 // Lịch nội dung (Story 6.5) phía web: lưới tháng / tuần theo giờ Việt Nam, gom target (`GET /calendar`) thành "bài trên
 // lịch", kế hoạch kéo thả và các nút của ngăn chi tiết. Mọi thay đổi đi qua `POST /posts/:id/targets/transition` có sẵn
 // (AD-13): kéo bài đã lên lịch = `reschedule`, kéo bài lỗi = `retry` vào giờ mới, "Bỏ lịch" = `unschedule`, "Xoá" =
-// `cancel` — không có đường ghi riêng.
+// `cancel` — không có đường ghi riêng. Story 7.4: bài chiến dịch chờ duyệt duyệt ngay trên lịch qua CÙNG route hành động
+// slot của "Bài chờ duyệt" (`POST /campaigns/:id/slots/:targetId/transition`, `approve`); quá giờ → hỏi giờ mới.
 // Lưới tính theo ngày giờ VN (UTC+7 cố định) bất kể múi giờ trình duyệt; khoá ngày `YYYY-MM-DD`.
 // Phần thuần tách khỏi hook để test được (calendar.test.ts).
 import {
+  CAMPAIGN_SLOT_MIN_LEAD_MS,
   CalendarResponse,
   type CalendarItemDto,
+  type CampaignSlotActionRequest,
   type PageDto,
   type Platform,
   type PostTargetStatus,
@@ -232,6 +235,8 @@ export function groupCalls(g: Pick<CalendarGroup, 'items'>, action: TargetAction
 
 export type MovePlan =
   | { kind: 'locked' }
+  /** Story 7.4: bài chiến dịch chưa duyệt / AI chưa viết — đổi giờ bằng "Duyệt" trong ngăn chi tiết. */
+  | { kind: 'awaiting' }
   | { kind: 'same' }
   | { kind: 'past' }
   | { kind: 'move'; action: 'reschedule' | 'retry'; scheduledAt: string; calls: TransitionCall[] }
@@ -239,7 +244,7 @@ export type MovePlan =
 /** Kế hoạch khi thả một nhóm vào ô: không kéo được / đúng chỗ cũ / giờ đã qua → không gọi API; còn lại → request. */
 export function planMove(g: CalendarGroup, day: DayKey, hour: number | undefined, now = Date.now()): MovePlan {
   const action = dragAction(g.status)
-  if (!action) return { kind: 'locked' }
+  if (!action) return g.status === 'pending_approval' || g.status === 'planned' ? { kind: 'awaiting' } : { kind: 'locked' }
   const scheduledAt = dropAt(g, day, hour)
   // So theo phút (bài "Đăng ngay" có giờ hẹn lẻ giây).
   if (scheduledAt.slice(0, 16) === g.scheduledAt.slice(0, 16)) return { kind: 'same' }
@@ -257,7 +262,32 @@ export function moveToast(plan: Extract<MovePlan, { kind: 'move' }>, count: numb
 export function moveRefusal(plan: MovePlan): string | null {
   if (plan.kind === 'past') return 'Không dời bài về thời điểm đã qua'
   if (plan.kind === 'locked') return 'Bài đã đăng hoặc đang đăng nên không đổi lịch được'
+  if (plan.kind === 'awaiting') return 'Bài chiến dịch chưa duyệt — mở bài để duyệt và chọn giờ đăng'
   return null
+}
+
+/* ---------- Duyệt bài chiến dịch (Story 7.4) ---------- */
+
+/** Ô bài chiến dịch chờ duyệt → nút "Duyệt" trong ngăn chi tiết. */
+export const canApproveGroup = (g: Pick<CalendarGroup, 'status' | 'campaignId'>): boolean => g.status === 'pending_approval' && g.campaignId !== null
+
+/** Quá giờ (đã qua / còn dưới 2 phút) — duyệt phải chọn giờ mới. */
+export const isGroupOverdue = (g: Pick<CalendarGroup, 'scheduledAt'>, now = Date.now()): boolean => Date.parse(g.scheduledAt) <= now + CAMPAIGN_SLOT_MIN_LEAD_MS
+
+export interface ApproveCall {
+  campaignId: string
+  targetId: string
+  body: CampaignSlotActionRequest
+}
+
+/** Request duyệt cho từng bài của ô (mỗi slot một request); `at` = giờ mới (ISO) khi khác giờ của ô. */
+export function approveCalls(g: Pick<CalendarGroup, 'items' | 'campaignId' | 'scheduledAt'>, at?: string | null): ApproveCall[] {
+  const moved = at && at.slice(0, 16) !== g.scheduledAt.slice(0, 16) ? at : null
+  return g.items.map((it) => ({
+    campaignId: g.campaignId!,
+    targetId: it.id,
+    body: moved ? { action: 'approve', version: it.version, scheduledAt: moved } : { action: 'approve', version: it.version },
+  }))
 }
 
 /** Tiêu đề ô: đầu caption; slot chiến dịch AI chưa viết (Story 7.3) → "AI sẽ viết · <chủ đề>"; còn lại bài chỉ có ảnh. */

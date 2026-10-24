@@ -5,7 +5,8 @@
 // pending_approval`) và tạo lại (`pending_approval → planned` — `campaigns` sinh lại), đều khoá `version` và phát
 // `post_target.updated`. Story 7.3: duyệt (`approve`: `pending_approval → scheduled`, cùng đường tới `scheduled`) — "Bắt
 // đầu chiến dịch" ở chế độ "Tự đăng" dùng cho bài xem trước (7.4 dùng cho "Bài chờ duyệt"); slot chiến dịch không bỏ lịch
-// được (không thành bài nháp).
+// được (không thành bài nháp). Story 7.4: "Bài chờ duyệt" — duyệt phát `post_target.updated` (hàng đợi / Lịch ở tab khác
+// cập nhật), từ chối (`reject`: `pending_approval → cancelled USER_REJECTED`).
 // - `transitionTarget`: MỘT target, khoá lạc quan `version`. Mọi chuyển tới `scheduled` gọi `assertPublishable` và kiểm
 //   giới hạn đăng/24h của nền tảng, rồi enqueue `publish.target {targetId, scheduleVersion}` `startAfter=scheduled_at`
 //   cùng transaction (AD-2). `schedule_version` tăng mỗi lần vào/rời `scheduled` hoặc đổi giờ — job cũ thấy lệch rồi bỏ
@@ -52,6 +53,7 @@ export type TargetTransition =
   | { action: 'edit'; caption: string }
   | { action: 'regenerate' }
   | { action: 'approve'; at: Date }
+  | { action: 'reject' }
 
 /** Trạng thái nguồn hợp lệ của từng hành động (bảng AD-13). */
 const FROM: Record<TargetTransition['action'], readonly PostTargetStatus[]> = {
@@ -64,6 +66,7 @@ const FROM: Record<TargetTransition['action'], readonly PostTargetStatus[]> = {
   edit: ['pending_approval'],
   regenerate: ['pending_approval'],
   approve: ['pending_approval'],
+  reject: ['pending_approval'],
 }
 
 /** Hành động của chủ shop đưa target tới `scheduled` (qua luật nền tảng + giới hạn/24h); `approve` cũng vậy. */
@@ -150,12 +153,12 @@ export async function transitionTarget(
     })
   }
 
-  if (transition.action === 'cancel') {
+  if (transition.action === 'cancel' || transition.action === 'reject') {
     const [row] = await tx
       .update(postTargets)
       .set({
         status: 'cancelled' satisfies PostTargetStatus,
-        cancelReason: transition.reason,
+        cancelReason: transition.action === 'reject' ? 'USER_REJECTED' : transition.reason,
         errorCode: null,
         // Rời `scheduled` → job đang chờ thấy lệch rồi bỏ qua.
         ...(target.status === 'scheduled' ? { scheduleVersion: sql`${postTargets.scheduleVersion} + 1` } : {}),
@@ -177,7 +180,7 @@ export async function transitionTarget(
       .set({
         ...(transition.action === 'edit'
           ? { caption: transition.caption }
-          : { status: 'planned' satisfies PostTargetStatus, caption: '', aiCaption: false }),
+          : { status: 'planned' satisfies PostTargetStatus, caption: '', aiCaption: false, generateLeaseUntil: null }),
         errorCode: null,
         version: sql`${postTargets.version} + 1`,
         updatedAt: sql`now()`,
@@ -231,8 +234,12 @@ export async function transitionTarget(
       updatedAt: sql`now()`,
     })
     .where(eq(postTargets.id, targetId))
-    .returning({ scheduleVersion: postTargets.scheduleVersion })
+    .returning({ scheduleVersion: postTargets.scheduleVersion, version: postTargets.version })
   await deps.jobs.send('publish.target', { targetId, scheduleVersion: row!.scheduleVersion }, { startAfter: at, db: bossDbFor(tx) })
+  // Duyệt bài chiến dịch: hàng đợi "Bài chờ duyệt" / Lịch ở tab khác thấy bài rời hàng đợi (AD-3).
+  if (transition.action === 'approve') {
+    await deps.events.publishEvent(tx, 'post_target.updated', { id: targetId, pageId: target.pageId, campaignId: target.campaignId, version: row!.version })
+  }
 }
 
 /**

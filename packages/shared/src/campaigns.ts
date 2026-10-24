@@ -6,6 +6,8 @@
 // xem trước và phần slot còn lại lúc "Bắt đầu" (7.3), để hai lần tạo trùng khoá `(campaign_id, page_id, slot_at)`.
 // Story 7.3: "Bắt đầu chiến dịch" (`StartCampaignRequest`) + danh sách chiến dịch kèm tiến độ dẫn xuất
 // (`CampaignSummaryDto`, ghép ở read-model của server — AD-18) cho `/chien-dich` và Tổng quan.
+// Story 7.4: sinh cuốn chiếu (`CAMPAIGN_GENERATE_WINDOW_MS`), hàng đợi "Bài chờ duyệt" (`PendingSlotDto`) và các hành động
+// duyệt / từ chối dùng chung cho hàng đợi và Lịch nội dung (một endpoint — AD-13).
 import { z } from 'zod'
 import { ScopeParam } from './scope.ts'
 import { MediaAssetDto, POST_CAPTION_MAX, POST_TARGETS_MAX } from './content.ts'
@@ -246,6 +248,8 @@ export const CampaignSlotDto = z.object({
   postId: z.uuid(),
   pageId: z.uuid(),
   slotAt: IsoDateTime,
+  /** Story 7.4: giờ đăng hiện tại (lên Lịch); `null` với bài xem trước của nháp. */
+  scheduledAt: IsoDateTime.nullable(),
   topic: z.string().nullable(),
   status: PostTargetStatus,
   caption: z.string(),
@@ -267,6 +271,9 @@ const SlotVersion = z.number().int().nonnegative()
 /**
  * Body `POST /api/v1/campaigns/:id/slots/:targetId/transition` — Sửa (caption mới), Tạo lại (về `planned` rồi AI sinh
  * lại), Xoá (`cancelled`). Mọi hành động mang `version` (AD-13).
+ * Story 7.4 (chỉ chiến dịch đã bắt đầu): Duyệt (`pending_approval → scheduled` tại `scheduledAt`, thiếu = giờ hiện tại của
+ * bài; giờ đã qua hoặc còn dưới `CAMPAIGN_SLOT_MIN_LEAD_MS` → 422 `SCHEDULE_IN_PAST`, FE hỏi giờ mới), Từ chối
+ * (`cancelled USER_REJECTED`). Tạo lại `immediate` = sinh lại ngay, không chờ lượt cron kế.
  */
 export const CampaignSlotActionRequest = z.discriminatedUnion('action', [
   z
@@ -276,8 +283,10 @@ export const CampaignSlotActionRequest = z.discriminatedUnion('action', [
       caption: z.string().trim().min(1, 'Nhập nội dung bài').max(POST_CAPTION_MAX, `Nội dung tối đa ${POST_CAPTION_MAX} ký tự`),
     })
     .strict(),
-  z.object({ action: z.literal('regenerate'), version: SlotVersion }).strict(),
+  z.object({ action: z.literal('regenerate'), version: SlotVersion, immediate: z.boolean().optional() }).strict(),
   z.object({ action: z.literal('cancel'), version: SlotVersion }).strict(),
+  z.object({ action: z.literal('approve'), version: SlotVersion, scheduledAt: IsoDateTime.optional() }).strict(),
+  z.object({ action: z.literal('reject'), version: SlotVersion }).strict(),
 ])
 export type CampaignSlotActionRequest = z.input<typeof CampaignSlotActionRequest>
 export type ParsedCampaignSlotActionRequest = z.output<typeof CampaignSlotActionRequest>
@@ -327,3 +336,27 @@ export type CampaignListQuery = z.input<typeof CampaignListQuery>
 /** `GET /api/v1/campaigns` → 200, mọi trạng thái (gồm nháp), mới tạo trước. */
 export const CampaignListResponse = z.object({ items: z.array(CampaignSummaryDto) })
 export type CampaignListResponse = z.infer<typeof CampaignListResponse>
+
+/* ---------- Sinh cuốn chiếu + hàng đợi "Bài chờ duyệt" (Story 7.4) ---------- */
+
+/** Cron sinh nội dung cho slot `planned` có giờ đăng trong khoảng này tính từ bây giờ (AD-15: 3 ngày [ASSUMPTION]). */
+export const CAMPAIGN_GENERATE_WINDOW_MS = 3 * 24 * 60 * 60_000
+
+/** `POST /api/v1/campaigns/:id/slots/:targetId/transition` → 200: slot sau hành động (FE vá cache). */
+export const CampaignSlotActionResponse = z.object({ slot: CampaignSlotDto })
+export type CampaignSlotActionResponse = z.infer<typeof CampaignSlotActionResponse>
+
+/** Số bài tối đa của hàng đợi "Bài chờ duyệt" mỗi lần đọc. */
+export const PENDING_SLOTS_MAX = 200
+
+/** Một bài chờ duyệt của chiến dịch đã bắt đầu (`pending_approval`, không `held`) kèm tên / chế độ chiến dịch. */
+export const PendingSlotDto = CampaignSlotDto.extend({ campaignId: z.uuid(), campaignName: z.string(), campaignMode: CampaignMode })
+export type PendingSlotDto = z.infer<typeof PendingSlotDto>
+
+/** Query `GET /api/v1/campaigns/pending-slots`: bài thuộc phạm vi khi trang của bài thuộc tập trang của phạm vi (AD-18). */
+export const PendingSlotsQuery = z.object({ scope: ScopeParam.optional() }).strict()
+export type PendingSlotsQuery = z.input<typeof PendingSlotsQuery>
+
+/** → 200, theo giờ đăng tăng dần (bài quá giờ trước). `truncated` = còn bài ngoài `PENDING_SLOTS_MAX`. */
+export const PendingSlotsResponse = z.object({ items: z.array(PendingSlotDto), truncated: z.boolean() })
+export type PendingSlotsResponse = z.infer<typeof PendingSlotsResponse>

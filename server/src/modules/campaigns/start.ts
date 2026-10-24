@@ -8,9 +8,10 @@
 // 4. Kế hoạch đầy đủ `campaignSlots` → `content.startCampaignSlots` (slot còn lại `planned` trên Lịch, bài xem trước bỏ
 //    `held`; "Tự đăng" duyệt bài đã viết xong).
 // 5. `running` + `started_at`, phát `campaign.started` (realtime: Lịch và danh sách chiến dịch tải lại).
+// 6. Story 7.4: enqueue `campaigns.generate` cùng transaction — slot trong 3 ngày đầu không phải chờ lượt cron kế.
 import type { CampaignDto, CampaignStatus, ParsedSaveCampaignRequest, StartCampaignRequest } from '@ottm/shared'
 import { desc, eq, inArray, sql } from 'drizzle-orm'
-import type { DbExecutor } from '../../platform/db/index.ts'
+import { bossDbFor, type DbExecutor } from '../../platform/db/index.ts'
 import { AppError } from '../../platform/errors/index.ts'
 import { startCampaignSlots, type StartSlotsResult, type TransitionDeps } from '../content/index.ts'
 import { assertDraftValid, getCampaign } from './drafts.ts'
@@ -66,6 +67,7 @@ export async function startCampaign(
     .set({ status: 'running' satisfies CampaignStatus, startedAt: now, updatedAt: sql`now()` })
     .where(eq(campaigns.id, id))
   await deps.events.publishEvent(tx, 'campaign.started', { id })
+  await deps.jobs.send('campaigns.generate', { campaignId: id }, { db: bossDbFor(tx) })
   return { alreadyStarted: false, slots }
 }
 

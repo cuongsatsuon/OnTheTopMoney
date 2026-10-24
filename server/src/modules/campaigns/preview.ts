@@ -7,6 +7,8 @@
 //   (caption theo hồ sơ hiệu lực + hậu kiểm, ảnh qua job ảnh có sẵn), tối đa 3 slot song song. Mã dừng (khoá OpenAI /
 //   hạn mức / mã hoá) → slot chưa bắt đầu nhận cùng mã, không gọi AI. Lỗi tạm → ném sau khi slot khác đã xong.
 // - Sửa / Xoá / Tạo lại: đi qua `content.transitionTarget` với `version`; Tạo lại enqueue `campaigns.preview`.
+// - Story 7.4: cùng route hành động cho "Bài chờ duyệt" của chiến dịch đã bắt đầu (Duyệt / Từ chối / Sửa / Tạo lại / Xoá)
+//   — hàng đợi ở `/chien-dich` và Lịch nội dung gọi chung (AD-13). Vòng sinh dùng chung `runner.ts`.
 import {
   CAMPAIGN_PREVIEW_COUNT,
   campaignSlots,
@@ -14,6 +16,7 @@ import {
   type CampaignGoal,
   type CampaignPreviewResponse,
   type CampaignSlot,
+  type CampaignSlotDto,
   type ParsedCampaignSlotActionRequest,
   type CampaignStatus,
   type ComposeGoal,
@@ -25,11 +28,8 @@ import { bossDbFor, type DbExecutor } from '../../platform/db/index.ts'
 import { AppError } from '../../platform/errors/index.ts'
 import type { JobSender } from '../../platform/jobs/index.ts'
 import {
-  AI_STOP_CODES,
-  SlotGenerateRetryableError,
   ensureCampaignSlots,
-  failSlot,
-  generateSlot,
+  getCampaignSlot,
   listCampaignSlots,
   listSlotsToGenerate,
   pruneCampaignSlots,
@@ -42,15 +42,16 @@ import {
 } from '../content/index.ts'
 import { getPage } from '../pages/index.ts'
 import { getCampaign } from './drafts.ts'
+import { SLOT_CONCURRENCY, runSlotBatch } from './runner.ts'
 import { campaigns } from './schema.ts'
 
 /** Số slot sinh song song trong một lượt [ASSUMPTION] — như Soạn bài (`COMPOSE_CONCURRENCY`). */
-export const PREVIEW_CONCURRENCY = 3
+export const PREVIEW_CONCURRENCY = SLOT_CONCURRENCY
 
 /** Mục tiêu chiến dịch → mục tiêu bài của mẫu prompt Soạn bài (dùng lại, không thêm mẫu mới — AD-7). */
-const COMPOSE_GOAL: Record<CampaignGoal, ComposeGoal> = { engage: 'engagement', follow: 'engagement', sell: 'sales', launch: 'announce' }
+export const COMPOSE_GOAL: Record<CampaignGoal, ComposeGoal> = { engage: 'engagement', follow: 'engagement', sell: 'sales', launch: 'announce' }
 
-const keyOf = (pageId: string, slotAt: string) => `${pageId}|${slotAt}`
+export const keyOf = (pageId: string, slotAt: string) => `${pageId}|${slotAt}`
 
 /**
  * Kế hoạch slot theo cấu hình đã lưu (`limit` slot đầu; mặc định cả thời lượng): trang chưa gỡ, theo thứ tự lưu. Story
@@ -123,45 +124,22 @@ export async function runPreview(
   const withImage = new Map(plan.map((s) => [keyOf(s.pageId, s.slotAt), s.withImage]))
   // Slot của trang còn dùng mà không có trong kế hoạch vừa đọc → bỏ qua (không sinh theo luật ảnh đoán mò; lượt của lần
   // lưu sau tự sinh). Slot của trang đã gỡ (không có trong kế hoạch) vẫn đi tiếp để chốt `PAGE_REMOVED`.
-  const todo = loaded.todo.filter((s) => withImage.has(keyOf(s.pageId, s.slotAt.toISOString())) || !loaded.livePages.has(s.pageId))
-  const goal = COMPOSE_GOAL[campaign.goal]
+  const todo = loaded.todo
+    .filter((s) => withImage.has(keyOf(s.pageId, s.slotAt.toISOString())) || !loaded.livePages.has(s.pageId))
+    .map((s) => ({ id: s.id, withImage: withImage.get(keyOf(s.pageId, s.slotAt.toISOString())) ?? false }))
 
-  let stopCode: ErrorCode | null = null
-  let retryCode: ErrorCode | null = null
-  let fatal: unknown = null
-  let generated = 0
-  let errors = 0
-  let next = 0
-  const worker = async () => {
-    while (next < todo.length && fatal === null) {
-      const slot = todo[next++]!
-      if (opts.signal?.aborted) return
-      try {
-        if (stopCode) {
-          if (await failSlot(deps, slot.id, stopCode)) errors++
-          continue
-        }
-        const outcome = await generateSlot(deps, slot.id, {
-          goal,
-          withImage: withImage.get(keyOf(slot.pageId, slot.slotAt.toISOString())) ?? false,
-          finalAttempt: opts.finalAttempt,
-          signal: opts.signal,
-        })
-        if (outcome.status === 'error') {
-          errors++
-          if (AI_STOP_CODES.has(outcome.errorCode)) stopCode ??= outcome.errorCode
-        } else if (outcome.status !== 'skipped') generated++
-      } catch (err) {
-        if (err instanceof SlotGenerateRetryableError) retryCode ??= err.code
-        else fatal ??= err
-      }
-    }
-  }
-  await Promise.all(Array.from({ length: Math.max(1, Math.min(opts.concurrency ?? PREVIEW_CONCURRENCY, todo.length)) }, worker))
-  opts.signal?.throwIfAborted()
-  if (fatal !== null) throw fatal
-  if (retryCode) throw new PreviewRetryableError(retryCode)
-  return { generated, errors }
+  const result = await runSlotBatch(deps, todo, {
+    goal: COMPOSE_GOAL[campaign.goal],
+    finalAttempt: opts.finalAttempt,
+    signal: opts.signal,
+    concurrency: opts.concurrency ?? PREVIEW_CONCURRENCY,
+    onStop: 'mark',
+  })
+  // Story 7.4: chiến dịch vừa "Bắt đầu" giữa lượt → lượt cuốn chiếu duyệt bài vừa viết xong ("Tự đăng") và viết tiếp.
+  const [after] = await deps.db.select({ status: campaigns.status }).from(campaigns).where(eq(campaigns.id, campaignId))
+  if (after?.status === ('running' satisfies CampaignStatus)) await deps.jobs.send('campaigns.generate', { campaignId })
+  if (result.retryCode) throw new PreviewRetryableError(result.retryCode)
+  return { generated: result.generated, errors: result.errors }
 }
 
 export function parsePreviewJobData(data: unknown): { campaignId: string } {
@@ -186,10 +164,22 @@ export async function getPreview(db: DbExecutor, campaignId: string): Promise<Ca
   return { items, generating: items.some((s) => s.status === 'planned') }
 }
 
+/** Hành động được phép theo trạng thái chiến dịch: nháp chỉ sửa bài xem trước; đã bắt đầu có thêm duyệt / từ chối. */
+const ALLOWED: Record<CampaignStatus, readonly ParsedCampaignSlotActionRequest['action'][]> = {
+  draft: ['edit', 'regenerate', 'cancel'],
+  running: ['edit', 'regenerate', 'cancel', 'approve', 'reject'],
+  paused: ['edit', 'regenerate', 'cancel', 'approve', 'reject'],
+  done: [],
+}
+
 /**
- * Sửa / Xoá / Tạo lại một bài xem trước (chạy trong transaction của bên gọi, khoá dòng chiến dịch như lưu nháp).
- * Chiến dịch không có → 404; đã rời `draft` → 409 (bài chờ duyệt của chiến dịch đang chạy thuộc 7.4); slot không thuộc
- * chiến dịch → 404; `version` lệch / sai trạng thái → 409 (`transitionTarget`).
+ * Một hành động trên slot của chiến dịch (chạy trong transaction của bên gọi, khoá dòng chiến dịch như lưu nháp):
+ * - Story 7.2 (nháp, bước 4): Sửa / Xoá / Tạo lại bài xem trước; Tạo lại enqueue `campaigns.preview`.
+ * - Story 7.4 (đã bắt đầu, "Bài chờ duyệt" + Lịch): thêm Duyệt (tại `scheduledAt`, thiếu = giờ hiện tại của bài; giờ đã
+ *   qua / còn dưới 2 phút → 422 `SCHEDULE_IN_PAST`) và Từ chối (`USER_REJECTED`). Tạo lại `immediate` → enqueue
+ *   `campaigns.generate` (không thì lượt cron kế sinh lại).
+ * Chiến dịch không có → 404; hành động không hợp trạng thái chiến dịch → 409; slot không thuộc chiến dịch → 404; `version`
+ * lệch / sai trạng thái slot → 409 (`transitionTarget`). Trả slot sau hành động.
  */
 export async function applySlotAction(
   tx: DbExecutor,
@@ -197,19 +187,36 @@ export async function applySlotAction(
   campaignId: string,
   targetId: string,
   input: ParsedCampaignSlotActionRequest,
-): Promise<void> {
+): Promise<CampaignSlotDto> {
   const [campaign] = await tx.select({ status: campaigns.status }).from(campaigns).where(eq(campaigns.id, campaignId)).for('update')
   if (!campaign) throw new AppError('NOT_FOUND', 404, { message: 'Chiến dịch không tồn tại', details: { campaignId } })
-  if (campaign.status !== ('draft' satisfies CampaignStatus)) throw new AppError('VERSION_CONFLICT', 409, { message: 'Chiến dịch đã bắt đầu' })
-  if ((await slotCampaignOf(tx, targetId)) !== campaignId) {
-    throw new AppError('NOT_FOUND', 404, { message: 'Bài không thuộc chiến dịch này', details: { campaignId, targetId } })
+  const status = campaign.status as CampaignStatus
+  if (!ALLOWED[status].includes(input.action)) {
+    throw new AppError('VERSION_CONFLICT', 409, {
+      message: status === 'draft' ? 'Chiến dịch chưa bắt đầu' : 'Chiến dịch không còn nhận thao tác này',
+      details: { campaignId, status },
+    })
+  }
+  const slot = (await slotCampaignOf(tx, targetId)) === campaignId ? await getCampaignSlot(tx, targetId) : null
+  if (!slot) throw new AppError('NOT_FOUND', 404, { message: 'Bài không thuộc chiến dịch này', details: { campaignId, targetId } })
+  // Hậu kiểm chặn → phải sửa trước khi duyệt (Sửa bỏ mã); không để Lịch / API duyệt thẳng nội dung vi phạm (AD-21).
+  if (input.action === 'approve' && slot.errorCode === 'AI_POLICY_BLOCKED') {
+    throw new AppError('AI_POLICY_BLOCKED', 422, { message: 'Sửa bài trước khi duyệt', details: { campaignId, targetId } })
   }
   const transition: TargetTransition =
     input.action === 'edit'
       ? { action: 'edit', caption: input.caption }
       : input.action === 'regenerate'
         ? { action: 'regenerate' }
-        : { action: 'cancel', reason: 'USER_DELETED' }
+        : input.action === 'approve'
+          ? { action: 'approve', at: new Date(input.scheduledAt ?? slot.scheduledAt ?? slot.slotAt) }
+          : input.action === 'reject'
+            ? { action: 'reject' }
+            : { action: 'cancel', reason: 'USER_DELETED' }
   await transitionTarget(tx, deps, targetId, transition, input.version)
-  if (input.action === 'regenerate') await deps.jobs.send('campaigns.preview', { campaignId }, { db: bossDbFor(tx) })
+  if (input.action === 'regenerate') {
+    if (status === 'draft') await deps.jobs.send('campaigns.preview', { campaignId }, { db: bossDbFor(tx) })
+    else if (input.immediate) await deps.jobs.send('campaigns.generate', { campaignId }, { db: bossDbFor(tx) })
+  }
+  return (await getCampaignSlot(tx, targetId))!
 }

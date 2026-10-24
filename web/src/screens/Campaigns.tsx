@@ -1,20 +1,49 @@
 // Chiến dịch nuôi page `/chien-dich` (Story 7.3): danh sách chiến dịch thật theo Phạm vi (`GET /campaigns?scope=`) — tab
 // trạng thái, KPI, thẻ tiến độ (ngày, bài đã đăng / tổng, bài tiếp theo, bài đã đăng 7 ngày). Nháp mở lại wizard
-// (`/chien-dich/tao?id=`). Tạm dừng / Tiếp tục / Xoá (Story 7.5) và hàng đợi "Bài chờ duyệt" (Story 7.4) khoá "Sắp có".
-import { AlertTriangle, CalendarDays, Check, Clock, Coins, Megaphone, Pause, Pencil, Play, Plus, ShieldCheck, Trash2, Zap } from 'lucide-react'
+// (`/chien-dich/tao?id=`). Tạm dừng / Tiếp tục / Xoá (Story 7.5) khoá "Sắp có".
+// Story 7.4: hàng đợi "Bài chờ duyệt" thật (`GET /campaigns/pending-slots?scope=`): Duyệt / Sửa / Tạo lại / Từ chối qua cùng
+// route hành động slot với Lịch nội dung; bài quá giờ (hoặc server trả `SCHEDULE_IN_PAST`) → ô chọn giờ mới; "Duyệt tất
+// cả" chỉ duyệt bài không lỗi, chưa quá giờ, tuần tự (lỗi giữa chừng → "Đã xong k/n bài").
+import { AlertTriangle, CalendarDays, Check, CircleAlert, Clock, Coins, Megaphone, Pause, Pencil, Play, Plus, RefreshCw, ShieldCheck, Trash2, X, Zap } from 'lucide-react'
 import { useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { Area, AreaChart, ResponsiveContainer } from 'recharts'
-import type { CampaignStatus, CampaignSummaryDto, PageDto } from '@ottm/shared'
+import type { CampaignSlotActionRequest, CampaignStatus, CampaignSummaryDto, PageDto, PendingSlotDto } from '@ottm/shared'
+import { AiLockHint } from '../components/AiLockHint'
 import { Content } from '../components/AppShell'
-import { ScreenSkeleton } from '../components/Skeleton'
-import { Button, Card, CardHeader, Chip, EmptyState, GroupChip, KpiCard, PageAvatar, PageHeader, Progress, Tabs } from '../components/ui'
+import { ScreenSkeleton, Skeleton } from '../components/Skeleton'
+import { AiBadge, Button, Card, CardHeader, Chip, EmptyState, GroupChip, Input, KpiCard, PageAvatar, PageHeader, PageLabel, Progress, Tabs, Textarea } from '../components/ui'
 import { formatVnd, useAiBudget } from '../lib/ai-budget'
 import { useApp } from '../lib/app-context'
-import { CAMPAIGN_PARAM, CAMPAIGN_STATUS_TEXT, campaignCounts, campaignPct, goalOf, nextPostLabel, trendTotal, useCampaigns } from '../lib/campaigns'
+import { partialRunMessage } from '../lib/calendar'
+import {
+  CAMPAIGN_PARAM,
+  CAMPAIGN_STATUS_TEXT,
+  OVERDUE_TEXT,
+  approveBlock,
+  approveBody,
+  approveInput,
+  approvedToast,
+  bulkApprovable,
+  campaignCounts,
+  campaignPct,
+  goalOf,
+  isOverdue,
+  needsNewTime,
+  nextPostLabel,
+  pendingNote,
+  slotTime,
+  slotWhen,
+  trendTotal,
+  useCampaigns,
+  usePendingSlots,
+  useSlotAction,
+} from '../lib/campaigns'
+import { composeLock } from '../lib/composer'
 import { toUiPage, usePages } from '../lib/connections'
 import { errorMessageOf } from '../lib/error-messages'
 import { useGroups } from '../lib/groups'
+import { defaultScheduleInput, scheduleInputIssue, vnToIso } from '../lib/publish'
 
 type TabId = 'all' | CampaignStatus
 
@@ -72,7 +101,7 @@ export default function Campaigns() {
       <div className="mb-6 grid grid-cols-4 gap-4">
         <KpiCard label="Số chiến dịch" value={String(counts.all)} hint={`${counts.running} đang chạy · ${counts.paused} tạm dừng`} icon={<Megaphone size={16} />} />
         <KpiCard label="Bài AI đã đăng" value={String(aiPublished)} hint="từ các chiến dịch trong phạm vi" />
-        <KpiCard label="Bài chờ duyệt" value={String(pending)} icon={<Clock size={16} className="text-warning" />} hint={pending ? 'Xem trên Lịch nội dung' : 'Không còn bài nào cần duyệt'} />
+        <KpiCard label="Bài chờ duyệt" value={String(pending)} icon={<Clock size={16} className="text-warning" />} hint={pending ? 'Duyệt ở hàng đợi bên dưới hoặc trên Lịch' : 'Không còn bài nào cần duyệt'} />
         <KpiCard
           label="Chi phí AI tháng này"
           value={budget.data ? formatVnd(budget.data.spentVnd) : budget.isError ? '—' : '…'}
@@ -131,35 +160,7 @@ export default function Campaigns() {
         </div>
       )}
 
-      {/* Bài chờ duyệt — hàng đợi duyệt / sửa / tạo lại thuộc Story 7.4. */}
-      <Card className="mt-8">
-        <CardHeader
-          title={
-            <span className="flex items-center gap-2">
-              Bài chờ duyệt <Chip tone="warning">{pending}</Chip>
-            </span>
-          }
-          subtitle="AI đã viết sẵn. Duyệt để bài được đăng đúng giờ, hoặc sửa trước khi duyệt."
-          action={
-            <Button size="sm" variant="primary" icon={<Check size={14} />} disabled title="Sắp có">
-              Duyệt tất cả
-            </Button>
-          }
-        />
-        <EmptyState icon={<Clock size={22} />} title="Hàng đợi duyệt sắp có">
-          {pending ? (
-            <>
-              Trong lúc chờ, {pending} bài chờ duyệt đã hiện trên{' '}
-              <Link to="/lich" className="font-medium text-primary hover:underline">
-                Lịch nội dung
-              </Link>
-              .
-            </>
-          ) : (
-            'Bài mới từ chiến dịch sẽ hiện ở đây trước khi đăng.'
-          )}
-        </EmptyState>
-      </Card>
+      <PendingQueue pages={pages} />
     </Content>
   )
 }
@@ -255,6 +256,196 @@ function CampaignCard({ c, pages }: { c: CampaignSummaryDto; pages: readonly Pag
           Xoá
         </Button>
       </div>
+    </Card>
+  )
+}
+
+/* ---------- Hàng đợi "Bài chờ duyệt" (Story 7.4) ---------- */
+
+function PendingQueue({ pages }: { pages: readonly PageDto[] }) {
+  const { scope, aiLock, notify } = useApp()
+  const budgetState = useAiBudget().data?.state
+  const lock = composeLock({ key: aiLock, budgetBlocked: budgetState === 'blocked', serverCode: null })
+  const query = usePendingSlots(scope)
+  const act = useSlotAction()
+  const [editing, setEditing] = useState<{ id: string; text: string } | null>(null)
+  // Bài đang hỏi giờ mới (quá giờ / server trả `SCHEDULE_IN_PAST`) → ô ngày giờ VN.
+  const [times, setTimes] = useState<Record<string, { date: string; time: string }>>({})
+  const [bulk, setBulk] = useState(false)
+  const items = query.data?.items ?? []
+  // Mốc "bây giờ" theo lần tải hàng đợi (SSE / hỏi lại đổi dữ liệu → tính lại bài quá giờ); server vẫn kiểm khi duyệt.
+  const now = query.dataUpdatedAt
+  const ready = bulkApprovable(items, now)
+
+  const send = (slot: PendingSlotDto, body: CampaignSlotActionRequest, done: (s: PendingSlotDto) => string, after?: () => void) =>
+    act.mutate(
+      { campaignId: slot.campaignId, targetId: slot.id, body },
+      {
+        onSuccess: (res) => {
+          notify(done({ ...slot, ...res.slot }))
+          after?.()
+        },
+        onError: (err) => {
+          if (needsNewTime(err)) setTimes((t) => ({ ...t, [slot.id]: defaultScheduleInput(Date.now()) }))
+          notify(needsNewTime(err) ? `${OVERDUE_TEXT}.` : errorMessageOf(err))
+        },
+      },
+    )
+
+  async function approveAll() {
+    setBulk(true)
+    let ok = 0
+    try {
+      for (const s of ready) {
+        await act.mutateAsync({ campaignId: s.campaignId, targetId: s.id, body: approveBody(s) })
+        ok++
+      }
+      notify(`Đã duyệt ${ok} bài`)
+    } catch (err) {
+      notify(partialRunMessage(ok, ready.length, errorMessageOf(err)))
+    } finally {
+      setBulk(false)
+    }
+  }
+
+  return (
+    <Card className="mt-8">
+      <CardHeader
+        title={
+          <span className="flex items-center gap-2">
+            Bài chờ duyệt <Chip tone="warning">{items.length}{query.data?.truncated ? '+' : ''}</Chip>
+          </span>
+        }
+        subtitle="AI đã viết sẵn. Duyệt để bài được đăng đúng giờ, hoặc sửa trước khi duyệt."
+        action={
+          <Button size="sm" variant="primary" icon={<Check size={14} />} disabled={!ready.length || act.isPending || bulk} onClick={() => void approveAll()}>
+            Duyệt tất cả{ready.length ? ` (${ready.length})` : ''}
+          </Button>
+        }
+      />
+      {query.isPending ? (
+        <div aria-busy="true" className="space-y-3 p-4">
+          {Array.from({ length: 2 }, (_, i) => (
+            <Skeleton key={i} className="h-24 rounded-lg" />
+          ))}
+        </div>
+      ) : query.isError ? (
+        <div className="flex items-center justify-between px-4 py-3 text-sm">
+          <span className="text-danger">{errorMessageOf(query.error)}</span>
+          <Button size="sm" onClick={() => void query.refetch()}>
+            Thử lại
+          </Button>
+        </div>
+      ) : items.length === 0 ? (
+        <EmptyState icon={<Clock size={22} />} title="Không còn bài nào chờ duyệt">
+          AI viết trước bài cho 3 ngày tới; bài mới sẽ hiện ở đây trước khi đăng.
+        </EmptyState>
+      ) : (
+        <div className="divide-y divide-border">
+          {items.map((slot) => {
+            const page = pages.find((p) => p.id === slot.pageId)
+            const overdue = isOverdue(slot, now)
+            const note = pendingNote(slot, now)
+            const block = approveBlock(slot)
+            const isEditing = editing?.id === slot.id
+            const when = times[slot.id] ?? (overdue ? approveInput(slot, now) : null)
+            const whenIssue = when ? scheduleInputIssue(when.date, when.time, now) : null
+            const at = when ? vnToIso(when.date, when.time) : null
+            return (
+              <div key={slot.id} className="p-4">
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="min-w-0 flex-1">
+                    {page ? <PageLabel page={toUiPage(page)} sub={`${slot.campaignName} · ${slotWhen(slotTime(slot))}`} /> : <span className="text-sm">Trang đã gỡ</span>}
+                  </div>
+                  {overdue && <Chip tone="warning">Quá giờ</Chip>}
+                  {slot.topic && <Chip>{slot.topic}</Chip>}
+                  {slot.aiCaption && <AiBadge />}
+                </div>
+                <div className="mt-3">
+                  {isEditing ? (
+                    <Textarea rows={5} value={editing.text} onChange={(e) => setEditing({ id: slot.id, text: e.target.value })} aria-label="Nội dung bài" className="w-full" />
+                  ) : (
+                    slot.caption && <p className="text-sm whitespace-pre-line">{slot.caption}</p>
+                  )}
+                  {slot.media.length > 0 && (
+                    <div className="mt-3 flex gap-2">
+                      {slot.media.map((m) => (
+                        <img key={m.id} src={m.url} alt="Ảnh AI của bài" width={96} height={96} className="size-24 rounded-md object-cover" />
+                      ))}
+                    </div>
+                  )}
+                  {note && (
+                    <p className="mt-2 flex items-start gap-1.5 text-[13px] text-amber-700">
+                      <CircleAlert size={14} className="mt-0.5 shrink-0" /> {note}
+                    </p>
+                  )}
+                  {when && (
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                      <span className="text-[13px] text-muted-foreground">Đăng lúc (giờ Việt Nam)</span>
+                      <Input type="date" value={when.date} onChange={(e) => setTimes((t) => ({ ...t, [slot.id]: { ...when, date: e.target.value } }))} className="w-[150px]" aria-label="Ngày đăng (giờ Việt Nam)" aria-invalid={!!whenIssue} />
+                      <Input type="time" value={when.time} onChange={(e) => setTimes((t) => ({ ...t, [slot.id]: { ...when, time: e.target.value } }))} className="w-[110px]" aria-label="Giờ đăng (giờ Việt Nam)" aria-invalid={!!whenIssue} />
+                      {whenIssue && <span className="w-full text-xs text-danger">{whenIssue}</span>}
+                    </div>
+                  )}
+                </div>
+                <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
+                  {isEditing ? (
+                    <>
+                      <Button size="sm" variant="ghost" onClick={() => setEditing(null)} disabled={act.isPending}>
+                        Huỷ
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="primary"
+                        disabled={act.isPending || !editing.text.trim()}
+                        onClick={() => send(slot, { action: 'edit', version: slot.version, caption: editing.text }, () => 'Đã lưu bài', () => setEditing(null))}
+                      >
+                        Lưu
+                      </Button>
+                    </>
+                  ) : (
+                    <>
+                      <Button size="sm" variant="ghost" icon={<X size={13} />} disabled={act.isPending} onClick={() => send(slot, { action: 'reject', version: slot.version }, () => 'Đã bỏ bài — bài không được đăng')}>
+                        Từ chối
+                      </Button>
+                      <AiLockHint locked={lock.locked} hint={lock.hint} link={lock.link}>
+                        <Button
+                          size="sm"
+                          icon={<RefreshCw size={13} />}
+                          disabled={lock.locked || act.isPending}
+                          onClick={() => send(slot, { action: 'regenerate', version: slot.version, immediate: true }, () => 'AI đang viết lại bài này…')}
+                        >
+                          Tạo lại
+                        </Button>
+                      </AiLockHint>
+                      <Button size="sm" icon={<Pencil size={13} />} disabled={act.isPending} onClick={() => setEditing({ id: slot.id, text: slot.caption })}>
+                        Sửa
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="primary"
+                        icon={<Check size={13} />}
+                        title={block ?? undefined}
+                        disabled={act.isPending || bulk || !!block || (!!when && (!!whenIssue || !at))}
+                        onClick={() =>
+                          send(slot, approveBody(slot, at), (s) => approvedToast(s), () =>
+                            setTimes((t) => {
+                              const { [slot.id]: _drop, ...rest } = t
+                              return rest
+                            }),
+                          )
+                        }
+                      >
+                        Duyệt
+                      </Button>
+                    </>
+                  )}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
     </Card>
   )
 }
