@@ -173,7 +173,8 @@ export default function Inbox() {
   return (
     <div className="flex h-[calc(100vh-56px)] min-h-0 bg-surface">
       {/* ---- Danh sách hội thoại ---- */}
-      <section className="flex w-[340px] shrink-0 flex-col border-r border-border" aria-label="Danh sách hội thoại">
+      {/* Màn ~1024px (sidebar 240px): cột danh sách 300px + chat tối thiểu 400px để không tràn ngang; rộng từ xl về 340px. */}
+      <section className="flex w-[300px] shrink-0 flex-col border-r border-border xl:w-[340px]" aria-label="Danh sách hội thoại">
         <div className="space-y-3 px-3 pt-4">
           <div className="flex items-baseline justify-between px-1">
             <h1 className="text-xl font-semibold">Hộp thư</h1>
@@ -238,7 +239,7 @@ export default function Inbox() {
       </section>
 
       {/* ---- Khung chat ---- */}
-      <section className="flex min-w-[480px] flex-1 flex-col bg-background" aria-label="Khung chat">
+      <section className="flex min-w-[400px] flex-1 flex-col bg-background" aria-label="Khung chat">
         {selected ? (
           <>
             <ChatHeader
