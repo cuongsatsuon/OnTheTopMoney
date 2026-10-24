@@ -30,7 +30,17 @@ export { calendarTitle, listCalendar, type CalendarRange } from './calendar.ts'
 export { SIMILAR_IDEA_MAX, similarIdea } from './similar.ts'
 export { PUBLISHING_STUCK_MS, REQUEUE_OVERDUE_MS, requeueTargets, type RequeueDeps, type RequeueResult } from './requeue.ts'
 // Ảnh bài (AD-14): kiểm bytes trước khi tải lên kho công khai, ghi `media_assets` sau.
-export { POST_IMAGE_VALIDATION, recordMediaAsset, toGeneratedImageDto, toMediaAssetDto, validatePostImage } from './media.ts'
+// Story 7.7: ảnh sản phẩm của chiến dịch — kiểm ảnh tải lên (khoá `FOR KEY SHARE`) và đọc DTO theo id.
+export {
+  POST_IMAGE_VALIDATION,
+  lockUploadedImage,
+  recordMediaAsset,
+  toGeneratedImageDto,
+  toMediaAssetDto,
+  uploadedImagesById,
+  validatePostImage,
+  type UploadedImageProblem,
+} from './media.ts'
 // Viết caption bằng AI theo hồ sơ từng trang (Story 6.2) — chạy trong request, không lưu bài.
 export {
   AI_STOP_CODES,
@@ -45,7 +55,8 @@ export {
 export { commonBrandProfile, writeImageDescription, type ImagePromptDeps } from './image-prompt.ts'
 // Slot chiến dịch (Story 7.2, AD-13, AD-15): tạo / dọn slot theo kế hoạch của `campaigns`, sinh caption + ảnh, đọc xem trước.
 // Story 7.4: lease khi sinh, cửa sổ cuốn chiếu (`listSlotsToGenerate({until})`), hàng đợi "Bài chờ duyệt", nháp kẹt.
-// Story 8.5: `countPendingSlots` — số bài chờ duyệt cho Tổng quan.
+// Story 8.5: `countPendingSlots` — số bài chờ duyệt cho Tổng quan. Story 7.7: ảnh sản phẩm làm ảnh tham khảo của ô ảnh
+// slot (`referenceAssetId`), làm lại ảnh bài xem trước khi nháp đổi ảnh sản phẩm (`refreshSlotImages`).
 export {
   SLOT_GENERATE_LEASE_MS,
   SlotGenerateRetryableError,
@@ -58,9 +69,12 @@ export {
   listPendingSlots,
   listSlotsToGenerate,
   pruneCampaignSlots,
+  refreshSlotImages,
   slotCampaignOf,
+  slotImagePrompt,
   staleSlotCampaigns,
   type SlotGenerateDeps,
+  type SlotGenerateOptions,
   type SlotOutcome,
   type SlotPlan,
 } from './slots.ts'
@@ -118,6 +132,8 @@ export { listFailedPosts, listUpcomingPosts, type OverviewPostsInput } from './o
 
 /** Chỉ để `analytics` khai khoá ngoại `post_metrics.post_target_id` (Drizzle cần đối tượng bảng); không truy vấn trực tiếp. */
 export { postTargets as postTargetsTable } from './schema.ts'
+/** Chỉ để `campaigns` khai khoá ngoại `campaigns.product_image_id` (Story 7.7); không truy vấn trực tiếp. */
+export { mediaAssets as mediaAssetsTable } from './schema.ts'
 
 // Story 9.3: tra public_id còn dòng `media_assets` (lượt dọn file mồ côi).
 export { referencedMediaFiles } from './file-refs.ts'

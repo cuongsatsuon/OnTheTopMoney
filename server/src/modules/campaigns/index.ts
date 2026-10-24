@@ -6,8 +6,9 @@
 // `events.campaigns` tự tạm dừng khi có sự cố).
 export const MODULE = 'campaigns'
 
-// Nháp wizard bước 1–3 (Story 7.1): lưu / thay / đọc cấu hình.
-export { createCampaignDraft, getCampaign, updateCampaignDraft } from './drafts.ts'
+// Nháp wizard bước 1–3 (Story 7.1): lưu / thay / đọc cấu hình. Story 7.7: ảnh sản phẩm đang được chiến dịch dùng (worker
+// ghép cho `content.media_gc`).
+export { PRODUCT_IMAGE_MESSAGE, campaignProductImageIds, createCampaignDraft, getCampaign, updateCampaignDraft } from './drafts.ts'
 // Trang chọn được làm đích (mất kết nối / thiếu hồ sơ → không chọn được, kèm lý do).
 export { listPageOptions, pageBlockReason } from './pages.ts'
 // Xem trước 7 bài đầu (Story 7.2): đồng bộ slot khi lưu nháp, job `campaigns.preview`, đọc, Sửa / Xoá / Tạo lại.

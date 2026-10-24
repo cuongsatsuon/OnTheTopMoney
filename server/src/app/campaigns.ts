@@ -15,6 +15,8 @@
 // - Story 7.5: `POST /campaigns/:id/pause` / `/resume` (không xác nhận — bấm là chạy; tiếp tục khi lý do tự dừng còn → 409
 //   mã = lý do) và `DELETE /campaigns/:id` (FE hỏi xác nhận; bài đã đăng / đang đăng giữ nguyên). MỘT transaction mỗi lệnh,
 //   cần `jobs` + `events`. Story 7.6: tiếp tục kiểm cả khoá OpenAI (cần `cipher`).
+// - Story 7.7: body lưu nháp có `productImageId` (ảnh tải lên qua `POST /media-assets`); đổi ảnh thì lưu nháp làm lại ảnh
+//   của bài xem trước cùng transaction.
 import {
   CampaignActionRequest,
   CampaignListQuery,
@@ -95,7 +97,7 @@ export function registerCampaigns(app: FastifyInstance, deps: CampaignsDeps): vo
     const input = SaveCampaignRequest.parse(req.body ?? {})
     const campaign = await db.transaction(async (tx) => {
       const saved = await createCampaignDraft(tx, input, now())
-      await syncPreviewSlots(tx, saved, jobs)
+      await syncPreviewSlots(tx, saved, { jobs, events })
       return saved
     })
     return reply.code(201).send(campaign)
@@ -161,7 +163,7 @@ export function registerCampaigns(app: FastifyInstance, deps: CampaignsDeps): vo
     const input = SaveCampaignRequest.parse(req.body ?? {})
     return db.transaction(async (tx) => {
       const saved = await updateCampaignDraft(tx, id, input, now())
-      await syncPreviewSlots(tx, saved, jobs)
+      await syncPreviewSlots(tx, saved, { jobs, events })
       return saved
     })
   })

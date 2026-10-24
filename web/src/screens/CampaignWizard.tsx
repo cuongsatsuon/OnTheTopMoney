@@ -6,6 +6,9 @@
 // (SSE + hỏi lại khi còn bài đang viết); Sửa / Xoá / Tạo lại từng bài.
 // Story 7.3: "Bắt đầu chiến dịch" — server kiểm lại trang / ngày (lỗi về đúng bước như khi lưu), tạo đủ lịch bài; xong thì
 // sang Lịch nội dung. Bấm hai lần không tạo trùng (server trả "đã bắt đầu").
+// Story 7.7: bước 3 có thẻ "Ảnh sản phẩm" (tuỳ chọn, 1 ảnh tải lên — dùng chung `POST /media-assets` với Soạn bài): mọi bài
+// có ảnh AI sinh từ ảnh này để giữ đúng sản phẩm. Bước 4 hiện ảnh đang dùng; đổi ảnh ở nháp thì ảnh bài xem trước được
+// làm lại (giữ caption). Sau khi bắt đầu không đổi được (như các ô cấu hình khác).
 import { type CampaignDuration, type CampaignFrequency, type CampaignGoal, type CampaignSlotDto, type PageDto, CAMPAIGN_FREQUENCIES } from '@ottm/shared'
 import {
   ArrowLeft,
@@ -23,11 +26,12 @@ import {
   ShoppingBag,
   Sparkles,
   Trash2,
+  Upload,
   UserPlus,
   X,
   Zap,
 } from 'lucide-react'
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { AiLockHint } from '../components/AiLockHint'
 import { Content } from '../components/AppShell'
@@ -102,7 +106,7 @@ import {
   type PageOptions,
 } from '../lib/campaigns'
 import { todayKey } from '../lib/calendar'
-import { composeLock } from '../lib/composer'
+import { IMAGE_ACCEPT, composeLock, composerErrorMessage, imageFileIssue, useUploadPostImage } from '../lib/composer'
 import { toUiPage, usePages } from '../lib/connections'
 import { errorMessageOf } from '../lib/error-messages'
 import { useGroups } from '../lib/groups'
@@ -130,6 +134,8 @@ export default function CampaignWizard() {
   const campaignQuery = useCampaign(campaignId)
   const save = useSaveCampaign()
   const startMut = useStartCampaign()
+  const upload = useUploadPostImage()
+  const fileRef = useRef<HTMLInputElement>(null)
 
   const [step, setStep] = useState(1)
   const [maxStep, setMaxStep] = useState(1)
@@ -236,6 +242,22 @@ export default function CampaignWizard() {
     update({ overrides: next })
   }
 
+  /** Story 7.7: tải ảnh sản phẩm (1 ảnh; chọn ảnh khác thì thay). Kiểm sớm loại / dung lượng, server kiểm lại bytes. */
+  const onProductImage = (files: FileList | null) => {
+    const file = files?.[0]
+    if (fileRef.current) fileRef.current.value = ''
+    if (!file) return
+    const issue = imageFileIssue(file)
+    if (issue) {
+      notify(issue)
+      return
+    }
+    upload.mutate(file, {
+      onSuccess: (asset) => update({ productImage: asset }),
+      onError: (err) => notify(composerErrorMessage(err)),
+    })
+  }
+
   const show = (s: number) => {
     setStep(s)
     setMaxStep((m) => Math.max(m, s))
@@ -330,7 +352,7 @@ export default function CampaignWizard() {
           const n = i + 1
           const done = n < step
           const current = n === step
-          const reachable = n <= maxStep && n !== step && !save.isPending
+          const reachable = n <= maxStep && n !== step && !save.isPending && !upload.isPending
           return (
             <li key={label} className="flex flex-1 items-center gap-2">
               <button
@@ -590,6 +612,53 @@ export default function CampaignWizard() {
               </Card>
 
               <Card>
+                <CardHeader
+                  title="Ảnh sản phẩm"
+                  subtitle="Tuỳ chọn — một ảnh. Mọi bài có ảnh AI sẽ dựng quanh đúng sản phẩm trong ảnh này (đúng màu, kiểu dáng, chi tiết)."
+                />
+                <div className="p-4">
+                  <div className="flex items-start gap-4">
+                    {form.productImage ? (
+                      <img
+                        src={form.productImage.url}
+                        alt="Ảnh sản phẩm của chiến dịch"
+                        width={96}
+                        height={96}
+                        className="size-24 shrink-0 rounded-md border border-border object-cover"
+                      />
+                    ) : (
+                      <div className="flex size-24 shrink-0 items-center justify-center rounded-md border border-dashed border-border bg-slate-50 text-muted-foreground">
+                        {upload.isPending ? <span className="text-[11px]">Đang tải…</span> : <ImageIcon size={22} />}
+                      </div>
+                    )}
+                    <div className="min-w-0 flex-1 space-y-2">
+                      <p className="text-[13px] text-muted-foreground">
+                        {form.productImage
+                          ? 'AI giữ nguyên sản phẩm trong ảnh, chỉ dựng bố cục, nền và tiêu đề quảng cáo quanh nó.'
+                          : 'Không có ảnh sản phẩm, AI vẽ sản phẩm theo chủ đề và nội dung bài — có thể không giống sản phẩm thật.'}
+                      </p>
+                      {form.productImage && totals.imagePosts === 0 && (
+                        <p className="text-xs text-amber-700">Cấu hình hiện tại không có bài nào có ảnh AI — tăng tỉ lệ ảnh để dùng ảnh này.</p>
+                      )}
+                      <div className="flex flex-wrap gap-2">
+                        <Button size="sm" icon={<Upload size={14} />} onClick={() => fileRef.current?.click()} disabled={upload.isPending}>
+                          {upload.isPending ? 'Đang tải ảnh…' : form.productImage ? 'Đổi ảnh' : 'Tải ảnh lên'}
+                        </Button>
+                        {form.productImage && (
+                          <Button size="sm" variant="ghost" icon={<X size={14} />} onClick={() => update({ productImage: null })} disabled={upload.isPending}>
+                            Bỏ ảnh
+                          </Button>
+                        )}
+                      </div>
+                      <input ref={fileRef} type="file" accept={IMAGE_ACCEPT} className="hidden" aria-label="Chọn ảnh sản phẩm" onChange={(e) => onProductImage(e.target.files)} />
+                      <p className="text-xs text-muted-foreground">PNG, JPEG hoặc WebP, tối đa 10MB. Ảnh chụp rõ sản phẩm, nền gọn cho kết quả tốt nhất.</p>
+                      <FieldError message={errors.fields.productImageId} />
+                    </div>
+                  </div>
+                </div>
+              </Card>
+
+              <Card>
                 <CardHeader title="Lịch & chế độ đăng" />
                 <div className="space-y-5 p-4">
                   <div>
@@ -688,6 +757,15 @@ export default function CampaignWizard() {
                     </div>
                   </div>
                 </div>
+                {form.productImage && (
+                  <div className="flex items-center gap-3 rounded-md border border-border px-4 py-3 text-sm">
+                    <img src={form.productImage.url} alt="Ảnh sản phẩm đang dùng" width={48} height={48} className="size-12 shrink-0 rounded-md object-cover" />
+                    <div className="min-w-0">
+                      <div className="font-medium">Ảnh sản phẩm đang dùng</div>
+                      <div className="text-[13px] text-muted-foreground">Bài có ảnh (kể cả khi Tạo lại) được tạo từ ảnh này để giữ đúng sản phẩm.</div>
+                    </div>
+                  </div>
+                )}
                 {campaignId && <PreviewList campaignId={campaignId} pages={allPages} />}
               </div>
             </Card>
@@ -762,6 +840,13 @@ export default function CampaignWizard() {
                 })}
               </div>
             </div>
+            <SummaryRow label="Ảnh sản phẩm">
+              {form.productImage ? (
+                <img src={form.productImage.url} alt="Ảnh sản phẩm" width={26} height={26} className="inline-block size-[26px] rounded object-cover align-middle" />
+              ) : (
+                <span className="text-muted-foreground">Không có</span>
+              )}
+            </SummaryRow>
             <SummaryRow label="Chế độ">
               {form.mode === 'review' ? (
                 <Chip tone="primary" icon={<ShieldCheck size={11} />}>
@@ -798,7 +883,7 @@ export default function CampaignWizard() {
             {stepBlocked && ' · Kiểm tra các ô báo lỗi'}
           </span>
           {step < 4 ? (
-            <Button variant="primary" disabled={save.isPending} onClick={() => goTo(step + 1)}>
+            <Button variant="primary" disabled={save.isPending || upload.isPending} onClick={() => goTo(step + 1)}>
               {step === 3 ? (save.isPending ? 'Đang lưu…' : 'Lưu và tiếp tục') : 'Tiếp tục'} <ArrowRight size={15} />
             </Button>
           ) : (

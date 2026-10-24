@@ -9,6 +9,9 @@
 // - Sửa / Xoá / Tạo lại: đi qua `content.transitionTarget` với `version`; Tạo lại enqueue `campaigns.preview`.
 // - Story 7.4: cùng route hành động cho "Bài chờ duyệt" của chiến dịch đã bắt đầu (Duyệt / Từ chối / Sửa / Tạo lại / Xoá)
 //   — hàng đợi ở `/chien-dich` và Lịch nội dung gọi chung (AD-13). Vòng sinh dùng chung `runner.ts`.
+// - Story 7.7: ảnh sản phẩm của nháp → mọi slot có ảnh sinh ảnh từ ảnh đó (`referenceAssetId`). Đổi / bỏ ảnh ở nháp → lưu
+//   nháp và job làm lại ảnh của bài đã có ảnh từ ảnh khác (`content.refreshSlotImages`, giữ caption). Job làm cả bước này
+//   dưới khoá `FOR SHARE`: slot đang viết dở lúc lưu (ô ảnh ghi theo ảnh cũ) được lượt sau sửa.
 import {
   CAMPAIGN_PREVIEW_COUNT,
   campaignSlots,
@@ -26,6 +29,7 @@ import {
 import { eq } from 'drizzle-orm'
 import { bossDbFor, type DbExecutor } from '../../platform/db/index.ts'
 import { AppError } from '../../platform/errors/index.ts'
+import type { EventPublisher } from '../../platform/events/index.ts'
 import type { JobSender } from '../../platform/jobs/index.ts'
 import {
   ensureCampaignSlots,
@@ -33,6 +37,7 @@ import {
   listCampaignSlots,
   listSlotsToGenerate,
   pruneCampaignSlots,
+  refreshSlotImages,
   slotCampaignOf,
   transitionTarget,
   type SlotGenerateDeps,
@@ -73,14 +78,21 @@ export const toSlotPlan = (s: CampaignSlot): SlotPlan => ({ pageId: s.pageId, sl
 
 /**
  * Đồng bộ bài xem trước với cấu hình nháp vừa lưu (chạy trong transaction lưu): slot không còn khớp (trang / giờ / chủ
- * đề) bị xoá, slot thiếu được tạo `planned` + `held` (chưa lên Lịch), rồi enqueue `campaigns.preview` (thiếu `jobs` —
- * test không pg-boss — thì chỉ dựng slot).
+ * đề) bị xoá, slot thiếu được tạo `planned` + `held` (chưa lên Lịch), bài đã có ảnh từ ảnh sản phẩm khác được làm lại ảnh
+ * (Story 7.7), rồi enqueue `campaigns.preview` (thiếu `jobs` — test không pg-boss — thì chỉ dựng slot; thiếu `events` thì
+ * để job làm lại ảnh).
  */
-export async function syncPreviewSlots(tx: DbExecutor, campaign: CampaignDto, jobs?: JobSender): Promise<void> {
+export async function syncPreviewSlots(tx: DbExecutor, campaign: CampaignDto, deps: { jobs?: JobSender | undefined; events?: EventPublisher | undefined } = {}): Promise<void> {
   const plan = (await previewPlan(tx, campaign)).map(toSlotPlan)
   await pruneCampaignSlots(tx, campaign.id, plan)
   await ensureCampaignSlots(tx, campaign.id, plan, { held: true, onCalendar: false })
-  if (jobs) await jobs.send('campaigns.preview', { campaignId: campaign.id }, { db: bossDbFor(tx) })
+  if (deps.jobs && deps.events) {
+    await refreshSlotImages(tx, { jobs: deps.jobs, events: deps.events }, campaign.id, {
+      referenceAssetId: campaign.productImage?.id ?? null,
+      goal: COMPOSE_GOAL[campaign.goal],
+    })
+  }
+  if (deps.jobs) await deps.jobs.send('campaigns.preview', { campaignId: campaign.id }, { db: bossDbFor(tx) })
 }
 
 /** Có lỗi tạm của OpenAI ở lượt chưa phải cuối — ném để pg-boss thử lại (slot lỗi vẫn `planned`, chưa sinh). */
@@ -115,6 +127,8 @@ export async function runPreview(
     if (!campaign || campaign.status !== ('draft' satisfies CampaignStatus)) return null
     const plan = await previewPlan(tx, campaign)
     await ensureCampaignSlots(tx, campaignId, plan.map(toSlotPlan), { held: true, onCalendar: false })
+    // Story 7.7: bài vừa sinh theo ảnh sản phẩm cũ trong lúc nháp đổi ảnh → làm lại ảnh (giữ caption).
+    await refreshSlotImages(tx, deps, campaignId, { referenceAssetId: campaign.productImage?.id ?? null, goal: COMPOSE_GOAL[campaign.goal] })
     const livePages = new Set<string>()
     for (const p of campaign.pages) if (await getPage(tx, p.pageId)) livePages.add(p.pageId)
     return { campaign, plan, livePages, todo: await listSlotsToGenerate(tx, campaignId) }
@@ -134,6 +148,7 @@ export async function runPreview(
     signal: opts.signal,
     concurrency: opts.concurrency ?? PREVIEW_CONCURRENCY,
     onStop: 'mark',
+    referenceAssetId: campaign.productImage?.id ?? null,
     // Story 7.5: nháp bị xoá giữa lượt → dừng (vừa "Bắt đầu" thì viết tiếp — 7.4).
     active: () => campaignIn(deps.db, campaignId, ['draft', 'running']),
   })

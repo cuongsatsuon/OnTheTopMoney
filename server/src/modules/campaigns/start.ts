@@ -33,6 +33,7 @@ const asSaved = (c: CampaignDto): ParsedSaveCampaignRequest => ({
   postTimes: c.postTimes,
   imageRatio: c.imageRatio,
   mode: c.mode,
+  productImageId: c.productImage?.id ?? null,
 })
 
 /**

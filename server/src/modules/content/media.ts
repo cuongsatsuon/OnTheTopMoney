@@ -1,6 +1,8 @@
 // Ảnh bài (Story 6.1, AD-14): kiểm bytes trước khi tải lên kho công khai, ghi `media_assets` sau khi kho trả về.
 // Route (`app/media-assets.ts`) lo tải lên Cloudinary; module chỉ kiểm và ghi — không gọi mạng.
 // Story 6.3: dòng có thêm trạng thái (ô ảnh AI đang sinh / lỗi chưa có file) — DTO ảnh chỉ dựng từ dòng `ready`.
+// Story 7.7: `lockUploadedImage` / `uploadedImagesById` — ảnh sản phẩm của chiến dịch (ảnh tải lên `ready`); `campaigns`
+// kiểm và đọc qua đây, không đọc bảng `media_assets`.
 import {
   IMAGE_PENDING_MS,
   POST_IMAGE_MAX_BYTES,
@@ -12,6 +14,7 @@ import {
   type PostImageMime,
 } from '@ottm/shared'
 import type { StoredImage } from '../../adapters/media/index.ts'
+import { eq, inArray } from 'drizzle-orm'
 import type { DbExecutor } from '../../platform/db/index.ts'
 import { detectImageMime } from '../profiles/index.ts'
 import { mediaAssets } from './schema.ts'
@@ -89,4 +92,25 @@ export async function recordMediaAsset(db: DbExecutor, source: MediaAssetSource,
     })
     .returning()
   return toMediaAssetDto(row!)
+}
+
+/** Lý do một ảnh không dùng được làm ảnh sản phẩm (Story 7.7). */
+export type UploadedImageProblem = 'missing' | 'not_ready' | 'not_upload'
+
+/**
+ * Story 7.7: kiểm ảnh tải lên dùng làm ảnh sản phẩm của chiến dịch, khoá dòng `FOR KEY SHARE` tới hết transaction của bên
+ * gọi (cron dọn / xoá theo yêu cầu không xoá chen giữa lúc kiểm và lúc ghi khoá ngoại). `null` = dùng được.
+ */
+export async function lockUploadedImage(tx: DbExecutor, id: string): Promise<UploadedImageProblem | null> {
+  const [row] = await tx.select({ status: mediaAssets.status, source: mediaAssets.source }).from(mediaAssets).where(eq(mediaAssets.id, id)).for('key share')
+  if (!row) return 'missing'
+  if (row.status !== 'ready') return 'not_ready'
+  return row.source === 'upload' ? null : 'not_upload'
+}
+
+/** Story 7.7: DTO các ảnh `ready` theo id (id không có / chưa `ready` thì bỏ) — đọc ảnh sản phẩm của nhiều chiến dịch một lần. */
+export async function uploadedImagesById(db: DbExecutor, ids: readonly string[]): Promise<Map<string, MediaAssetDto>> {
+  if (!ids.length) return new Map()
+  const rows = await db.select().from(mediaAssets).where(inArray(mediaAssets.id, [...new Set(ids)]))
+  return new Map(rows.filter((r) => r.status === 'ready' && r.url !== null).map((r) => [r.id, toMediaAssetDto(r)]))
 }

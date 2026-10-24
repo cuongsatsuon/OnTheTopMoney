@@ -7,8 +7,11 @@
 // khoá ngoại → bỏ qua dòng đó.
 // Story 6.6: ảnh còn ô ảnh AI trỏ tới (`reference_asset_id`, mọi trạng thái) là ảnh tham khảo đang được dùng → giữ; ô
 // con bị dọn (sau 7 ngày của chính nó) thì lượt sau mới dọn ảnh tham khảo.
+// Story 7.7: ảnh sản phẩm của chiến dịch còn tồn tại (`campaigns.product_image_id`, khoá ngoại không cascade) → giữ. `content`
+// không biết bảng `campaigns` (AD-1): worker hỏi `campaigns` rồi truyền `keep`; khoá ngoại là lưới an toàn (chiến dịch tạo
+// chen giữa → lỗi khoá ngoại, bỏ qua). `keep` để các dòng bị khoá ngoại chặn không chiếm lô mỗi ngày.
 import { DAY_MS, RETENTION } from '@ottm/shared'
-import { and, asc, eq, lt, notExists, sql } from 'drizzle-orm'
+import { and, asc, eq, lt, notExists, notInArray, sql } from 'drizzle-orm'
 import type { MediaStores } from '../../adapters/media/index.ts'
 import type { Db } from '../../platform/db/index.ts'
 import type { Logger } from '../../platform/log/index.ts'
@@ -24,6 +27,8 @@ export interface MediaGcDeps {
   media: Pick<MediaStores, 'configured' | 'publicStore'>
   log?: Logger
   now?: () => Date
+  /** Story 7.7: ảnh còn được nơi khác dùng (ảnh sản phẩm của chiến dịch — worker ghép) → không xoá. */
+  keep?: readonly string[]
 }
 
 export interface MediaGcResult {
@@ -47,7 +52,8 @@ function isForeignKeyViolation(err: unknown): boolean {
 
 export async function gcOrphanMedia(deps: MediaGcDeps): Promise<MediaGcResult> {
   const cutoff = new Date((deps.now?.() ?? new Date()).getTime() - MEDIA_GC_AFTER_MS)
-  const old = and(lt(mediaAssets.createdAt, cutoff), notAttached, notReference)
+  const kept = deps.keep?.length ? notInArray(mediaAssets.id, [...deps.keep]) : undefined
+  const old = and(lt(mediaAssets.createdAt, cutoff), notAttached, notReference, kept)
   const candidates = await deps.db
     .select({ id: mediaAssets.id, publicId: mediaAssets.publicId })
     .from(mediaAssets)

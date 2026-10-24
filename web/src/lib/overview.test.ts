@@ -62,6 +62,7 @@ const campaign = (over: Partial<CampaignSummaryDto>): CampaignSummaryDto => ({
   topics: [],
   postTimes: ['11:30'],
   imageRatio: 0,
+  productImage: null,
   startedAt: '2026-10-20T03:00:00.000Z',
   pauseReason: null,
   pausedAt: null,

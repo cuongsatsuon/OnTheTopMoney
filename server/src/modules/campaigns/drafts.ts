@@ -5,6 +5,8 @@
 // Story 7.2: bài xem trước đồng bộ theo cấu hình ở `preview.ts` (route gọi trong cùng transaction lưu). PUT mang
 // `baseUpdatedAt` khác bản hiện tại → 409 (nháp đã đổi ở tab khác). Story 7.3: "Bắt đầu" (`start.ts`) kiểm lại cấu hình
 // đã lưu bằng chính `assertDraftValid` (trang có thể đã gỡ / mất kết nối / mất hồ sơ sau lúc lưu).
+// Story 7.7: ảnh sản phẩm (`productImageId`) phải là ảnh tải lên `ready` — kiểm + khoá qua `content.lockUploadedImage`;
+// `CampaignDto.productImage` đọc qua `content.uploadedImagesById` (`campaigns` không đọc bảng `media_assets`).
 import {
   CAMPAIGN_START_MAX_AHEAD_DAYS,
   type CampaignDto,
@@ -16,9 +18,10 @@ import {
   type ParsedSaveCampaignRequest,
   type PauseReason,
 } from '@ottm/shared'
-import { asc, eq, inArray, sql } from 'drizzle-orm'
+import { asc, eq, inArray, isNotNull, sql } from 'drizzle-orm'
 import type { DbExecutor } from '../../platform/db/index.ts'
 import { AppError } from '../../platform/errors/index.ts'
+import { lockUploadedImage, uploadedImagesById, type UploadedImageProblem } from '../content/index.ts'
 import { getGroup, getPage } from '../pages/index.ts'
 import { pageBlockReason } from './pages.ts'
 import { campaignPages, campaignTopics, campaigns } from './schema.ts'
@@ -33,6 +36,13 @@ interface FieldIssue {
 const BLOCK_MESSAGE: Record<CampaignPageBlockReason, string> = {
   PAGE_DISCONNECTED: 'Trang đã mất kết nối — kết nối lại để chọn',
   CONFIG_MISSING: 'Trang chưa có hồ sơ thương hiệu',
+}
+
+/** Câu dưới ô "Ảnh sản phẩm" (`VALIDATION_FAILED` path `productImageId`). */
+export const PRODUCT_IMAGE_MESSAGE: Record<UploadedImageProblem, string> = {
+  missing: 'Ảnh sản phẩm không còn — tải ảnh lên lại',
+  not_ready: 'Ảnh sản phẩm chưa sẵn sàng',
+  not_upload: 'Chỉ dùng ảnh bạn tải lên làm ảnh sản phẩm',
 }
 
 const DAY_MS = 24 * 60 * 60_000
@@ -61,6 +71,9 @@ export async function assertDraftValid(db: DbExecutor, input: ParsedSaveCampaign
     if (reason) issues.push({ path, message: BLOCK_MESSAGE[reason], code: reason })
     else if (group && page.groupId !== group.id) issues.push({ path, message: 'Trang không thuộc nhóm đã chọn' })
   }
+  // Story 7.7: khoá dòng ảnh tới hết transaction lưu — cron dọn không xoá chen trước khi khoá ngoại được ghi.
+  const imageProblem = input.productImageId ? await lockUploadedImage(db, input.productImageId) : null
+  if (imageProblem) issues.push({ path: ['productImageId'], message: PRODUCT_IMAGE_MESSAGE[imageProblem] })
   if (issues.length) throw new AppError('VALIDATION_FAILED', 400, { message: 'Cấu hình chiến dịch không hợp lệ', details: issues })
 }
 
@@ -74,6 +87,7 @@ const columnsOf = (input: ParsedSaveCampaignRequest) => ({
   defaultFrequency: input.defaultFrequency,
   imageRatio: input.imageRatio,
   postTimes: [...input.postTimes].sort(),
+  productImageId: input.productImageId,
 })
 
 async function insertChildren(tx: DbExecutor, campaignId: string, input: ParsedSaveCampaignRequest): Promise<void> {
@@ -122,6 +136,7 @@ export async function getCampaigns(db: DbExecutor, ids: readonly string[]): Prom
     db.select().from(campaignPages).where(inArray(campaignPages.campaignId, [...ids])).orderBy(asc(campaignPages.position)),
   ])
   const byId = new Map(rows.map((r) => [r.id, r]))
+  const images = await uploadedImagesById(db, rows.flatMap((r) => (r.productImageId ? [r.productImageId] : [])))
   return ids.flatMap((id): CampaignDto[] => {
     const row = byId.get(id)
     if (!row) return []
@@ -140,6 +155,7 @@ export async function getCampaigns(db: DbExecutor, ids: readonly string[]): Prom
         topics: topics.filter((t) => t.campaignId === id).map((t) => ({ name: t.name, share: t.share })),
         postTimes: row.postTimes,
         imageRatio: row.imageRatio,
+        productImage: row.productImageId ? (images.get(row.productImageId) ?? null) : null,
         startedAt: row.startedAt?.toISOString() ?? null,
         pauseReason: (row.pauseReason as PauseReason | null) ?? null,
         pausedAt: row.pausedAt?.toISOString() ?? null,
@@ -148,4 +164,13 @@ export async function getCampaigns(db: DbExecutor, ids: readonly string[]): Prom
       },
     ]
   })
+}
+
+/**
+ * Story 7.7: ảnh sản phẩm của mọi chiến dịch còn tồn tại (mọi trạng thái) — worker truyền cho `content.media_gc` để không
+ * dọn ảnh còn được chiến dịch trỏ tới (khoá ngoại vẫn là lưới an toàn).
+ */
+export async function campaignProductImageIds(db: DbExecutor): Promise<string[]> {
+  const rows = await db.selectDistinct({ id: campaigns.productImageId }).from(campaigns).where(isNotNull(campaigns.productImageId))
+  return rows.map((r) => r.id!)
 }

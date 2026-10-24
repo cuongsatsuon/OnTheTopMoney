@@ -7,9 +7,12 @@
 // - Story 7.5: `pause_reason` + `paused_at` có đúng khi `paused`; `consecutive_failures` (bài đăng lỗi liên tiếp — 7.6 tăng,
 //   "Tiếp tục" đặt về 0); Story 7.6: `failure_target_ids` (target đã đếm — chống đếm trùng). Xoá chiến dịch xoá cứng
 //   dòng (slot không có FK tới đây — bài đã đăng giữ nguyên ở `content`).
+// - Story 7.7: `product_image_id` = ảnh sản phẩm (ảnh tải lên của `content`), FK KHÔNG cascade: ảnh không bị dọn khi chiến
+//   dịch còn trỏ tới; xoá chiến dịch thì ảnh thành ảnh không gắn bài, `content.media_gc` dọn theo hạn.
 import { CAMPAIGN_DURATIONS, CAMPAIGN_FREQUENCIES, CAMPAIGN_GOALS, CAMPAIGN_MODES, CAMPAIGN_POST_TIMES_MAX, CAMPAIGN_STATUSES, PAUSE_REASONS } from '@ottm/shared'
 import { sql } from 'drizzle-orm'
 import { check, date, index, integer, pgTable, primaryKey, text, timestamp, uuid } from 'drizzle-orm/pg-core'
+import { mediaAssetsTable } from '../content/index.ts'
 import { groupsTable, pagesTable } from '../pages/index.ts'
 
 const inList = (xs: readonly (string | number)[]) => sql.raw(xs.map((s) => (typeof s === 'number' ? String(s) : `'${s}'`)).join(', '))
@@ -36,6 +39,8 @@ export const campaigns = pgTable(
     imageRatio: integer('image_ratio').notNull(),
     /** Khung giờ đăng `HH:MM` theo giờ VN, tăng dần. */
     postTimes: text('post_times').array().notNull(),
+    /** Story 7.7: ảnh sản phẩm (ảnh tải lên `ready`) — ô ảnh của mọi slot có ảnh sinh từ ảnh này. Chỉ đổi khi còn `draft`. */
+    productImageId: uuid('product_image_id').references(() => mediaAssetsTable.id),
     /** Story 7.3: lúc bấm "Bắt đầu chiến dịch" — có đúng khi đã rời `draft`. */
     startedAt: timestamp('started_at', { withTimezone: true, precision: 3 }),
     /** Story 7.5: `PauseReason` — có đúng khi `paused` (`MANUAL` = chủ shop; còn lại do hệ thống — 7.6). */
@@ -54,6 +59,8 @@ export const campaigns = pgTable(
   },
   (t) => [
     index('campaigns_status_idx').on(t.status),
+    // Khoá ngoại tới `media_assets`: Postgres dò cột này mỗi lần xoá một ảnh (cron dọn, xoá theo yêu cầu).
+    index('campaigns_product_image_idx').on(t.productImageId),
     check('campaigns_goal_check', sql`${t.goal} in (${inList(CAMPAIGN_GOALS)})`),
     check('campaigns_status_check', sql`${t.status} in (${inList(CAMPAIGN_STATUSES)})`),
     check('campaigns_mode_check', sql`${t.mode} in (${inList(CAMPAIGN_MODES)})`),

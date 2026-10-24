@@ -9,7 +9,7 @@ import { createSecretCipher } from '../adapters/crypto/index.ts'
 import { createMediaStores } from '../adapters/media/index.ts'
 import { gcReservations, handleAiEvent, handleAiPurge } from '../modules/ai/index.ts'
 import { handleCollectPageJob, handleCollectPostsJob, runPageMetricsCron, runPostMetricsCron } from '../modules/analytics/index.ts'
-import { handleCampaignsEvent, handleGenerateJob, handlePreviewJob, runCompleteCheck, runGenerateWindow } from '../modules/campaigns/index.ts'
+import { campaignProductImageIds, handleCampaignsEvent, handleGenerateJob, handlePreviewJob, runCompleteCheck, runGenerateWindow } from '../modules/campaigns/index.ts'
 import { handleAutoreplyPurge, handleRunJob, handleTriageEvent } from '../modules/autoreply/index.ts'
 import {
   cleanupExpiredOAuth,
@@ -287,9 +287,11 @@ try {
         const result = await handleCollectPageJob(analyticsDeps, job as JobWithMetadata<unknown>)
         logger.debug({ jobId: job.id, result }, 'analytics.collect_page')
       },
-      // Story 6.3: xoá ảnh bài không gắn vào bài nào quá 7 ngày (dòng + file Cloudinary).
+      // Story 6.3: xoá ảnh bài không gắn vào bài nào quá 7 ngày (dòng + file Cloudinary). Story 7.7: giữ ảnh sản phẩm của
+      // chiến dịch còn tồn tại (`content` không biết bảng `campaigns` — ghép ở đây).
       'content.media_gc': async () => {
-        const result = await gcOrphanMedia({ db: dbHandle.db, media, log: logger.child({ component: 'media_gc' }) })
+        const keep = await campaignProductImageIds(dbHandle.db)
+        const result = await gcOrphanMedia({ db: dbHandle.db, media, keep, log: logger.child({ component: 'media_gc' }) })
         if (result.deleted > 0 || result.fileErrors > 0) logger.info(result, 'content: đã dọn ảnh bài không gắn bài')
       },
       // Story 6.4: đăng một target (FB feed/photos; IG, Threads container → publish). Chỉ lỗi tạm chắc chắn chưa tạo bài ném

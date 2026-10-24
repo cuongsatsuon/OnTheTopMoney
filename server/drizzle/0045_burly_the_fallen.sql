@@ -1,0 +1,3 @@
+ALTER TABLE "campaigns" ADD COLUMN "product_image_id" uuid;--> statement-breakpoint
+ALTER TABLE "campaigns" ADD CONSTRAINT "campaigns_product_image_id_media_assets_id_fk" FOREIGN KEY ("product_image_id") REFERENCES "public"."media_assets"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+CREATE INDEX "campaigns_product_image_idx" ON "campaigns" USING btree ("product_image_id");

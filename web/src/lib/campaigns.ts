@@ -13,6 +13,8 @@
 // Bài quá giờ (hoặc còn dưới 2 phút) → "Quá giờ — chọn giờ mới"; server trả `SCHEDULE_IN_PAST` thì FE cũng hỏi giờ mới.
 // Story 7.5: Tạm dừng / Tiếp tục (`POST /campaigns/:id/pause|resume`, không xác nhận) + lý do tạm dừng trên thẻ; Xoá
 // (`DELETE /campaigns/:id`, có xác nhận — bài đã đăng giữ nguyên). Tiếp tục khi lý do tự dừng còn → câu theo mã.
+// Story 7.7: ảnh sản phẩm (bước 3, tuỳ chọn, 1 ảnh tải lên qua `POST /media-assets`) → body `productImageId`; mọi bài có
+// ảnh sinh từ ảnh này để giữ đúng sản phẩm. Chỉ đặt / đổi khi còn nháp.
 // Phần thuần tách khỏi hook để test được (campaigns.test.ts).
 import {
   CAMPAIGN_SLOT_MIN_LEAD_MS,
@@ -43,6 +45,7 @@ import {
   type CampaignPageOption,
   type CampaignTopic,
   type GroupDto,
+  type MediaAssetDto,
   type PageDto,
   type PauseReason,
   type Scope,
@@ -164,6 +167,8 @@ export interface CampaignForm {
   postTimes: string[]
   imageRatio: number
   mode: CampaignMode
+  /** Story 7.7: ảnh sản phẩm đã tải lên (`null` = không có). */
+  productImage: MediaAssetDto | null
 }
 
 /** Lựa chọn trang theo id (thiếu = chưa tải xong → coi như chọn được, server vẫn kiểm). */
@@ -191,6 +196,7 @@ export function initialForm(scope: Scope, groups: readonly Pick<GroupDto, 'id'>[
     postTimes: ['11:30', '19:30'],
     imageRatio: 70,
     mode: 'review',
+    productImage: null,
   }
   if (scope.kind === 'group') return { ...base, groupId: scope.id }
   if (scope.kind === 'page') return { ...base, targetMode: 'pages', picked: [scope.id] }
@@ -216,6 +222,7 @@ export function formFromCampaign(c: CampaignDto): CampaignForm {
     postTimes: c.postTimes,
     imageRatio: c.imageRatio,
     mode: c.mode,
+    productImage: c.productImage,
   }
 }
 
@@ -255,6 +262,7 @@ export function buildCampaignBody(form: CampaignForm, active: readonly PageDto[]
     postTimes: [...form.postTimes].sort(),
     imageRatio: form.imageRatio,
     mode: form.mode,
+    productImageId: form.productImage?.id ?? null,
   }
 }
 
@@ -310,6 +318,7 @@ const STEP_OF: Record<CampaignField, number> = {
   postTimes: 3,
   imageRatio: 3,
   mode: 3,
+  productImageId: 3,
 }
 
 export interface CampaignErrors {

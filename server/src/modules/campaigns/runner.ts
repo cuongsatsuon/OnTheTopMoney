@@ -6,6 +6,7 @@
 // Lỗi tạm của OpenAI ở slot nào đó không chặn slot khác; bên gọi ném sau khi lô xong để pg-boss thử lại.
 // Story 7.5: `active()` kiểm trước mỗi slot (chiến dịch vừa tạm dừng / xoá giữa lô → dừng, không gọi AI thêm); slot đang
 // viết dở thì viết xong (bài `held` không được "Tự đăng" duyệt luôn).
+// Story 7.7: `referenceAssetId` = ảnh sản phẩm của chiến dịch — mọi slot có ảnh trong lô sinh ảnh từ ảnh này (edits).
 import type { CampaignStatus, ComposeGoal, ErrorCode } from '@ottm/shared'
 import { eq } from 'drizzle-orm'
 import type { DbExecutor } from '../../platform/db/index.ts'
@@ -44,6 +45,8 @@ export async function runSlotBatch(
     concurrency?: number
     onStop: 'mark' | 'halt'
     autoApprove?: boolean
+    /** Story 7.7: ảnh sản phẩm của chiến dịch (`null` = không có). */
+    referenceAssetId?: string | null
     /** Chiến dịch còn nhận sinh nội dung không — kiểm trước mỗi slot. */
     active?: () => Promise<boolean>
   },
@@ -71,6 +74,7 @@ export async function runSlotBatch(
           finalAttempt: opts.finalAttempt,
           signal: opts.signal,
           ...(opts.autoApprove ? { autoApprove: true } : {}),
+          ...(opts.referenceAssetId ? { referenceAssetId: opts.referenceAssetId } : {}),
         })
         if (outcome.status === 'error') {
           out.errors++

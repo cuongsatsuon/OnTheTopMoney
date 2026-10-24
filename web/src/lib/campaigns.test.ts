@@ -153,7 +153,7 @@ describe('body và nạp lại nháp', () => {
       mode: 'review',
     })
     expect(SaveCampaignRequest.safeParse(body).success).toBe(true)
-    const dto = CampaignDto.parse({ ...body, id: id(99), status: 'draft', startedAt: null, pauseReason: null, pausedAt: null, createdAt: '2026-10-24T03:00:00.000Z', updatedAt: '2026-10-24T03:00:00.000Z' })
+    const dto = CampaignDto.parse({ ...body, productImage: null, id: id(99), status: 'draft', startedAt: null, pauseReason: null, pausedAt: null, createdAt: '2026-10-24T03:00:00.000Z', updatedAt: '2026-10-24T03:00:00.000Z' })
     const again = formFromCampaign(dto)
     expect(buildCampaignBody(again, activePages(again, PAGES, OPTIONS), again.name)).toEqual(body)
   })
@@ -162,8 +162,38 @@ describe('body và nạp lại nháp', () => {
     const f = form({ targetMode: 'pages', picked: [SOLO.id] })
     const body = buildCampaignBody(f, activePages(f, PAGES, OPTIONS), 'Tên')
     expect(body.groupId).toBeNull()
-    const dto = CampaignDto.parse({ ...body, mode: 'review', id: id(98), status: 'draft', startedAt: null, pauseReason: null, pausedAt: null, createdAt: '2026-10-24T03:00:00.000Z', updatedAt: '2026-10-24T03:00:00.000Z' })
+    const dto = CampaignDto.parse({ ...body, productImage: null, mode: 'review', id: id(98), status: 'draft', startedAt: null, pauseReason: null, pausedAt: null, createdAt: '2026-10-24T03:00:00.000Z', updatedAt: '2026-10-24T03:00:00.000Z' })
     expect(formFromCampaign(dto)).toMatchObject({ targetMode: 'pages', picked: [SOLO.id], groupId: null })
+  })
+})
+
+describe('ảnh sản phẩm (Story 7.7)', () => {
+  const IMAGE = { id: id(77), source: 'upload' as const, url: 'https://res.cloudinary.com/demo/image/upload/v1/ottm/public/sp.jpg', width: 800, height: 800, createdAt: '2026-10-24T02:00:00.000Z' }
+
+  it('form mới không có ảnh → body `productImageId: null`; có ảnh → id ảnh; nạp lại nháp giữ ảnh (xem trước ở bước 3 / 4)', () => {
+    const f = form()
+    const active = activePages(f, PAGES, OPTIONS)
+    expect(buildCampaignBody(f, active, 'Tên').productImageId).toBeNull()
+    const body = buildCampaignBody({ ...f, productImage: IMAGE }, active, 'Tên')
+    expect(body.productImageId).toBe(IMAGE.id)
+    expect(SaveCampaignRequest.safeParse(body).success).toBe(true)
+    const dto = CampaignDto.parse({ ...body, productImage: IMAGE, id: id(97), status: 'draft', startedAt: null, pauseReason: null, pausedAt: null, createdAt: '2026-10-24T03:00:00.000Z', updatedAt: '2026-10-24T03:00:00.000Z' })
+    const again = formFromCampaign(dto)
+    expect(again.productImage).toEqual(IMAGE)
+    expect(buildCampaignBody(again, activePages(again, PAGES, OPTIONS), again.name).productImageId).toBe(IMAGE.id)
+  })
+
+  it('body cũ không có `productImageId` vẫn hợp lệ (= không ảnh); id không phải uuid → lỗi ở bước 3', () => {
+    const { productImageId: _drop, ...old } = buildCampaignBody(form(), activePages(form(), PAGES, OPTIONS), 'Tên')
+    expect(SaveCampaignRequest.parse(old).productImageId).toBeNull()
+    const bad = { ...old, productImageId: 'abc' }
+    expect(validateCampaign(bad, NOW)).toMatchObject({ step: 3, fields: { productImageId: 'Ảnh sản phẩm không hợp lệ' } })
+  })
+
+  it('server báo ảnh sản phẩm sai → về bước 3, câu dưới ô "Ảnh sản phẩm"', () => {
+    const body = buildCampaignBody({ ...form(), productImage: IMAGE }, activePages(form(), PAGES, OPTIONS), 'Tên')
+    const err = new ApiError('VALIDATION_FAILED', 400, 'Cấu hình chiến dịch không hợp lệ', [{ path: ['productImageId'], message: 'Ảnh sản phẩm không còn — tải ảnh lên lại' }])
+    expect(serverCampaignErrors(err, body)).toMatchObject({ step: 3, fields: { productImageId: 'Ảnh sản phẩm không còn — tải ảnh lên lại' } })
   })
 })
 
@@ -313,6 +343,7 @@ describe('bắt đầu chiến dịch + danh sách (Story 7.3)', () => {
     CampaignSummaryDto.parse({
       ...buildCampaignBody(form({ targetMode: 'pages', picked: [FB.id] }), [FB], 'Nuôi page 30 ngày'),
       mode: 'review',
+      productImage: null,
       id: id(90),
       status: 'running',
       startedAt: '2026-10-24T03:00:00.000Z',

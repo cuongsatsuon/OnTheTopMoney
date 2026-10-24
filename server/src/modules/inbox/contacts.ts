@@ -431,6 +431,7 @@ export async function listMergeSuggestions(db: DbExecutor, contactId: string): P
       sql`${contacts.id} = case when ${contactMergeSuggestions.contactId} = ${contactId} then ${contactMergeSuggestions.otherContactId} else ${contactMergeSuggestions.contactId} end`,
     )
     .where(or(eq(contactMergeSuggestions.contactId, contactId), eq(contactMergeSuggestions.otherContactId, contactId)))
-    .orderBy(contactMergeSuggestions.createdAt)
+    // `id` (uuidv7) phá hoà khi hai gợi ý cùng mili giây — thiếu nó thì thứ tự nhảy giữa các lần tải.
+    .orderBy(contactMergeSuggestions.createdAt, contactMergeSuggestions.id)
   return rows.map((r) => ({ contactId: r.otherId, name: r.otherName, reason: r.s.reason as MergeSuggestionReason }))
 }

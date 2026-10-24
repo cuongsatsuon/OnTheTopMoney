@@ -10,6 +10,8 @@
 // duyệt / từ chối dùng chung cho hàng đợi và Lịch nội dung (một endpoint — AD-13).
 // Story 7.5: tạm dừng / tiếp tục (`CampaignActionResponse`, lý do `pauseReason` trên thẻ) và xoá chiến dịch
 // (`DeleteCampaignResponse` — bài đã đăng / đang đăng giữ nguyên).
+// Story 7.7: ảnh sản phẩm của chiến dịch (`productImageId` khi lưu nháp, `productImage` khi đọc) — mọi bài có ảnh sinh từ
+// ảnh này qua Images API edits để giữ đúng sản phẩm. Chỉ đặt / đổi khi còn nháp.
 import { z } from 'zod'
 import { ScopeParam } from './scope.ts'
 import { MediaAssetDto, POST_CAPTION_MAX, POST_TARGETS_MAX } from './content.ts'
@@ -167,6 +169,11 @@ export const SaveCampaignRequest = z
       .max(CAMPAIGN_POST_TIMES_MAX, `Tối đa ${CAMPAIGN_POST_TIMES_MAX} khung giờ`),
     imageRatio: z.number().int('Tỉ lệ ảnh là số nguyên').min(0, 'Tỉ lệ ảnh từ 0%').max(100, 'Tỉ lệ ảnh tối đa 100%'),
     mode: CampaignMode.default('review'),
+    /**
+     * Story 7.7: ảnh sản phẩm (ảnh tải lên `ready` — `POST /media-assets`), tuỳ chọn, một ảnh. Thiếu = `null` (không ảnh:
+     * bài có ảnh vẽ từ chữ như 6.8). PUT thay cả ô này như các ô khác.
+     */
+    productImageId: z.uuid('Ảnh sản phẩm không hợp lệ').nullable().default(null),
     /** Story 7.2: `updatedAt` của nháp lúc đọc (chỉ `PUT`) — khác bản hiện tại → 409 (nháp đã đổi ở tab khác). */
     baseUpdatedAt: IsoDateTime.optional(),
   })
@@ -215,6 +222,8 @@ export const CampaignDto = z.object({
   /** Giờ VN `HH:MM`, tăng dần. */
   postTimes: z.array(z.string()),
   imageRatio: z.number().int(),
+  /** Story 7.7: ảnh sản phẩm đang dùng (`null` = không có). */
+  productImage: MediaAssetDto.nullable(),
   /** Story 7.3: lúc bấm "Bắt đầu chiến dịch"; `null` khi còn nháp. */
   startedAt: IsoDateTime.nullable(),
   /** Story 7.5: lý do tạm dừng — có đúng khi `paused` (`MANUAL` = chủ shop tự dừng; còn lại do hệ thống — 7.6). */

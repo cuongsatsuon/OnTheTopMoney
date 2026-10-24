@@ -17,6 +17,10 @@
 // - `autoApprove` ("Tự đăng" — `campaigns` quyết): bài viết xong không lỗi duyệt luôn trong cùng transaction
 //   (`slots-approve.ts`); slot có ảnh mang cờ qua payload job ảnh.
 // - Đọc: hàng đợi "Bài chờ duyệt" (`listPendingSlots`), một slot (`getCampaignSlot`), nháp có slot kẹt (`staleSlotCampaigns`).
+// Story 7.7 (ảnh sản phẩm của chiến dịch — `campaigns` truyền `referenceAssetId`): ô ảnh của slot trỏ `reference_asset_id`
+// tới ảnh sản phẩm và prompt dựng bằng mẫu ảnh tham khảo kiểu `ad` → job ảnh có sẵn đi đường Images API edits (6.6), giữ
+// đúng sản phẩm. Ảnh không còn `ready` → prompt 6.8 (không chặn bài). `refreshSlotImages`: nháp đổi ảnh sản phẩm → làm lại
+// ảnh của bài xem trước đã có ảnh từ ảnh khác (giữ caption).
 // Không log caption / prompt.
 import {
   type BrandProfileDto,
@@ -25,12 +29,12 @@ import {
   type ErrorCode,
   type PostTargetStatus,
 } from '@ottm/shared'
-import { and, asc, eq, inArray, isNull, lt, lte, notExists, or, sql, type SQL } from 'drizzle-orm'
+import { and, asc, eq, inArray, isNull, lt, lte, ne, notExists, or, sql, type SQL } from 'drizzle-orm'
 import { bossDbFor, type Db, type DbExecutor } from '../../platform/db/index.ts'
 import { AppError } from '../../platform/errors/index.ts'
 import type { EventPublisher } from '../../platform/events/index.ts'
 import type { JobSender } from '../../platform/jobs/index.ts'
-import { buildImagePrompt, isMaybeBilled } from '../ai/index.ts'
+import { buildImagePrompt, buildReferenceImagePrompt, isMaybeBilled } from '../ai/index.ts'
 import { getPage } from '../pages/index.ts'
 import { resolveEffectiveOrNull } from '../profiles/index.ts'
 import { composeCaptionForPage, type ComposeDeps } from './compose.ts'
@@ -292,6 +296,90 @@ export async function slotOfAsset(db: DbExecutor, mediaAssetId: string): Promise
   return row ?? null
 }
 
+/**
+ * Prompt ảnh của slot. Story 6.7: mục đích theo mục tiêu slot + tông màu của hồ sơ hiệu lực. Story 6.8: brief = chủ đề slot +
+ * tóm ý caption (cắt ở `imageBriefCaption`), luôn kiểu `ad` — chiến dịch không có cài đặt kiểu ảnh.
+ * Story 7.7: có ảnh sản phẩm → mẫu ảnh tham khảo (giữ NGUYÊN sản phẩm trong ảnh), KHÔNG kèm dòng "Shop bán": ảnh là nguồn
+ * sự thật của sản phẩm, liệt kê sản phẩm khác dễ làm model ghép thêm sản phẩm khác vào ảnh.
+ */
+export function slotImagePrompt(input: { topic: string; caption: string; goal: ComposeGoal; profile: BrandProfileDto; withReference: boolean }): string {
+  const brief = { topic: input.topic, caption: input.caption, mode: 'ad' as const, goal: input.goal, brandColors: input.profile.colors }
+  if (input.withReference) return buildReferenceImagePrompt({ request: '', ...brief })
+  return buildImagePrompt({
+    description: '',
+    style: 'product',
+    ...brief,
+    // Slot không có ảnh tham khảo: nói rõ shop bán gì để ảnh `ad` không vẽ sản phẩm khác (nhất là chế độ Tự đăng).
+    shop: { industry: input.profile.industry, products: input.profile.products.map((p) => p.name) },
+  })
+}
+
+/**
+ * Story 7.7: ảnh sản phẩm còn dùng được làm ảnh tham khảo (`ready`) → id, khoá `FOR KEY SHARE` tới hết transaction (dọn
+ * dữ liệu không xoá chen trước khi ô con trỏ tới nó); không có / không còn `ready` → `null` (slot vẽ từ chữ).
+ */
+async function usableReference(tx: DbExecutor, id: string | null | undefined): Promise<string | null> {
+  if (!id) return null
+  const [row] = await tx.select({ status: mediaAssets.status }).from(mediaAssets).where(eq(mediaAssets.id, id)).for('key share')
+  return row?.status === 'ready' ? id : null
+}
+
+/**
+ * Story 7.7: bài xem trước có ảnh AI mà ảnh đó không sinh từ ảnh sản phẩm hiện tại (`referenceAssetId`; thêm / đổi / bỏ ảnh
+ * sản phẩm ở nháp) → làm lại ảnh, GIỮ caption (kể cả caption chủ shop đã sửa): gỡ ảnh cũ (ô cũ còn `pending` → `failed`
+ * để job cũ không gọi OpenAI), slot về `planned` + ô `pending` mới + job ảnh, `version + 1`, phát `post_target.updated`.
+ * Chạy trong transaction của bên gọi (lưu nháp / job xem trước, đã khoá dòng chiến dịch). Slot mất trang / hồ sơ thì để
+ * nguyên. Trả số slot đã làm lại.
+ */
+export async function refreshSlotImages(
+  tx: DbExecutor,
+  deps: { events: EventPublisher; jobs: JobSender },
+  campaignId: string,
+  opts: { referenceAssetId: string | null; goal: ComposeGoal },
+): Promise<number> {
+  const reference = await usableReference(tx, opts.referenceAssetId)
+  const rows = await tx
+    .select({ id: postTargets.id, pageId: postTargets.pageId, caption: postTargets.caption, topic: posts.topic, assetId: mediaAssets.id })
+    .from(postTargets)
+    .innerJoin(posts, eq(posts.id, postTargets.postId))
+    .innerJoin(postTargetMedia, eq(postTargetMedia.postTargetId, postTargets.id))
+    .innerJoin(mediaAssets, eq(mediaAssets.id, postTargetMedia.mediaAssetId))
+    .where(
+      and(
+        eq(postTargets.campaignId, campaignId),
+        inArray(postTargets.status, ['planned', 'pending_approval'] satisfies PostTargetStatus[]),
+        ne(postTargets.caption, ''),
+        eq(mediaAssets.source, 'ai'),
+        sql`${mediaAssets.referenceAssetId} is distinct from ${reference}::uuid`,
+      ),
+    )
+    .orderBy(asc(postTargets.id))
+    .for('update', { of: postTargets })
+  let refreshed = 0
+  for (const slot of rows) {
+    const page = await getPage(tx, slot.pageId)
+    const effective = page ? await resolveEffectiveOrNull<BrandProfileDto>(tx, page.id, 'brand') : null
+    if (!effective) continue
+    await tx.delete(postTargetMedia).where(eq(postTargetMedia.postTargetId, slot.id))
+    await tx
+      .update(mediaAssets)
+      .set({ status: 'failed', errorCode: 'IMAGE_FAILED' })
+      .where(and(eq(mediaAssets.id, slot.assetId), eq(mediaAssets.status, 'pending')))
+    const prompt = slotImagePrompt({ topic: slot.topic ?? '', caption: slot.caption, goal: opts.goal, profile: effective.config, withReference: reference !== null })
+    const [asset] = await tx.insert(mediaAssets).values({ source: 'ai', status: 'pending', prompt, referenceAssetId: reference }).returning({ id: mediaAssets.id })
+    await tx.insert(postTargetMedia).values({ postTargetId: slot.id, mediaAssetId: asset!.id, position: 0 })
+    const [row] = await tx
+      .update(postTargets)
+      .set({ status: 'planned' satisfies PostTargetStatus, errorCode: null, generateLeaseUntil: null, version: sql`${postTargets.version} + 1`, updatedAt: sql`now()` })
+      .where(eq(postTargets.id, slot.id))
+      .returning({ pageId: postTargets.pageId, campaignId: postTargets.campaignId, version: postTargets.version })
+    await deps.jobs.send('content.image.generate', { mediaAssetId: asset!.id }, { db: bossDbFor(tx) })
+    await deps.events.publishEvent(tx, 'post_target.updated', { id: slot.id, pageId: row!.pageId, campaignId: row!.campaignId, version: row!.version })
+    refreshed++
+  }
+  return refreshed
+}
+
 export type SlotGenerateDeps = ComposeDeps & { jobs: JobSender; now?: () => Date }
 
 /** `scheduled` = Story 7.4 "Tự đăng": viết xong và đã duyệt luôn. */
@@ -321,6 +409,16 @@ async function claimSlot(db: DbExecutor, targetId: string): Promise<Date | null>
   return row?.lease ?? null
 }
 
+export interface SlotGenerateOptions {
+  goal: ComposeGoal
+  withImage: boolean
+  finalAttempt: boolean
+  signal?: AbortSignal | undefined
+  autoApprove?: boolean
+  /** Story 7.7: ảnh sản phẩm của chiến dịch (ảnh tham khảo cho ô ảnh); thiếu / `null` = vẽ từ chữ (6.8). */
+  referenceAssetId?: string | null | undefined
+}
+
 /**
  * Sinh nội dung một slot `planned` chưa sinh. `goal` = mục tiêu bài suy từ mục tiêu chiến dịch; `withImage` = luật slot
  * (`campaignSlots`). Kết quả: `ready` (`pending_approval`), `scheduled` (Story 7.4 `autoApprove`: đã duyệt luôn),
@@ -330,7 +428,7 @@ async function claimSlot(db: DbExecutor, targetId: string): Promise<Date | null>
 export async function generateSlot(
   deps: SlotGenerateDeps,
   targetId: string,
-  opts: { goal: ComposeGoal; withImage: boolean; finalAttempt: boolean; signal?: AbortSignal | undefined; autoApprove?: boolean },
+  opts: SlotGenerateOptions,
 ): Promise<SlotOutcome> {
   const lease = await claimSlot(deps.db, targetId)
   if (!lease) return { status: 'skipped' }
@@ -348,7 +446,7 @@ export async function generateSlot(
 async function generateClaimed(
   deps: SlotGenerateDeps,
   targetId: string,
-  opts: { goal: ComposeGoal; withImage: boolean; finalAttempt: boolean; signal?: AbortSignal | undefined; autoApprove?: boolean },
+  opts: SlotGenerateOptions,
 ): Promise<SlotOutcome> {
   const [slot] = await deps.db
     .select({ status: postTargets.status, caption: postTargets.caption, pageId: postTargets.pageId, topic: posts.topic })
@@ -400,20 +498,6 @@ async function generateClaimed(
     })
   }
 
-  // Story 6.7: prompt ảnh chung — thêm mục đích theo mục tiêu slot và tông màu từ hồ sơ hiệu lực của trang.
-  // Story 6.8: brief ý tưởng bài = chủ đề slot + tóm ý caption (cắt ở `imageBriefCaption`), luôn kiểu `ad` — chiến dịch
-  // không có cài đặt kiểu ảnh.
-  const prompt = buildImagePrompt({
-    description: '',
-    topic: slot.topic ?? '',
-    caption,
-    mode: 'ad',
-    style: 'product',
-    goal: opts.goal,
-    brandColors: effective.config.colors,
-    // Slot không có ảnh tham khảo: nói rõ shop bán gì để ảnh `ad` không vẽ sản phẩm khác (nhất là chế độ Tự đăng).
-    shop: { industry: effective.config.industry, products: effective.config.products.map((p) => p.name) },
-  })
   return deps.db.transaction(async (tx): Promise<SlotOutcome> => {
     const [row] = await tx
       .update(postTargets)
@@ -421,7 +505,9 @@ async function generateClaimed(
       .where(and(eq(postTargets.id, targetId), eq(postTargets.status, 'planned' satisfies PostTargetStatus), eq(postTargets.caption, '')))
       .returning({ pageId: postTargets.pageId, campaignId: postTargets.campaignId, version: postTargets.version })
     if (!row) return { status: 'skipped' }
-    const [asset] = await tx.insert(mediaAssets).values({ source: 'ai', status: 'pending', prompt }).returning({ id: mediaAssets.id })
+    const reference = await usableReference(tx, opts.referenceAssetId)
+    const prompt = slotImagePrompt({ topic: slot.topic ?? '', caption, goal: opts.goal, profile: effective.config, withReference: reference !== null })
+    const [asset] = await tx.insert(mediaAssets).values({ source: 'ai', status: 'pending', prompt, referenceAssetId: reference }).returning({ id: mediaAssets.id })
     await tx.insert(postTargetMedia).values({ postTargetId: targetId, mediaAssetId: asset!.id, position: 0 })
     // "Tự đăng": job ảnh duyệt luôn khi ảnh xong (cờ đi cùng payload — `content` không đọc chế độ chiến dịch).
     await deps.jobs.send('content.image.generate', { mediaAssetId: asset!.id, ...(opts.autoApprove ? { autoApprove: true } : {}) }, { db: bossDbFor(tx) })

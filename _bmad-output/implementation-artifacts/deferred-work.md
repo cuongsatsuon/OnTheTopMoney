@@ -367,3 +367,15 @@
 - source_spec: `spec-6-8-anh-quang-cao-theo-y-tuong.md`
   summary: Chiến dịch chưa chọn được kiểu ảnh — slot luôn dựng ảnh `ad` (ảnh quảng cáo, có thể có chữ). Nếu chủ shop cần ảnh chụp sạch cho chiến dịch: thêm cột `campaigns.image_mode` (mặc định `ad`), ô chọn ở bước 3 wizard cạnh "Bài có ảnh AI", truyền qua `runSlotBatch` → `generateSlot`.
   evidence: `content/slots.ts` `generateClaimed` gọi `buildImagePrompt({ mode: 'ad', … })`; quyết định "chọn cách gọn" trong spec 6.8 (không migration, không đổi wizard). Chữ trên ảnh không được hậu kiểm (từ cấm, chính tả) — chỉ dặn trong prompt; cần thử thật thêm với ảnh slot "Tự đăng" (duyệt luôn, không người xem trước).
+- source_spec: `spec-7-7-anh-san-pham-chien-dich.md`
+  summary: Kiểm bằng trình duyệt + OpenAI / Cloudinary thật, worker chạy: wizard bước 3 tải ảnh sản phẩm (xem trước, Đổi ảnh, Bỏ ảnh) → bước 4 hiện ảnh đang dùng, 7 bài có ảnh giữ đúng sản phẩm (`gpt-image-2.5-sunburst` qua edits, không `input_fidelity`); đổi ảnh ở nháp → ảnh bài xem trước làm lại, caption giữ; chiến dịch "Tự đăng" đăng ảnh edits. So chất lượng prompt tham khảo `ad` không có dòng "Shop bán" với có dòng đó.
+  evidence: Chỉ có test API (`server/test/campaigns-product-image.test.ts`, OpenAI + Cloudinary giả) và test helper web. Dev không có `CLOUDINARY_URL` (tải ảnh lên trả `MEDIA_NOT_CONFIGURED`) và trang dev chưa có hồ sơ thương hiệu nên chưa vào được bước 3 trên trình duyệt; chỉ thấy dòng "Ảnh sản phẩm · Không có" ở cột Tóm tắt.
+- source_spec: `spec-7-7-anh-san-pham-chien-dich.md`
+  summary: Đổi ảnh sản phẩm sau khi chiến dịch đã bắt đầu (v1 khoá như trang / tần suất / chủ đề). Nếu cần: endpoint riêng đổi `product_image_id` của chiến dịch `running|paused`, chỉ slot sinh SAU khi đổi dùng ảnh mới (slot đã có ảnh giữ nguyên), kiểm ảnh như lúc lưu nháp.
+  evidence: `campaigns/drafts.ts` `updateCampaignDraft` từ chối chiến dịch đã rời `draft` (409); `generate.ts` đọc ảnh từ dòng chiến dịch ở mỗi lượt nên chỉ cần cho phép ghi cột.
+- source_spec: `spec-7-7-anh-san-pham-chien-dich.md`
+  summary: Bấm "Bắt đầu" ngay sau khi đổi ảnh ở nháp, lúc lượt xem trước đang viết dở một bài: bài đó có thể giữ ảnh sinh từ ảnh cũ (lượt sau chỉ làm lại ảnh khi chiến dịch còn nháp). Cửa sổ hẹp; chủ shop vẫn thấy ảnh ở hàng đợi duyệt (chế độ "Duyệt trước") và Tạo lại được.
+  evidence: `campaigns/preview.ts` `runPreview` gọi `content.refreshSlotImages` chỉ khi `draft`; `runGenerate` không làm lại ảnh.
+- source_spec: `spec-7-7-anh-san-pham-chien-dich.md`
+  summary: Lưu nháp đổi ảnh sản phẩm đúng lúc job ảnh của một bài xem trước vừa xong có thể deadlock (thứ tự khoá ngược: `refreshSlotImages` khoá `post_targets` rồi cập nhật ô ảnh `pending`; job ảnh khoá ô ảnh rồi `settle` slot). Postgres huỷ một bên — lưu nháp trả 500 (bấm lại là được) hoặc job ảnh retry rồi `skipped`; không hỏng dữ liệu. Nếu gặp: trong `refreshSlotImages` khoá các ô ảnh ứng viên (`FOR UPDATE` theo id) trước khi khoá slot.
+  evidence: `content/slots.ts` `refreshSlotImages` (`for('update', { of: postTargets })` rồi `update(mediaAssets)`), `content/images.ts` `generateImageAsset` (cập nhật `media_assets` rồi `settleSlotImage` → `settle`).
