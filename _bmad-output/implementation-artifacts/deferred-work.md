@@ -287,3 +287,21 @@
 - source_spec: `spec-8-1-thu-thap-so-lieu.md`
   summary: Số liệu trang Threads: `views` của `threads_insights` là chuỗi theo ngày Meta (`end_time` giờ Thái Bình Dương) nhưng job hỏi theo cửa sổ ngày VN rồi cộng mọi giá trị — ngày VN D có thể nhận số ngày Meta D−1 (lệch một ngày so với trang FB) hoặc cộng hai ngày nếu Meta trả giá trị chồng cửa sổ; `likes` / `replies` / … (`total_value`) thì đúng cửa sổ VN.
   evidence: `PAGE_METRIC_MAP.threads` (`mode: 'per_day'`) ở `analytics/metric-map.ts` + `parseInsightTotals`. Hướng làm: kiểm bằng Meta thật; nếu đúng là chuỗi ngày thì tách `views` sang lời gọi `range` như FB (`parseInsightDaily`, ngày = `end_time` − 1 ngày).
+- source_spec: `spec-8-2-man-hieu-suat.md`
+  summary: Kiểm bằng trình duyệt `/hieu-suat` với phiên chủ shop + worker đã chạy lượt thu số liệu:
+    - đổi Phạm vi (tất cả / nhóm / trang) và 7 / 30 / 90 ngày → KPI, % so kỳ trước (tắt công tắc → mất mũi tên), biểu đồ theo nền tảng + nét đứt "Kỳ trước";
+    - trang kết nối <7 ngày → "Cần thêm vài ngày dữ liệu" thay biểu đồ / sparkline; trang thiếu `read_insights` → "Thiếu quyền thống kê — Kết nối lại" mở OAuth đúng trang;
+    - bảng trang sắp xếp (ô "—" luôn cuối), bài tốt nhất có ảnh / "AI tạo" / liên kết bài gốc.
+  evidence: Chỉ có test API (Postgres thật, `server/test/analytics-performance.test.ts`) và test helper web (`web/src/lib/performance.test.ts`); chưa chạy UI (dev không có mật khẩu mẫu).
+- source_spec: `spec-8-2-man-hieu-suat.md`
+  summary: Tab "Hiệu suất" của Chi tiết trang (`PageDetail.tsx` › `PagePerformance`) và Chi tiết nhóm (`GroupDetail.tsx` › `GroupPerformance`) vẫn chạy dữ liệu mẫu (`engagement30d`, `posts`, `AI_REPLIES`).
+  evidence: AC 8.2 chỉ nêu `/hieu-suat`; EXPERIENCE ghi hai tab "cùng nguồn dữ liệu". Hướng làm: dùng `usePerformance({kind:'page'|'group', id}, '30d')` của `web/src/lib/performance.ts` (cùng endpoint, không cần API mới); phần "tin AI trả lời" chờ Story 8.3.
+- source_spec: `spec-8-2-man-hieu-suat.md`
+  summary: Đã bỏ khỏi `/hieu-suat` hai phần chỉ có số giả và không thuộc story nào: heatmap "Giờ đăng tốt nhất" và nút "Xuất báo cáo" (chỉ hiện toast).
+  evidence: Không có trong epics.md / EXPERIENCE / DESIGN — chỉ có ở bản mẫu. Nếu cần: heatmap tính được từ `post_metrics` (tương tác trung bình theo thứ × giờ đăng, giờ VN) qua `content.listPublishedInRange` + `published_at`; xuất báo cáo cần story riêng (định dạng CSV / PDF).
+- source_spec: `spec-8-2-man-hieu-suat.md`
+  summary: "Chưa đủ dữ liệu" theo `pages.connected_at`, mà kết nối lại trang đã mất kết nối đặt lại mốc này → trang có lịch sử số liệu vẫn hiện "Cần thêm vài ngày dữ liệu" 7 ngày sau khi kết nối lại. `reach` của KPI / bảng trang là tổng reach theo ngày (một người xem nhiều ngày bị đếm nhiều lần).
+  evidence: `isInsufficient` + `add` ở `server/src/modules/analytics/performance.ts`; `upsertFromPlatform` ở `pages/service.ts`. Hướng làm: tính chưa đủ dữ liệu theo ngày đầu có dòng `page_daily_metrics` (hoặc lưu `first_connected_at`); reach duy nhất cho khoảng tuỳ ý Meta không cung cấp — có thể đổi nhãn "Tiếp cận (cộng theo ngày)".
+- source_spec: `spec-8-2-man-hieu-suat.md`
+  summary: % so kỳ trước tắt (`previous = null`) cho cả phạm vi khi CÓ một trang bắt đầu có số liệu sau ngày đầu kỳ trước — phạm vi `all` nhiều trang mất so sánh tới 2N ngày (90 ngày → ~180 ngày) chỉ vì thêm một trang mới.
+  evidence: `lateStart` / `comparable` ở `server/src/modules/analytics/performance.ts` (review lượt 1). Hướng làm: so like-for-like — tính `current` / `previous` dùng cho % chỉ trên các trang đủ dữ liệu kỳ trước (thêm trường vào `MetricComparison`, vd. `comparableCurrent`), hiển thị tổng vẫn gồm mọi trang.

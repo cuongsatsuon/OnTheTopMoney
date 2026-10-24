@@ -39,3 +39,5 @@ export {
 } from './collect.ts'
 // Cron rải job theo trang.
 export { runPageMetricsCron, runPostMetricsCron, type MetricsCronDeps } from './cron.ts'
+// Màn Hiệu suất (Story 8.2): tổng hợp chỉ đọc theo phạm vi + khoảng.
+export { pageMetricsState, performanceOverview, performanceWindow, type PerformanceWindow } from './performance.ts'

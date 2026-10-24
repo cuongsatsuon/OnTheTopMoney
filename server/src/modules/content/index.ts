@@ -81,8 +81,18 @@ export {
   type RequestImagesDeps,
 } from './images.ts'
 export { MEDIA_GC_AFTER_MS, MEDIA_GC_BATCH, gcOrphanMedia, type MediaGcDeps, type MediaGcResult } from './media-gc.ts'
-// Story 8.1 (AD-17): bài đã đăng có id nền tảng trong cửa sổ — `analytics` kéo số liệu theo danh sách này.
-export { METRIC_TARGETS_MAX, listMetricTargets, type MetricTarget } from './metrics-targets.ts'
+// Story 8.1 (AD-17): bài đã đăng có id nền tảng trong cửa sổ — `analytics` kéo số liệu theo danh sách này. Story 8.2:
+// bài đã đăng trong kỳ + chi tiết bài tốt nhất cho màn Hiệu suất.
+export {
+  METRIC_TARGETS_MAX,
+  PUBLISHED_IN_RANGE_MAX,
+  describePublishedTargets,
+  listMetricTargets,
+  listPublishedInRange,
+  type MetricTarget,
+  type PublishedRef,
+  type PublishedTargetInfo,
+} from './metrics-targets.ts'
 
 /** Chỉ để `analytics` khai khoá ngoại `post_metrics.post_target_id` (Drizzle cần đối tượng bảng); không truy vấn trực tiếp. */
 export { postTargets as postTargetsTable } from './schema.ts'
