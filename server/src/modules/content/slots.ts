@@ -404,7 +404,8 @@ async function generateClaimed(
   }
 
   const description = caption.slice(0, Math.min(IMAGE_DESCRIPTION_MAX, POST_TOPIC_MAX))
-  const prompt = buildImagePrompt({ description, style: 'product' })
+  // Story 6.7: prompt ảnh chung — thêm mục đích theo mục tiêu slot và tông màu từ hồ sơ hiệu lực của trang.
+  const prompt = buildImagePrompt({ description, style: 'product', goal: opts.goal, brandColors: effective.config.colors })
   return deps.db.transaction(async (tx): Promise<SlotOutcome> => {
     const [row] = await tx
       .update(postTargets)

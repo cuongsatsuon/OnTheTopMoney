@@ -151,8 +151,20 @@ export const IMAGE_PENDING_MS = 15 * 60_000
 /** Số id tối đa khi hỏi trạng thái ô ảnh (`GET /media-assets/generated`). */
 export const GENERATED_IMAGES_QUERY_MAX = 40
 
-/** Phong cách ảnh (ô "Phong cách" ở mục Ảnh): ảnh sản phẩm, phong cách sống, tối giản, minh hoạ. */
-export const IMAGE_STYLES = ['product', 'lifestyle', 'minimal', 'illustration'] as const
+/**
+ * Mục tiêu bài (ô "Mục tiêu" ở Soạn bài): bán hàng, tương tác, thông báo. Story 6.7: cũng là "mục đích" của ảnh AI
+ * (khai báo trước hợp đồng ảnh vì `GenerateImagesRequest` dùng).
+ */
+export const COMPOSE_GOALS = ['sales', 'engagement', 'announce'] as const
+export const ComposeGoal = z.enum(COMPOSE_GOALS)
+export type ComposeGoal = z.infer<typeof ComposeGoal>
+
+/**
+ * Phong cách ảnh (ô "Phong cách" ở mục Ảnh): ảnh sản phẩm, phong cách sống, tối giản, minh hoạ. Story 6.7 thêm premium,
+ * studio, trẻ trung, năng động, 3D (theo FlowMate). Phong cách không lưu DB (chỉ prompt đã dựng) — thêm giá trị không
+ * làm hỏng dữ liệu cũ.
+ */
+export const IMAGE_STYLES = ['product', 'lifestyle', 'minimal', 'illustration', 'premium', 'studio', 'youthful', 'dynamic', 'render_3d'] as const
 export const ImageStyle = z.enum(IMAGE_STYLES)
 export type ImageStyle = z.infer<typeof ImageStyle>
 
@@ -167,20 +179,63 @@ export type ImageErrorCode = z.infer<typeof ImageErrorCode>
  */
 export const AI_INPUT_IMAGE_MAX_SIDE = 1024
 
+/** Trang đích gửi kèm yêu cầu ảnh (Story 6.7) — server tìm hồ sơ thương hiệu chung để lấy tông màu. */
+const ImagePageIds = z.array(z.uuid()).max(POST_TARGETS_MAX, `Tối đa ${POST_TARGETS_MAX} trang`)
+
 /**
  * Body `POST /api/v1/media-assets/generate`: mô tả ảnh (Composer gửi "Mô tả ảnh", trống thì ý tưởng bài) + phong cách.
  * Story 6.6: có `referenceId` (ảnh đã có trong kho, `ready`) → AI giữ đúng sản phẩm trong ảnh đó, `prompt` là yêu cầu
  * bối cảnh, `style` không dùng.
+ * Story 6.7: `goal` (mục tiêu bài → mục đích ảnh) và `pageIds` (trang đích; cùng một hồ sơ thương hiệu → thêm tông màu
+ * thương hiệu vào prompt). Cả hai tuỳ chọn, không mặc định — body cũ giữ nguyên nghĩa.
  */
 export const GenerateImagesRequest = z
   .object({
     prompt: z.string().trim().min(1, 'Nhập mô tả ảnh hoặc ý tưởng bài').max(POST_TOPIC_MAX, `Mô tả tối đa ${POST_TOPIC_MAX} ký tự`),
     style: ImageStyle.default('product'),
     referenceId: z.uuid().optional(),
+    goal: ComposeGoal.optional(),
+    pageIds: ImagePageIds.optional(),
   })
   .strict()
 export type GenerateImagesRequest = z.input<typeof GenerateImagesRequest>
 export type ParsedGenerateImagesRequest = z.output<typeof GenerateImagesRequest>
+
+/* ---------- AI viết mô tả ảnh (Story 6.7) ---------- */
+
+/**
+ * Hướng viết mô tả (chip "AI viết mô tả" ở mục Ảnh, theo "Gợi ý prompt nhanh" của FlowMate): chi tiết hơn, ảnh sản
+ * phẩm, banner khuyến mãi, lifestyle, feedback khách hàng, mùa lễ. Enum — không nhận "hướng" chữ tự do.
+ */
+export const IMAGE_PROMPT_DIRECTIONS = ['detail', 'product', 'promo', 'lifestyle', 'feedback', 'seasonal'] as const
+export const ImagePromptDirection = z.enum(IMAGE_PROMPT_DIRECTIONS)
+export type ImagePromptDirection = z.infer<typeof ImagePromptDirection>
+
+/**
+ * Body `POST /api/v1/media-assets/image-prompt`: AI viết lại "Mô tả ảnh" đang có (trống thì từ ý tưởng bài) thành mô tả
+ * chi tiết theo `direction`; không lưu gì. `withReference` = đang dùng ảnh tham khảo (chỉ tả bối cảnh). Cần ít nhất
+ * mô tả hoặc ý tưởng.
+ */
+export const ImagePromptRequest = z
+  .object({
+    description: z.string().trim().max(POST_TOPIC_MAX, `Mô tả tối đa ${POST_TOPIC_MAX} ký tự`).default(''),
+    topic: z.string().trim().max(POST_TOPIC_MAX, `Ý tưởng tối đa ${POST_TOPIC_MAX} ký tự`).default(''),
+    direction: ImagePromptDirection,
+    goal: ComposeGoal.optional(),
+    style: ImageStyle.optional(),
+    withReference: z.boolean().default(false),
+    pageIds: ImagePageIds.optional(),
+  })
+  .strict()
+  .superRefine((body, ctx) => {
+    if (!body.description && !body.topic) ctx.addIssue({ code: 'custom', path: ['description'], message: 'Nhập mô tả ảnh hoặc ý tưởng bài' })
+  })
+export type ImagePromptRequest = z.input<typeof ImagePromptRequest>
+export type ParsedImagePromptRequest = z.output<typeof ImagePromptRequest>
+
+/** `POST /media-assets/image-prompt` → 200: mô tả mới (một đoạn, ≤ `POST_TOPIC_MAX` — gửi thẳng được cho "Tạo ảnh AI"). */
+export const ImagePromptResponse = z.object({ description: z.string().min(1).max(POST_TOPIC_MAX) })
+export type ImagePromptResponse = z.infer<typeof ImagePromptResponse>
 
 /** Một ô ảnh AI: `asset` có khi `ready`; `errorCode` có khi `failed`. */
 export const GeneratedImageDto = z.object({
@@ -372,11 +427,6 @@ export const CalendarResponse = z.object({ items: z.array(CalendarItemDto), trun
 export type CalendarResponse = z.infer<typeof CalendarResponse>
 
 /* ---------- Viết caption bằng AI (Story 6.2, AD-7, AD-21) ---------- */
-
-/** Mục tiêu bài (ô "Mục tiêu" ở Soạn bài): bán hàng, tương tác, thông báo. */
-export const COMPOSE_GOALS = ['sales', 'engagement', 'announce'] as const
-export const ComposeGoal = z.enum(COMPOSE_GOALS)
-export type ComposeGoal = z.infer<typeof ComposeGoal>
 
 /** Độ dài mong muốn (ô "Độ dài"): ngắn, vừa, dài. */
 export const COMPOSE_LENGTHS = ['short', 'medium', 'long'] as const

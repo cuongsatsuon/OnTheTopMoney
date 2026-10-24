@@ -29,6 +29,7 @@ import { registerInboxSuggest } from './inbox-suggest.ts'
 import { registerKnowledgeItems } from './knowledge-items.ts'
 import { registerMediaAssets } from './media-assets.ts'
 import { registerMediaGenerate } from './media-generate.ts'
+import { registerMediaImagePrompt } from './media-image-prompt.ts'
 import { registerNotifications } from './notifications.ts'
 import { registerOAuth } from './oauth.ts'
 import { registerOnboarding } from './onboarding.ts'
@@ -198,6 +199,8 @@ export function buildApp({ sql, db, logger, http = {}, loginLimiter, health, eve
     registerAutoreplyTest(app, aiDeps)
     // Story 6.6: caption đọc ảnh của tab → cần kho media để tải ảnh.
     registerPostsCompose(app, { ...aiDeps, media: mediaStores })
+    // Story 6.7: AI viết mô tả ảnh (model chữ, chạy trong request).
+    registerMediaImagePrompt(app, { ...aiDeps, ...(clock ? { now: clock } : {}) })
     // Sinh ảnh AI (Story 6.3): enqueue `content.image.generate` cùng transaction → cần `jobs`.
     if (jobs) registerMediaGenerate(app, { db, cipher: aiDeps.cipher, media: mediaStores, jobs, ...(clock ? { now: clock } : {}) })
   }

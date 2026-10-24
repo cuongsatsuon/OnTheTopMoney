@@ -7,11 +7,16 @@
 // Story 6.3: sinh 4 ảnh AI (`POST /media-assets/generate` → 4 ô đang sinh), trạng thái ô đọc lại qua
 // `GET /media-assets/generated` khi SSE báo `media_asset.created|failed` (khoá query gốc `media_assets`); lưới ảnh dựng
 // bằng `imageTiles` (ô chờ / ô lỗi / ảnh, rồi kho ảnh của bài).
+// Story 6.7: chip "AI viết mô tả" (`POST /media-assets/image-prompt`, huỷ bằng `signal`) đổ mô tả chi tiết vào ô Mô tả
+// ảnh; body tạo ảnh gửi thêm mục tiêu bài + trang đích (tông màu thương hiệu); 9 phong cách ảnh.
 // Story 8.4: "Tạo bài tương tự" từ Hiệu suất mở `/soan-bai?idea=<ý tưởng>&trang=<pageId>` (`similarPostLink`) — bài mới
 // chọn đúng trang đó làm đích (`startSelection`), chỉ nạp state, AI chạy khi chủ shop bấm "Tạo bằng AI".
 import {
   ComposeCaptionsResponse,
   GeneratedImagesResponse,
+  IMAGE_PROMPT_DIRECTIONS,
+  IMAGE_STYLES,
+  ImagePromptResponse,
   MediaAssetDto,
   PLATFORM_RULES,
   POST_IMAGE_MAX_BYTES,
@@ -29,6 +34,8 @@ import {
   type GenerateImagesRequest,
   type GeneratedImageDto,
   type ImageErrorCode,
+  type ImagePromptDirection,
+  type ImagePromptRequest,
   type ImageStyle,
   type PageDto,
   type Platform,
@@ -382,24 +389,83 @@ export function captionViolations(caption: string, platform: Platform, violation
 
 /* ---------- Sinh ảnh AI (Story 6.3) ---------- */
 
-export const IMAGE_STYLE_OPTIONS: { value: ImageStyle; label: string }[] = [
-  { value: 'product', label: 'Ảnh sản phẩm' },
-  { value: 'lifestyle', label: 'Phong cách sống' },
-  { value: 'minimal', label: 'Tối giản' },
-  { value: 'illustration', label: 'Minh hoạ' },
-]
+/** Nhãn phong cách ảnh (Story 6.7 thêm Premium, Studio, Trẻ trung, Năng động, 3D theo FlowMate). */
+const IMAGE_STYLE_LABEL: Record<ImageStyle, string> = {
+  product: 'Ảnh sản phẩm',
+  lifestyle: 'Phong cách sống',
+  minimal: 'Tối giản',
+  illustration: 'Minh hoạ',
+  premium: 'Premium',
+  studio: 'Studio',
+  youthful: 'Trẻ trung',
+  dynamic: 'Năng động',
+  render_3d: '3D',
+}
+export const IMAGE_STYLE_OPTIONS: { value: ImageStyle; label: string }[] = IMAGE_STYLES.map((value) => ({ value, label: IMAGE_STYLE_LABEL[value] }))
+
+/** Chip "AI viết mô tả" (Story 6.7, theo "Gợi ý prompt nhanh" của FlowMate) — đúng thứ tự `IMAGE_PROMPT_DIRECTIONS`. */
+const IMAGE_PROMPT_DIRECTION_LABEL: Record<ImagePromptDirection, string> = {
+  detail: 'Chi tiết hơn',
+  product: 'Ảnh sản phẩm',
+  promo: 'Banner khuyến mãi',
+  lifestyle: 'Lifestyle',
+  feedback: 'Feedback khách hàng',
+  seasonal: 'Mùa lễ',
+}
+export const IMAGE_PROMPT_DIRECTION_OPTIONS: { value: ImagePromptDirection; label: string }[] = IMAGE_PROMPT_DIRECTIONS.map((value) => ({
+  value,
+  label: IMAGE_PROMPT_DIRECTION_LABEL[value],
+}))
 
 /** Mô tả gửi AI: ô "Mô tả ảnh" nếu có, không thì ý tưởng bài. Cả hai trống → chuỗi rỗng (nút khoá). */
 export const imagePrompt = (description: string, idea: string): string => description.trim() || idea.trim()
 
+/** Ngữ cảnh bài cho ảnh AI (Story 6.7): mục tiêu → mục đích ảnh; trang đích → tông màu của hồ sơ chung (server giải). */
+export interface ImageContext {
+  goal: ComposeGoal
+  pageIds: readonly string[]
+}
+
 /**
  * Body `POST /media-assets/generate`; `null` khi chưa có gì để mô tả. `referenceId` (Story 6.6) → ảnh giữ đúng sản phẩm
- * trong ảnh tham khảo, mô tả là yêu cầu bối cảnh, không gửi phong cách.
+ * trong ảnh tham khảo, mô tả là yêu cầu bối cảnh, không gửi phong cách. `context` (Story 6.7) → thêm `goal` + `pageIds`.
  */
-export function buildImageBody(description: string, idea: string, style: ImageStyle, referenceId: string | null = null): GenerateImagesRequest | null {
+export function buildImageBody(
+  description: string,
+  idea: string,
+  style: ImageStyle,
+  referenceId: string | null = null,
+  context?: ImageContext,
+): GenerateImagesRequest | null {
   const prompt = imagePrompt(description, idea)
   if (!prompt) return null
-  return referenceId ? { prompt, referenceId } : { prompt, style }
+  const extra = context ? { goal: context.goal, ...(context.pageIds.length ? { pageIds: [...context.pageIds] } : {}) } : {}
+  return referenceId ? { prompt, referenceId, ...extra } : { prompt, style, ...extra }
+}
+
+/**
+ * Body `POST /media-assets/image-prompt` (Story 6.7, chip "AI viết mô tả"): mô tả đang có + ý tưởng + hướng; có ảnh
+ * tham khảo thì không gửi phong cách. `null` khi cả mô tả lẫn ý tưởng trống (chip khoá).
+ */
+export function buildImagePromptBody(input: {
+  description: string
+  idea: string
+  direction: ImagePromptDirection
+  style: ImageStyle
+  withReference: boolean
+  context: ImageContext
+}): ImagePromptRequest | null {
+  const description = input.description.trim()
+  const topic = input.idea.trim()
+  if (!description && !topic) return null
+  return {
+    description,
+    topic,
+    direction: input.direction,
+    goal: input.context.goal,
+    ...(input.withReference ? { withReference: true } : { style: input.style }),
+    ...(input.context.pageIds.length ? { pageIds: [...input.context.pageIds] } : {}),
+  }
 }
 
 /** Ảnh dùng được làm ảnh tham khảo (Story 6.6): ảnh chủ shop tự tải lên (ảnh sản phẩm thật). */
@@ -524,6 +590,14 @@ export function useGeneratedImages(ids: readonly string[]) {
     queryFn: ({ signal }) => apiFetch(`/media-assets/generated?ids=${ids.join(',')}`, { schema: GeneratedImagesResponse, signal }),
     enabled: ids.length > 0,
     refetchInterval: (q) => (q.state.data?.images.some((i) => i.status === 'pending') ? GENERATED_POLL_MS : false),
+  })
+}
+
+/** "AI viết mô tả" (Story 6.7): một lời gọi model chữ, huỷ bằng `signal` (Dừng / nạp nháp khác). */
+export function useWriteImagePrompt() {
+  return useMutation({
+    mutationFn: ({ body, signal }: { body: ImagePromptRequest; signal?: AbortSignal }) =>
+      apiFetch('/media-assets/image-prompt', { method: 'POST', body, schema: ImagePromptResponse, ...(signal ? { signal } : {}) }),
   })
 }
 

@@ -300,7 +300,7 @@ export function Input(props: InputHTMLAttributes<HTMLInputElement> & { ref?: Ref
   return <input {...props} className={fieldCls('h-9', props.className)} />
 }
 
-export function Textarea(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
+export function Textarea(props: TextareaHTMLAttributes<HTMLTextAreaElement> & { ref?: Ref<HTMLTextAreaElement> }) {
   return <textarea {...props} className={fieldCls('py-2', props.className)} />
 }
 

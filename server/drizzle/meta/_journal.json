@@ -309,6 +309,13 @@
       "when": 1792828698502,
       "tag": "0043_loose_starfox",
       "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1792831726309,
+      "tag": "0044_chunky_professor_monster",
+      "breakpoints": true
     }
   ]
 }

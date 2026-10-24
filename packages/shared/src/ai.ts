@@ -17,6 +17,8 @@ export const AI_FEATURE_CATEGORY: Record<AiFeature, AiCategory> = {
   campaign_generate: 'content',
   brand_sample: 'content',
   contact_summary: 'content',
+  // Story 6.7: viết mô tả ảnh là lượt gọi model chữ — xếp `content` (hạng mục `image` đếm theo số ảnh).
+  image_prompt: 'content',
   image_generate: 'image',
 }
 

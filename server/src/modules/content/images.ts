@@ -16,6 +16,8 @@
 //   Job tải bản thu nhỏ của ảnh tham khảo (lỗi kho tạm → retry, chưa tốn tiền) rồi gọi gateway `references` (Images API
 //   edits). Lỗi gateway có thể đã tính tiền (`maybeBilled`, hết giờ sau khi gửi) → `failed` ngay, không retry (áp dụng cả
 //   ảnh từ chữ — mỗi lượt thử lại là một lần trả tiền).
+// - Story 6.7: prompt dựng lúc bấm (lưu ở `media_assets.prompt`): mô tả + mục đích (`goal`) + phong cách + tông màu của
+//   hồ sơ thương hiệu chung của `pageIds` (không chung → bỏ màu).
 // `ai` không chạm `media_assets` (gateway chỉ trả bytes + ghi `ai_usage`). Không log prompt / mô tả.
 import {
   IMAGE_GENERATE_COUNT,
@@ -43,6 +45,7 @@ import {
 } from '../ai/index.ts'
 import { detectImageMime } from '../profiles/index.ts'
 import { getOpenAiPrefs } from '../settings/index.ts'
+import { commonBrandProfile } from './image-prompt.ts'
 import { isRetryableInputImageFailure, loadInputImage } from './input-images.ts'
 import { toGeneratedImageDto } from './media.ts'
 import { mediaAssets, postTargetMedia, postTargets } from './schema.ts'
@@ -91,7 +94,11 @@ export async function requestImageGeneration(deps: RequestImagesDeps, input: Par
     throw new AppError('AI_BUDGET_EXCEEDED', 402, { details: { month: budget.month, limitVnd: budget.limitVnd, spentVnd: budget.spentVnd, remainingVnd: 0 } })
   }
   const referenceId = input.referenceId ?? null
-  const prompt = referenceId ? buildReferenceImagePrompt({ request: input.prompt }) : buildImagePrompt({ description: input.prompt, style: input.style })
+  // Story 6.7: mục đích theo mục tiêu bài + tông màu của hồ sơ thương hiệu chung (nếu các trang đích cùng một hồ sơ).
+  const brandColors = (await commonBrandProfile(deps.db, input.pageIds))?.colors
+  const prompt = referenceId
+    ? buildReferenceImagePrompt({ request: input.prompt, goal: input.goal, brandColors })
+    : buildImagePrompt({ description: input.prompt, style: input.style, goal: input.goal, brandColors })
   const now = deps.now?.() ?? new Date()
   return deps.db.transaction(async (tx) => {
     if (referenceId) {

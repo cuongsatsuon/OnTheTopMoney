@@ -150,8 +150,9 @@ describe('cost', () => {
       ['gpt-6-luna', 0.1, 0.01, 0.5, null],
       ['gpt-6.1-sol', 2, 0.1, 10, null],
       ['gpt-6-astra', 10, 1, 50, null],
-      ['gpt-image-2.5-flare', 5, null, 30, 0.05],
+      // Story 6.7: sunburst đứng đầu (model ảnh mặc định).
       ['gpt-image-2.5-sunburst', 5, null, 30, 0.05],
+      ['gpt-image-2.5-flare', 5, null, 30, 0.05],
       ['gpt-image-2', 5, null, 30, 0.05],
     ])
     expect(await getModelPrice(handle.db, 'gpt-6-luna')).toEqual(luna)
@@ -611,16 +612,16 @@ describe('cờ cảnh báo, consumer và các ca biên', () => {
 })
 
 describe('generateImage', () => {
-  it('không có usage → bytes ảnh + 1 dòng ai_usage (images = n), chi phí = n × 0,05 USD', async () => {
+  it('không có usage → bytes ảnh + 1 dòng ai_usage (images = n), chi phí = n × 0,05 USD; model mặc định sunburst (Story 6.7)', async () => {
     const result = await generateImage(depsOf(), { feature: 'image_generate', pageId: 'page-2', prompt: SECRET_PROMPT, n: 2 })
     expect(result.mimeType).toBe('image/jpeg')
     expect(result.images).toEqual([FAKE_JPEG, FAKE_JPEG])
     expect(result).toMatchObject({ requested: 2, received: 2 })
     // 2 × 0,05 USD = 100.000 micro-USD × 26.000 = 2.600 đ.
-    expect(result.usage).toMatchObject({ model: 'gpt-image-2.5-flare', images: 2, usdMicros: 100_000, costVnd: 2_600 })
-    expect(fake.imageRequests[0]).toMatchObject({ model: 'gpt-image-2.5-flare', n: 2, size: '1024x1024', prompt: SECRET_PROMPT })
+    expect(result.usage).toMatchObject({ model: 'gpt-image-2.5-sunburst', images: 2, usdMicros: 100_000, costVnd: 2_600 })
+    expect(fake.imageRequests[0]).toMatchObject({ model: 'gpt-image-2.5-sunburst', n: 2, size: '1024x1024', prompt: SECRET_PROMPT })
     const [row] = await handle.sql`select feature, model, page_id, images, cost_vnd from ai_usage`
-    expect(row).toMatchObject({ feature: 'image_generate', model: 'gpt-image-2.5-flare', page_id: 'page-2', images: 2, cost_vnd: '2600' })
+    expect(row).toMatchObject({ feature: 'image_generate', model: 'gpt-image-2.5-sunburst', page_id: 'page-2', images: 2, cost_vnd: '2600' })
     expect(await counts()).toEqual({ usage: 1, reservations: 0 })
   })
 
@@ -672,8 +673,8 @@ describe('ảnh vào (Story 6.6)', () => {
       ['gpt-6-luna', null],
       ['gpt-6.1-sol', null],
       ['gpt-6-astra', null],
-      ['gpt-image-2.5-flare', 8],
       ['gpt-image-2.5-sunburst', 8],
+      ['gpt-image-2.5-flare', 8],
       ['gpt-image-2', 8],
     ])
   })

@@ -288,12 +288,16 @@ describe('chế độ "Tự đăng"', () => {
   })
 
   it('slot có ảnh: chờ job ảnh (payload `autoApprove`) rồi mới `scheduled`; ảnh bị từ chối → `pending_approval IMAGE_REJECTED`, không đăng', async () => {
-    const ig = await page('instagram')
+    const ig = await page('instagram', { brand: { colors: ['#112233'] } })
     const c = await running([{ pageId: ig, frequency: null }], { mode: 'auto' })
     expect(await gen(c.id)).toMatchObject({ generated: 3, scheduled: 0 })
     expect((await statuses(c.id)).slice(0, 3)).toEqual(['planned', 'planned', 'planned'])
     const imageJobs = await jobsOf<{ mediaAssetId: string; autoApprove?: boolean }>('content.image.generate')
     expect(imageJobs).toHaveLength(3)
+    // Story 6.7: prompt ảnh chung — mục đích theo mục tiêu chiến dịch (engage → tương tác) + màu hồ sơ của trang.
+    const [asset] = await handle.sql<{ prompt: string }[]>`select prompt from media_assets where id = ${imageJobs[0]!.data.mediaAssetId}`
+    expect(asset!.prompt).toContain('mục đích: tăng tương tác')
+    expect(asset!.prompt).toContain('tông màu thương hiệu: #112233')
     expect(imageJobs.every((j) => j.data.autoApprove === true)).toBe(true)
 
     const imageDeps = { db: handle.db, events, jobs, cipher, openai, log, media }

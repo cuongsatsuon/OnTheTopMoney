@@ -192,6 +192,8 @@ export const AI_FEATURES = [
   'brand_sample',
   'image_generate',
   'contact_summary',
+  // Story 6.7: AI viết lại mô tả ảnh ở Soạn bài (model chữ).
+  'image_prompt',
 ] as const
 export const AiFeature = z.enum(AI_FEATURES)
 export type AiFeature = z.infer<typeof AiFeature>

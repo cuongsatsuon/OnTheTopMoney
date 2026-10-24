@@ -41,4 +41,15 @@ export {
   type AutoreplyModelReason,
   type AutoreplyPromptContext,
 } from './autoreply.ts'
-export { buildImagePrompt, buildReferenceImagePrompt } from './image.ts'
+export {
+  IMAGE_DESCRIPTION_MAX_OUTPUT_TOKENS,
+  buildImageDescriptionPrompt,
+  buildImagePrompt,
+  buildReferenceImagePrompt,
+  cleanImageDescription,
+  imageDescriptionInput,
+  imageDescriptionInstructions,
+  type ImageDescriptionContext,
+  type ImagePromptInput,
+  type ReferenceImagePromptInput,
+} from './image.ts'

@@ -47,7 +47,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import type { ComposeGoal, ComposeLength, ComposeReviseAction, ImageStyle, MediaAssetDto, PageDto, PostDto, PostTargetDto, TargetAction } from '@ottm/shared'
+import type { ComposeGoal, ComposeLength, ComposeReviseAction, ImagePromptDirection, ImageStyle, MediaAssetDto, PageDto, PostDto, PostTargetDto, TargetAction } from '@ottm/shared'
 import { AiLockHint } from '../components/AiLockHint'
 import { Content } from '../components/AppShell'
 import { Skeleton } from '../components/Skeleton'
@@ -79,6 +79,7 @@ import {
   GOAL_OPTIONS,
   IDEA_PARAM,
   IMAGE_ACCEPT,
+  IMAGE_PROMPT_DIRECTION_OPTIONS,
   IMAGE_STYLE_OPTIONS,
   LENGTH_OPTIONS,
   POST_PARAM,
@@ -93,6 +94,7 @@ import {
   brandProfileLink,
   buildComposeBody,
   buildImageBody,
+  buildImagePromptBody,
   buildSaveBody,
   canUseAsReference,
   captionCounter,
@@ -125,6 +127,7 @@ import {
   useGenerateImages,
   useGeneratedImages,
   usePost,
+  useWriteImagePrompt,
   useSavePost,
   useUploadPostImage,
   type AiNote,
@@ -168,6 +171,7 @@ export default function Composer() {
   const upload = useUploadPostImage()
   const compose = useComposeCaptions()
   const generateImages = useGenerateImages()
+  const writeImagePrompt = useWriteImagePrompt()
 
   const allPages = useMemo(() => pagesQuery.data ?? [], [pagesQuery.data])
   const groupList = groupsQuery.data ?? []
@@ -204,7 +208,10 @@ export default function Composer() {
   const [referenceId, setReferenceId] = useState<string | null>(null)
   /** "Kèm 4 ảnh AI": "Tạo bằng AI" sinh ảnh cùng lúc với caption (UX F4 b3). */
   const [withImages, setWithImages] = useState(true)
-  const imageDescRef = useRef<HTMLInputElement>(null)
+  const imageDescRef = useRef<HTMLTextAreaElement>(null)
+  /** "AI viết mô tả" đang chạy theo hướng nào (Story 6.7); `null` = không chạy. */
+  const [describing, setDescribing] = useState<ImagePromptDirection | null>(null)
+  const describeController = useRef<AbortController | null>(null)
   const generatedQuery = useGeneratedImages(genIds)
   /** Ô ngày / giờ đăng (giờ VN) — dùng cho Lên lịch, Đổi giờ, Đăng lại. */
   const [when, setWhen] = useState(() => defaultScheduleInput(Date.now()))
@@ -250,6 +257,9 @@ export default function Composer() {
     setNotes({})
     setGenIds([])
     setReferenceId(null)
+    // Story 6.7: mô tả ảnh (có thể do AI viết cho bài trước) không lưu theo bài — bỏ khi nạp bài khác, kẻo ảnh bài mới vẽ
+    // theo mô tả của bài cũ.
+    setImageDesc('')
     setSession((s) => s + 1)
     setLoadedKey(initKey)
   }
@@ -270,7 +280,13 @@ export default function Composer() {
   const fileRef = useRef<HTMLInputElement>(null)
   // Rời màn hoặc nạp nháp khác khi AI đang viết → huỷ request (server truyền AbortSignal sang OpenAI). Lưu nháp mới đổi
   // `?bai=` nhưng không nạp lại (`loadedKey` đặt trước) nên không huỷ.
-  useEffect(() => () => controller.current?.abort(), [session])
+  useEffect(
+    () => () => {
+      controller.current?.abort()
+      describeController.current?.abort()
+    },
+    [session],
+  )
 
   const targets = orderedTargets(allPages, selected)
   const targetIds = targets.map((p) => p.id)
@@ -338,7 +354,10 @@ export default function Composer() {
   const running = writing !== null || busy !== null
   const canGenerate = !lock.locked && targets.length > 0 && idea.trim().length > 0 && !running
   const imagesBusy = generateImages.isPending || imagesPending > 0
-  const canGenerateImages = !lock.locked && !imagesBusy && imagePrompt(imageDesc, idea).length > 0
+  const canGenerateImages = !lock.locked && !imagesBusy && !describing && imagePrompt(imageDesc, idea).length > 0
+  const canDescribe = !lock.locked && !describing && imagePrompt(imageDesc, idea).length > 0
+  /** Story 6.7: mục tiêu bài → mục đích ảnh; trang đích → tông màu thương hiệu (server tìm hồ sơ chung). */
+  const imageContext = { goal, pageIds: targetIds }
 
   /**
    * Gọi AI cho `list` (Story 6.2): viết mới cho mọi tab / các tab trống, hoặc sửa caption của một tab (`revise`).
@@ -387,7 +406,7 @@ export default function Composer() {
    * realtime; lỗi chặn trước (thiếu khoá, hết hạn mức…) khoá nút AI như khi viết caption.
    */
   function startImages(description: string) {
-    const body = buildImageBody(description, idea, imageStyle, reference?.id ?? null)
+    const body = buildImageBody(description, idea, imageStyle, reference?.id ?? null, imageContext)
     if (!body || lock.locked || imagesBusy) return
     const stamp = lockStamp
     generateImages.mutate(body, {
@@ -402,6 +421,46 @@ export default function Composer() {
         notify(composerErrorMessage(err))
       },
     })
+  }
+
+  /**
+   * "AI viết mô tả" (Story 6.7): AI viết lại mô tả đang có (trống thì từ ý tưởng) theo hướng của chip, đổ vào ô để chủ
+   * shop xem / sửa trước khi tạo ảnh. Lỗi / Dừng → giữ nguyên ô; mã khoá (thiếu khoá, hết hạn mức) khoá nút AI.
+   */
+  function describeImage(direction: ImagePromptDirection) {
+    const body = buildImagePromptBody({ description: imageDesc, idea, direction, style: imageStyle, withReference: !!reference, context: imageContext })
+    if (!body || lock.locked || describeController.current) return
+    const ctrl = new AbortController()
+    describeController.current = ctrl
+    setDescribing(direction)
+    const stamp = lockStamp
+    writeImagePrompt.mutate(
+      { body, signal: ctrl.signal },
+      {
+        onSuccess: ({ description }) => {
+          if (ctrl.signal.aborted) return
+          setImageDesc(description)
+          notify('AI đã viết mô tả ảnh — xem lại rồi bấm tạo ảnh')
+          imageDescRef.current?.focus()
+        },
+        onError: (err) => {
+          if (ctrl.signal.aborted) return // Dừng: giữ nguyên ô
+          const code = composeLockCodeOf(err)
+          if (code) setServerLock({ code, stamp })
+          notify(`${composerErrorMessage(err)} Mô tả giữ nguyên.`)
+        },
+        onSettled: () => {
+          if (describeController.current === ctrl) describeController.current = null
+          setDescribing(null)
+        },
+      },
+    )
+  }
+
+  function stopDescribe() {
+    describeController.current?.abort()
+    describeController.current = null
+    setDescribing(null)
   }
 
   /** "Thử mô tả khác": bỏ ô lỗi, đưa con trỏ vào ô Mô tả ảnh. */
@@ -864,18 +923,47 @@ export default function Composer() {
                       </Button>
                     </div>
                   )}
-                  <div className="mb-3 flex flex-wrap items-end gap-2">
-                    <Field label={reference ? 'Yêu cầu bối cảnh' : 'Mô tả ảnh'} className="min-w-[200px] flex-1">
-                      <Input
-                        ref={imageDescRef}
-                        value={imageDesc}
-                        onChange={(e) => setImageDesc(e.target.value)}
-                        placeholder={reference ? 'vd đặt sản phẩm lên bàn gỗ, ánh sáng buổi sáng' : 'Để trống: AI vẽ theo ý tưởng bài'}
-                        maxLength={1000}
-                      />
-                    </Field>
+                  <Field
+                    label={reference ? 'Yêu cầu bối cảnh' : 'Mô tả ảnh'}
+                    hint={reference ? undefined : 'Càng chi tiết càng đẹp: chủ thể, bối cảnh, ánh sáng, bố cục, tông màu.'}
+                  >
+                    <Textarea
+                      ref={imageDescRef}
+                      rows={3}
+                      value={imageDesc}
+                      disabled={!!describing}
+                      onChange={(e) => setImageDesc(e.target.value)}
+                      placeholder={reference ? 'vd đặt sản phẩm lên bàn gỗ, ánh sáng buổi sáng' : 'Để trống: AI vẽ theo ý tưởng bài'}
+                      maxLength={1000}
+                    />
+                  </Field>
+                  <AiLockHint locked={lock.locked} hint={lock.hint} link={lock.link} align="start" className="mt-2 flex">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {describing ? (
+                        <>
+                          <span className="inline-flex items-center gap-1.5 text-xs font-medium text-ai">
+                            <WandSparkles size={13} className="animate-pulse" />
+                            AI đang viết mô tả…
+                          </span>
+                          <button onClick={stopDescribe} className="text-xs font-medium text-muted-foreground underline hover:text-foreground">
+                            Dừng
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <span className="text-xs text-muted-foreground">AI viết mô tả:</span>
+                          {IMAGE_PROMPT_DIRECTION_OPTIONS.map((o) => (
+                            <AiQuick key={o.value} icon={<WandSparkles size={13} />} onClick={() => describeImage(o.value)} disabled={!canDescribe}>
+                              {o.label}
+                            </AiQuick>
+                          ))}
+                        </>
+                      )}
+                    </div>
+                  </AiLockHint>
+                  <div className="mt-3 mb-3 flex flex-wrap items-end gap-2">
                     {!reference && (
-                      <Field label="Phong cách" className="w-[150px]">
+                      <Field label="Phong cách" className="w-[170px]">
                         <Select options={IMAGE_STYLE_OPTIONS} value={imageStyle} onChange={(e) => setImageStyle(e.target.value as ImageStyle)} />
                       </Field>
                     )}

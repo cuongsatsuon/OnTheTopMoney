@@ -41,6 +41,8 @@ export {
   type ComposeBrief,
   type ComposeDeps,
 } from './compose.ts'
+// AI viết mô tả ảnh (Story 6.7) — chạy trong request; hồ sơ thương hiệu chung của các trang đích (tông màu ảnh).
+export { commonBrandProfile, writeImageDescription, type ImagePromptDeps } from './image-prompt.ts'
 // Slot chiến dịch (Story 7.2, AD-13, AD-15): tạo / dọn slot theo kế hoạch của `campaigns`, sinh caption + ảnh, đọc xem trước.
 // Story 7.4: lease khi sinh, cửa sổ cuốn chiếu (`listSlotsToGenerate({until})`), hàng đợi "Bài chờ duyệt", nháp kẹt.
 // Story 8.5: `countPendingSlots` — số bài chờ duyệt cho Tổng quan.

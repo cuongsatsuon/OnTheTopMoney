@@ -114,7 +114,7 @@ const deliveries = () => cloud.requests.filter((r) => r.method === 'GET' && r.ur
 /* ---------- Ảnh tham khảo: route ---------- */
 
 describe('POST /media-assets/generate với referenceId', () => {
-  it('202: 4 ô pending trỏ reference_asset_id, prompt tham khảo (yêu cầu trong «»), 4 job; route không gọi OpenAI / tải ảnh', async () => {
+  it('202: 4 ô pending trỏ reference_asset_id, prompt tham khảo (yêu cầu đứng đầu — Story 6.7), 4 job; route không gọi OpenAI / tải ảnh', async () => {
     const ref = await uploadOk()
     const ids = await generateOk({ prompt: `  ${SCENE}  `, referenceId: ref.id, style: 'illustration' })
     expect(ids).toHaveLength(4)
@@ -122,7 +122,7 @@ describe('POST /media-assets/generate với referenceId', () => {
       select reference_asset_id, prompt, status from media_assets where id = any(${ids})`
     expect(rows.every((r) => r.reference_asset_id === ref.id && r.status === 'pending')).toBe(true)
     expect(rows[0]!.prompt).toBe(buildReferenceImagePrompt({ request: SCENE }))
-    expect(rows[0]!.prompt).toContain(`«${SCENE}»`)
+    expect(rows[0]!.prompt.split('\n')[0]).toBe(SCENE) // Story 6.7: yêu cầu của chủ shop là phần chính, đứng đầu
     expect(rows[0]!.prompt).toContain('Giữ NGUYÊN sản phẩm')
     expect(rows[0]!.prompt).not.toContain('minh hoạ phẳng') // style không dùng khi có ảnh tham khảo
     const [jobsRow] = await handle.sql<{ n: number }[]>`select count(*)::int as n from pgboss.job where name = 'content.image.generate'`
@@ -163,7 +163,7 @@ describe('job content.image.generate có ảnh tham khảo', () => {
     expect(openai.imageRequests).toHaveLength(0)
     expect(openai.editRequests).toHaveLength(1)
     const req = openai.editRequests[0]!
-    expect(req).toMatchObject({ n: 1, size: '1024x1024', prompt: buildReferenceImagePrompt({ request: SCENE }), model: 'gpt-image-2.5-flare' })
+    expect(req).toMatchObject({ n: 1, size: '1024x1024', prompt: buildReferenceImagePrompt({ request: SCENE }), model: 'gpt-image-2.5-sunburst' })
     expect(req.images).toHaveLength(1)
     expect(Buffer.from(req.images[0]!.data)).toEqual(FAKE_PNG)
     expect(req.images[0]!.mime).toBe('image/png')

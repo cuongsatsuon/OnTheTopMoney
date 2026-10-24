@@ -4,9 +4,13 @@
 // Story 6.3 — ảnh AI: lưới ô (đang tạo / lỗi / ảnh rồi kho ảnh), tạo lại giữ ảnh đang gắn, "Thử mô tả khác", mô tả gửi AI.
 // Story 8.4 — "Tạo bài tương tự": link mở Soạn bài (ý tưởng + trang), chọn đích theo `?trang=`.
 // Story 6.6 — ảnh tham khảo (chỉ ảnh tải lên, body `referenceId`, bỏ chọn khi rời lưới), ảnh tab gửi kèm caption AI, toast.
+// Story 6.7 — chip "AI viết mô tả" (body, khoá khi trống), body tạo ảnh có mục tiêu + trang đích, 9 phong cách.
 import {
   ComposeCaptionsRequest,
   GenerateImagesRequest,
+  IMAGE_PROMPT_DIRECTIONS,
+  IMAGE_STYLES,
+  ImagePromptRequest,
   SavePostRequest,
   type ComposeCaptionResult,
   type GeneratedImageDto,
@@ -20,6 +24,8 @@ import { SUGGEST_HINTS } from './inbox'
 import { AI_LOCK_HINTS } from './openai'
 import {
   EMPTY_DRAFT,
+  IMAGE_PROMPT_DIRECTION_OPTIONS,
+  IMAGE_STYLE_OPTIONS,
   aiErrorText,
   applyComposeResults,
   applyImageToAll,
@@ -28,6 +34,7 @@ import {
   blockingIssues,
   buildComposeBody,
   buildImageBody,
+  buildImagePromptBody,
   buildSaveBody,
   canUseAsReference,
   captionCounter,
@@ -364,6 +371,29 @@ describe('ảnh AI (Story 6.3)', () => {
     expect(buildImageBody('Nồi chiên trên bếp gỗ', 'Khuyến mãi', 'lifestyle')).toEqual({ prompt: 'Nồi chiên trên bếp gỗ', style: 'lifestyle' })
     expect(GenerateImagesRequest.parse(buildImageBody('', 'Khuyến mãi', 'product'))).toEqual({ prompt: 'Khuyến mãi', style: 'product' })
     expect(buildImageBody(' ', '  ', 'product')).toBeNull()
+  })
+
+  it('ảnh AI theo ngữ cảnh bài (6.7): body có goal + pageIds (bỏ pageIds rỗng); hợp đồng server nhận; 9 phong cách có nhãn', () => {
+    const context = { goal: 'sales' as const, pageIds: [id(1), id(2)] }
+    const body = buildImageBody('Serum trên đá', '', 'premium', null, context)
+    expect(body).toEqual({ prompt: 'Serum trên đá', style: 'premium', goal: 'sales', pageIds: [id(1), id(2)] })
+    expect(GenerateImagesRequest.parse(body)).toEqual(body)
+    expect(buildImageBody('bàn gỗ', '', 'product', uploaded.id, { goal: 'announce', pageIds: [] })).toEqual({ prompt: 'bàn gỗ', referenceId: uploaded.id, goal: 'announce' })
+    expect(IMAGE_STYLE_OPTIONS.map((o) => o.value)).toEqual([...IMAGE_STYLES])
+    expect(new Set(IMAGE_STYLE_OPTIONS.map((o) => o.label)).size).toBe(IMAGE_STYLES.length)
+  })
+
+  it('AI viết mô tả (6.7): body theo hướng; ô trống dùng ý tưởng; ảnh tham khảo → withReference, không phong cách; cả hai trống → null', () => {
+    const context = { goal: 'engagement' as const, pageIds: [id(1)] }
+    const body = buildImagePromptBody({ description: ' Serum ', idea: ' Ra mắt serum ', direction: 'promo', style: 'studio', withReference: false, context })
+    expect(body).toEqual({ description: 'Serum', topic: 'Ra mắt serum', direction: 'promo', goal: 'engagement', style: 'studio', pageIds: [id(1)] })
+    expect(ImagePromptRequest.parse(body)).toMatchObject({ withReference: false })
+    const ref = buildImagePromptBody({ description: '', idea: 'Serum', direction: 'lifestyle', style: 'studio', withReference: true, context: { ...context, pageIds: [] } })
+    expect(ref).toEqual({ description: '', topic: 'Serum', direction: 'lifestyle', goal: 'engagement', withReference: true })
+    expect(ImagePromptRequest.safeParse(ref).success).toBe(true)
+    expect(buildImagePromptBody({ description: ' ', idea: ' ', direction: 'detail', style: 'product', withReference: false, context })).toBeNull()
+    expect(IMAGE_PROMPT_DIRECTION_OPTIONS.map((o) => o.value)).toEqual([...IMAGE_PROMPT_DIRECTIONS])
+    expect(IMAGE_PROMPT_DIRECTION_OPTIONS.map((o) => o.label)).toEqual(['Chi tiết hơn', 'Ảnh sản phẩm', 'Banner khuyến mãi', 'Lifestyle', 'Feedback khách hàng', 'Mùa lễ'])
   })
 
   it('ảnh tham khảo (6.6): chỉ ảnh tải lên; body có referenceId, không phong cách; hợp đồng server nhận; rời lưới → bỏ chọn', () => {
