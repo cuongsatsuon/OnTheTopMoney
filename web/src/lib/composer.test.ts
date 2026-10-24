@@ -8,6 +8,8 @@
 import {
   ComposeCaptionsRequest,
   GenerateImagesRequest,
+  IMAGE_BRIEF_CAPTION_MAX,
+  IMAGE_MODES,
   IMAGE_PROMPT_DIRECTIONS,
   IMAGE_STYLES,
   ImagePromptRequest,
@@ -24,6 +26,8 @@ import { SUGGEST_HINTS } from './inbox'
 import { AI_LOCK_HINTS } from './openai'
 import {
   EMPTY_DRAFT,
+  IMAGE_MODE_HINT,
+  IMAGE_MODE_OPTIONS,
   IMAGE_PROMPT_DIRECTION_OPTIONS,
   IMAGE_STYLE_OPTIONS,
   aiErrorText,
@@ -369,7 +373,7 @@ describe('ảnh AI (Story 6.3)', () => {
   it('mô tả gửi AI: ô Mô tả ảnh nếu có, không thì ý tưởng; cả hai trống → không gửi', () => {
     expect(imagePrompt('  ', ' Nồi chiên ')).toBe('Nồi chiên')
     expect(buildImageBody('Nồi chiên trên bếp gỗ', 'Khuyến mãi', 'lifestyle')).toEqual({ prompt: 'Nồi chiên trên bếp gỗ', style: 'lifestyle' })
-    expect(GenerateImagesRequest.parse(buildImageBody('', 'Khuyến mãi', 'product'))).toEqual({ prompt: 'Khuyến mãi', style: 'product' })
+    expect(GenerateImagesRequest.parse(buildImageBody('', 'Khuyến mãi', 'product'))).toEqual({ prompt: 'Khuyến mãi', style: 'product', imageMode: 'ad' })
     expect(buildImageBody(' ', '  ', 'product')).toBeNull()
   })
 
@@ -377,7 +381,7 @@ describe('ảnh AI (Story 6.3)', () => {
     const context = { goal: 'sales' as const, pageIds: [id(1), id(2)] }
     const body = buildImageBody('Serum trên đá', '', 'premium', null, context)
     expect(body).toEqual({ prompt: 'Serum trên đá', style: 'premium', goal: 'sales', pageIds: [id(1), id(2)] })
-    expect(GenerateImagesRequest.parse(body)).toEqual(body)
+    expect(GenerateImagesRequest.parse(body)).toEqual({ ...body, imageMode: 'ad' }) // Story 6.8: thiếu kiểu → `ad`
     expect(buildImageBody('bàn gỗ', '', 'product', uploaded.id, { goal: 'announce', pageIds: [] })).toEqual({ prompt: 'bàn gỗ', referenceId: uploaded.id, goal: 'announce' })
     expect(IMAGE_STYLE_OPTIONS.map((o) => o.value)).toEqual([...IMAGE_STYLES])
     expect(new Set(IMAGE_STYLE_OPTIONS.map((o) => o.label)).size).toBe(IMAGE_STYLES.length)
@@ -394,6 +398,35 @@ describe('ảnh AI (Story 6.3)', () => {
     expect(buildImagePromptBody({ description: ' ', idea: ' ', direction: 'detail', style: 'product', withReference: false, context })).toBeNull()
     expect(IMAGE_PROMPT_DIRECTION_OPTIONS.map((o) => o.value)).toEqual([...IMAGE_PROMPT_DIRECTIONS])
     expect(IMAGE_PROMPT_DIRECTION_OPTIONS.map((o) => o.label)).toEqual(['Chi tiết hơn', 'Ảnh sản phẩm', 'Banner khuyến mãi', 'Lifestyle', 'Feedback khách hàng', 'Mùa lễ'])
+  })
+
+  it('kiểu ảnh + brief (6.8): body có imageMode, topic (khác mô tả), caption tab (cắt); hợp đồng server nhận; 2 kiểu có nhãn + gợi ý', () => {
+    const context = { goal: 'sales' as const, pageIds: [id(1)], imageMode: 'ad' as const, caption: '  Nồi chiên giòn rụm #noichien  ' }
+    const body = buildImageBody('Nồi chiên trên bếp gỗ', ' Ra mắt nồi chiên ', 'product', null, context)
+    expect(body).toEqual({ prompt: 'Nồi chiên trên bếp gỗ', style: 'product', goal: 'sales', pageIds: [id(1)], imageMode: 'ad', topic: 'Ra mắt nồi chiên', caption: 'Nồi chiên giòn rụm #noichien' })
+    expect(GenerateImagesRequest.parse(body)).toEqual(body)
+    // Ô mô tả trống → prompt = ý tưởng, không gửi lặp `topic`; không caption (Tạo bằng AI) → không gửi.
+    expect(buildImageBody('', 'Ra mắt nồi chiên', 'product', null, { goal: 'sales', pageIds: [], imageMode: 'clean' })).toEqual({
+      prompt: 'Ra mắt nồi chiên',
+      style: 'product',
+      goal: 'sales',
+      imageMode: 'clean',
+    })
+    // Ảnh tham khảo vẫn mang kiểu ảnh + brief.
+    expect(buildImageBody('bàn gỗ', 'Ra mắt', 'product', uploaded.id, context)).toMatchObject({ referenceId: uploaded.id, imageMode: 'ad', topic: 'Ra mắt' })
+    // Caption dài chỉ gửi phần đầu (server cắt tóm ý tiếp).
+    const long = buildImageBody('x', '', 'product', null, { ...context, caption: 'a'.repeat(5000) })
+    expect(long?.caption).toHaveLength(IMAGE_BRIEF_CAPTION_MAX * 2)
+    expect(GenerateImagesRequest.parse({ prompt: 'x' })).toMatchObject({ imageMode: 'ad' })
+    expect(IMAGE_MODE_OPTIONS).toEqual([
+      { value: 'ad', label: 'Ảnh quảng cáo' },
+      { value: 'clean', label: 'Ảnh chụp sạch' },
+    ])
+    expect(IMAGE_MODE_OPTIONS.map((o) => o.value)).toEqual([...IMAGE_MODES])
+    expect(IMAGE_MODE_HINT.clean).toContain('không có chữ')
+    const chip = buildImagePromptBody({ description: '', idea: 'Serum', direction: 'promo', style: 'studio', withReference: false, context: { goal: 'sales', pageIds: [], imageMode: 'clean' } })
+    expect(chip).toMatchObject({ imageMode: 'clean' })
+    expect(ImagePromptRequest.parse(chip)).toMatchObject({ imageMode: 'clean' })
   })
 
   it('ảnh tham khảo (6.6): chỉ ảnh tải lên; body có referenceId, không phong cách; hợp đồng server nhận; rời lưới → bỏ chọn', () => {

@@ -49,6 +49,7 @@ export async function writeImageDescription(deps: ImagePromptDeps, input: Parsed
     goal: input.goal,
     style: input.style,
     withReference: input.withReference,
+    mode: input.imageMode,
     brand: brand && (brand.industry || brand.colors.length) ? { industry: brand.industry, colors: brand.colors } : null,
     month: monthLabel(deps.now?.() ?? new Date()),
   })

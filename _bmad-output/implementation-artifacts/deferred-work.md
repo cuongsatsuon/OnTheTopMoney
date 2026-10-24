@@ -364,3 +364,6 @@
 - source_spec: `spec-6-6-anh-tham-khao-va-caption-doc-anh.md`
   summary: Ảnh tham khảo sống chừng nào còn ô AI trỏ tới (FK không cascade) — biến thể đã đăng giữ ảnh tham khảo mãi; xoá theo yêu cầu (9.2) gặp ảnh tham khảo còn biến thể thì giữ dòng, `content.media_gc` dọn sau khi biến thể bị dọn.
   evidence: `media_assets.reference_asset_id` (migration `0043_loose_starfox.sql`), `content/media-gc.ts` `notReference`. Nếu cần gọn: khi biến thể đã `ready` thì đặt `reference_asset_id = null` (biến thể không cần ảnh tham khảo nữa).
+- source_spec: `spec-6-8-anh-quang-cao-theo-y-tuong.md`
+  summary: Chiến dịch chưa chọn được kiểu ảnh — slot luôn dựng ảnh `ad` (ảnh quảng cáo, có thể có chữ). Nếu chủ shop cần ảnh chụp sạch cho chiến dịch: thêm cột `campaigns.image_mode` (mặc định `ad`), ô chọn ở bước 3 wizard cạnh "Bài có ảnh AI", truyền qua `runSlotBatch` → `generateSlot`.
+  evidence: `content/slots.ts` `generateClaimed` gọi `buildImagePrompt({ mode: 'ad', … })`; quyết định "chọn cách gọn" trong spec 6.8 (không migration, không đổi wizard). Chữ trên ảnh không được hậu kiểm (từ cấm, chính tả) — chỉ dặn trong prompt; cần thử thật thêm với ảnh slot "Tự đăng" (duyệt luôn, không người xem trước).

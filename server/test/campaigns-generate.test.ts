@@ -24,7 +24,7 @@ import { createFakeOpenAiAdapter, type FakeOpenAiAdapter } from '../src/adapters
 import type { CreateResponseResult } from '../src/adapters/openai/index.ts'
 import { buildApp } from '../src/app/app.ts'
 import { SESSION_COOKIE } from '../src/app/auth/index.ts'
-import { setOpenAiKey, settle } from '../src/modules/ai/index.ts'
+import { IMAGE_NO_FAKE_UI, setOpenAiKey, settle } from '../src/modules/ai/index.ts'
 import { GENERATE_BATCH, GenerateRetryableError, runGenerate, runGenerateWindow, runPreview } from '../src/modules/campaigns/index.ts'
 import { generateImageAsset, handleImageGenerateJob } from '../src/modules/content/index.ts'
 import { upsertProfile } from '../src/modules/profiles/index.ts'
@@ -298,6 +298,11 @@ describe('chế độ "Tự đăng"', () => {
     const [asset] = await handle.sql<{ prompt: string }[]>`select prompt from media_assets where id = ${imageJobs[0]!.data.mediaAssetId}`
     expect(asset!.prompt).toContain('mục đích: tăng tương tác')
     expect(asset!.prompt).toContain('tông màu thương hiệu: #112233')
+    // Story 6.8: brief ý tưởng = chủ đề slot + tóm ý caption, kiểu `ad` (được chữ ngắn), luôn cấm giao diện giả.
+    expect(asset!.prompt).toMatch(/^Ý tưởng bài đăng: (Mẹo hay|Hỏi đáp)\nNội dung bài: Bài số \d+ cho shop nhé\n\n\(Ảnh quảng cáo cho bài đăng/)
+    expect(asset!.prompt).toContain(IMAGE_NO_FAKE_UI)
+    expect(asset!.prompt).toContain('tiếng Việt')
+    expect(asset!.prompt).not.toContain('Không có chữ')
     expect(imageJobs.every((j) => j.data.autoApprove === true)).toBe(true)
 
     const imageDeps = { db: handle.db, events, jobs, cipher, openai, log, media }

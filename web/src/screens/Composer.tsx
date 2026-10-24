@@ -47,7 +47,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import type { ComposeGoal, ComposeLength, ComposeReviseAction, ImagePromptDirection, ImageStyle, MediaAssetDto, PageDto, PostDto, PostTargetDto, TargetAction } from '@ottm/shared'
+import type { ComposeGoal, ComposeLength, ComposeReviseAction, ImageMode, ImagePromptDirection, ImageStyle, MediaAssetDto, PageDto, PostDto, PostTargetDto, TargetAction } from '@ottm/shared'
 import { AiLockHint } from '../components/AiLockHint'
 import { Content } from '../components/AppShell'
 import { Skeleton } from '../components/Skeleton'
@@ -80,6 +80,8 @@ import {
   IDEA_PARAM,
   IMAGE_ACCEPT,
   IMAGE_PROMPT_DIRECTION_OPTIONS,
+  IMAGE_MODE_HINT,
+  IMAGE_MODE_OPTIONS,
   IMAGE_STYLE_OPTIONS,
   LENGTH_OPTIONS,
   POST_PARAM,
@@ -204,6 +206,8 @@ export default function Composer() {
   const [genIds, setGenIds] = useState<string[]>([])
   const [imageDesc, setImageDesc] = useState('')
   const [imageStyle, setImageStyle] = useState<ImageStyle>('product')
+  /** Kiểu ảnh (Story 6.8): ảnh quảng cáo theo ý tưởng (mặc định, được có chữ ngắn) / ảnh chụp sạch không chữ. */
+  const [imageMode, setImageMode] = useState<ImageMode>('ad')
   /** Ảnh tham khảo đang chọn (Story 6.6): ảnh AI giữ đúng sản phẩm trong ảnh này, mô tả là yêu cầu bối cảnh. */
   const [referenceId, setReferenceId] = useState<string | null>(null)
   /** "Kèm 4 ảnh AI": "Tạo bằng AI" sinh ảnh cùng lúc với caption (UX F4 b3). */
@@ -356,8 +360,8 @@ export default function Composer() {
   const imagesBusy = generateImages.isPending || imagesPending > 0
   const canGenerateImages = !lock.locked && !imagesBusy && !describing && imagePrompt(imageDesc, idea).length > 0
   const canDescribe = !lock.locked && !describing && imagePrompt(imageDesc, idea).length > 0
-  /** Story 6.7: mục tiêu bài → mục đích ảnh; trang đích → tông màu thương hiệu (server tìm hồ sơ chung). */
-  const imageContext = { goal, pageIds: targetIds }
+  /** Story 6.7: mục tiêu bài → mục đích ảnh; trang đích → tông màu thương hiệu (server tìm hồ sơ chung). 6.8: kiểu ảnh. */
+  const imageContext = { goal, pageIds: targetIds, imageMode }
 
   /**
    * Gọi AI cho `list` (Story 6.2): viết mới cho mọi tab / các tab trống, hoặc sửa caption của một tab (`revise`).
@@ -404,9 +408,11 @@ export default function Composer() {
   /**
    * Sinh 4 ảnh AI (Story 6.3): bộ mới thay bộ cũ trong lưới (ảnh cũ đang gắn tab giữ lại trong kho). Ảnh về dần qua
    * realtime; lỗi chặn trước (thiếu khoá, hết hạn mức…) khoá nút AI như khi viết caption.
+   * Story 6.8: `withCaption` → caption tab đang mở vào brief ảnh; "Tạo bằng AI" không gửi (caption đang được viết lại).
    */
-  function startImages(description: string) {
-    const body = buildImageBody(description, idea, imageStyle, reference?.id ?? null, imageContext)
+  function startImages(description: string, withCaption: boolean) {
+    const caption = withCaption ? activeDraft?.caption : undefined
+    const body = buildImageBody(description, idea, imageStyle, reference?.id ?? null, { ...imageContext, ...(caption ? { caption } : {}) })
     if (!body || lock.locked || imagesBusy) return
     const stamp = lockStamp
     generateImages.mutate(body, {
@@ -794,7 +800,7 @@ export default function Composer() {
                   disabled={!canGenerate}
                   onClick={() => {
                     runCompose(targets)
-                    if (withImages && !imagesBusy) startImages(imageDesc)
+                    if (withImages && !imagesBusy) startImages(imageDesc, false)
                   }}
                 >
                   {writing !== null ? 'AI đang viết…' : 'Tạo bằng AI'}
@@ -919,7 +925,11 @@ export default function Composer() {
                       <img src={reference.url} alt="" className="size-12 shrink-0 rounded object-cover" />
                       <div className="min-w-0 flex-1 text-[13px]">
                         <span className="block font-medium">Ảnh tham khảo</span>
-                        <span className="text-xs text-muted-foreground">AI giữ đúng sản phẩm trong ảnh này, chỉ đổi bối cảnh theo yêu cầu của bạn.</span>
+                        <span className="text-xs text-muted-foreground">
+                          {imageMode === 'ad'
+                            ? 'AI giữ đúng sản phẩm trong ảnh này và dựng ảnh quảng cáo quanh nó theo yêu cầu của bạn.'
+                            : 'AI giữ đúng sản phẩm trong ảnh này, chỉ đổi bối cảnh theo yêu cầu của bạn.'}
+                        </span>
                       </div>
                       <Button size="sm" icon={<X size={14} />} onClick={() => setReferenceId(null)}>
                         Bỏ ảnh tham khảo
@@ -928,7 +938,13 @@ export default function Composer() {
                   )}
                   <Field
                     label={reference ? 'Yêu cầu bối cảnh' : 'Mô tả ảnh'}
-                    hint={reference ? undefined : 'Càng chi tiết càng đẹp: chủ thể, bối cảnh, ánh sáng, bố cục, tông màu.'}
+                    hint={
+                      reference
+                        ? undefined
+                        : imageMode === 'ad'
+                          ? 'Thông điệp, sản phẩm, bố cục, đạo cụ — AI ghép thêm ý tưởng và nội dung bài.'
+                          : 'Càng chi tiết càng đẹp: chủ thể, bối cảnh, ánh sáng, bố cục, tông màu.'
+                    }
                   >
                     <Textarea
                       ref={imageDescRef}
@@ -964,18 +980,22 @@ export default function Composer() {
                       )}
                     </div>
                   </AiLockHint>
-                  <div className="mt-3 mb-3 flex flex-wrap items-end gap-2">
+                  <div className="mt-3 flex flex-wrap items-end gap-2">
+                    <Field label="Kiểu ảnh" className="w-[170px]">
+                      <Select options={IMAGE_MODE_OPTIONS} value={imageMode} onChange={(e) => setImageMode(e.target.value as ImageMode)} />
+                    </Field>
                     {!reference && (
                       <Field label="Phong cách" className="w-[170px]">
                         <Select options={IMAGE_STYLE_OPTIONS} value={imageStyle} onChange={(e) => setImageStyle(e.target.value as ImageStyle)} />
                       </Field>
                     )}
                     <AiLockHint locked={lock.locked} hint={lock.hint} link={lock.link} align="end">
-                      <Button variant="ai" size="sm" className="h-9" icon={<Sparkles size={14} />} disabled={!canGenerateImages} onClick={() => startImages(imageDesc)}>
+                      <Button variant="ai" size="sm" className="h-9" icon={<Sparkles size={14} />} disabled={!canGenerateImages} onClick={() => startImages(imageDesc, true)}>
                         {imagesBusy ? 'AI đang tạo ảnh…' : reference ? 'Tạo từ ảnh tham khảo' : genIds.length > 0 ? 'Tạo lại ảnh' : 'Tạo ảnh AI'}
                       </Button>
                     </AiLockHint>
                   </div>
+                  <p className="mt-1 mb-3 text-xs text-muted-foreground">{IMAGE_MODE_HINT[imageMode]}</p>
                   {tiles.length === 0 && !upload.isPending ? (
                     <div className="flex items-center gap-2 rounded-md border border-dashed border-border px-3 py-4 text-[13px] text-muted-foreground">
                       <ImageOff size={16} /> Chưa có ảnh. Tạo ảnh bằng AI hoặc tải ảnh của bạn lên (PNG, JPEG, WebP · tối đa 10MB).

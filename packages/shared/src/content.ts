@@ -168,6 +168,18 @@ export const IMAGE_STYLES = ['product', 'lifestyle', 'minimal', 'illustration', 
 export const ImageStyle = z.enum(IMAGE_STYLES)
 export type ImageStyle = z.infer<typeof ImageStyle>
 
+/**
+ * Kiểu ảnh AI (Story 6.8, theo hướng TNUT Media): `ad` = ảnh quảng cáo dựng theo ý tưởng bài, được có tiêu đề / câu ngắn
+ * tiếng Việt và bố cục poster / collage (mặc định); `clean` = ảnh chụp sạch, không chữ (gần hành vi 6.3–6.7). Không lưu
+ * DB (chỉ prompt đã dựng) — body cũ thiếu trường hiểu là `ad`.
+ */
+export const IMAGE_MODES = ['ad', 'clean'] as const
+export const ImageMode = z.enum(IMAGE_MODES)
+export type ImageMode = z.infer<typeof ImageMode>
+
+/** Story 6.8: số ký tự tối đa của đoạn caption (tóm ý, bỏ hashtag / URL) đưa vào brief ảnh [ASSUMPTION]. */
+export const IMAGE_BRIEF_CAPTION_MAX = 400
+
 /** Lý do một ô ảnh không tạo được: OpenAI từ chối nội dung / lỗi khác (hết hạn mức giữa chừng, kho lỗi…). */
 export const IMAGE_ERROR_CODES = ['IMAGE_REJECTED', 'IMAGE_FAILED'] as const satisfies readonly ErrorCode[]
 export const ImageErrorCode = z.enum(IMAGE_ERROR_CODES)
@@ -188,6 +200,8 @@ const ImagePageIds = z.array(z.uuid()).max(POST_TARGETS_MAX, `Tối đa ${POST_T
  * bối cảnh, `style` không dùng.
  * Story 6.7: `goal` (mục tiêu bài → mục đích ảnh) và `pageIds` (trang đích; cùng một hồ sơ thương hiệu → thêm tông màu
  * thương hiệu vào prompt). Cả hai tuỳ chọn, không mặc định — body cũ giữ nguyên nghĩa.
+ * Story 6.8: `imageMode` (mặc định `ad`); `topic` (ý tưởng bài) + `caption` (caption bài, server cắt tóm ý) làm brief ý
+ * tưởng cho ảnh — tuỳ chọn, `prompt` vẫn là phần chính (mô tả của chủ shop, trống thì ý tưởng).
  */
 export const GenerateImagesRequest = z
   .object({
@@ -196,6 +210,9 @@ export const GenerateImagesRequest = z
     referenceId: z.uuid().optional(),
     goal: ComposeGoal.optional(),
     pageIds: ImagePageIds.optional(),
+    imageMode: ImageMode.default('ad'),
+    topic: z.string().trim().max(POST_TOPIC_MAX, `Ý tưởng tối đa ${POST_TOPIC_MAX} ký tự`).optional(),
+    caption: z.string().trim().max(POST_CAPTION_MAX, `Nội dung tối đa ${POST_CAPTION_MAX} ký tự`).optional(),
   })
   .strict()
 export type GenerateImagesRequest = z.input<typeof GenerateImagesRequest>
@@ -214,7 +231,7 @@ export type ImagePromptDirection = z.infer<typeof ImagePromptDirection>
 /**
  * Body `POST /api/v1/media-assets/image-prompt`: AI viết lại "Mô tả ảnh" đang có (trống thì từ ý tưởng bài) thành mô tả
  * chi tiết theo `direction`; không lưu gì. `withReference` = đang dùng ảnh tham khảo (chỉ tả bối cảnh). Cần ít nhất
- * mô tả hoặc ý tưởng.
+ * mô tả hoặc ý tưởng. Story 6.8: `imageMode` (mặc định `ad`) — `ad` viết brief ảnh quảng cáo, `clean` tả cảnh không chữ.
  */
 export const ImagePromptRequest = z
   .object({
@@ -225,6 +242,7 @@ export const ImagePromptRequest = z
     style: ImageStyle.optional(),
     withReference: z.boolean().default(false),
     pageIds: ImagePageIds.optional(),
+    imageMode: ImageMode.default('ad'),
   })
   .strict()
   .superRefine((body, ctx) => {

@@ -43,10 +43,12 @@ export {
 } from './autoreply.ts'
 export {
   IMAGE_DESCRIPTION_MAX_OUTPUT_TOKENS,
+  IMAGE_NO_FAKE_UI,
   buildImageDescriptionPrompt,
   buildImagePrompt,
   buildReferenceImagePrompt,
   cleanImageDescription,
+  imageBriefCaption,
   imageDescriptionInput,
   imageDescriptionInstructions,
   type ImageDescriptionContext,

@@ -8,6 +8,7 @@
 //   `feature=campaign_generate`, `ref` = target) + `ai.checkOutput`; slot cần ảnh → ô `media_assets(pending)` gắn sẵn vào
 //   target + job `content.image.generate` cùng transaction, slot giữ `planned` tới khi ảnh `ready` / lỗi
 //   (`settleSlotImage`, gọi từ job ảnh). AI lỗi, ảnh lỗi, hậu kiểm chặn → `pending_approval` kèm mã (AD-15).
+//   Story 6.8: prompt ảnh của slot = brief chủ đề + tóm ý caption, kiểu `ad` (ảnh quảng cáo).
 // Mọi lần ghi là `UPDATE … WHERE status='planned'`: slot vừa bị xoá / huỷ / tạo lại thì lần ghi muộn không làm gì.
 // Story 7.4 (sinh cuốn chiếu):
 // - `generateSlot` chiếm slot bằng lease (`generate_lease_until`) trước khi gọi AI: job xem trước và job cuốn chiếu (lúc
@@ -18,7 +19,6 @@
 // - Đọc: hàng đợi "Bài chờ duyệt" (`listPendingSlots`), một slot (`getCampaignSlot`), nháp có slot kẹt (`staleSlotCampaigns`).
 // Không log caption / prompt.
 import {
-  POST_TOPIC_MAX,
   type BrandProfileDto,
   type CampaignSlotDto,
   type ComposeGoal,
@@ -45,9 +45,6 @@ export interface SlotPlan {
   slotAt: Date
   topic: string
 }
-
-/** Ký tự đầu của caption làm mô tả ảnh của slot (prompt ảnh gộp một dòng). */
-const IMAGE_DESCRIPTION_MAX = 600
 
 const keyOf = (pageId: string, slotAt: Date, topic?: string | null) => `${pageId}|${slotAt.toISOString()}${topic === undefined ? '' : `|${topic ?? ''}`}`
 
@@ -403,9 +400,20 @@ async function generateClaimed(
     })
   }
 
-  const description = caption.slice(0, Math.min(IMAGE_DESCRIPTION_MAX, POST_TOPIC_MAX))
   // Story 6.7: prompt ảnh chung — thêm mục đích theo mục tiêu slot và tông màu từ hồ sơ hiệu lực của trang.
-  const prompt = buildImagePrompt({ description, style: 'product', goal: opts.goal, brandColors: effective.config.colors })
+  // Story 6.8: brief ý tưởng bài = chủ đề slot + tóm ý caption (cắt ở `imageBriefCaption`), luôn kiểu `ad` — chiến dịch
+  // không có cài đặt kiểu ảnh.
+  const prompt = buildImagePrompt({
+    description: '',
+    topic: slot.topic ?? '',
+    caption,
+    mode: 'ad',
+    style: 'product',
+    goal: opts.goal,
+    brandColors: effective.config.colors,
+    // Slot không có ảnh tham khảo: nói rõ shop bán gì để ảnh `ad` không vẽ sản phẩm khác (nhất là chế độ Tự đăng).
+    shop: { industry: effective.config.industry, products: effective.config.products.map((p) => p.name) },
+  })
   return deps.db.transaction(async (tx): Promise<SlotOutcome> => {
     const [row] = await tx
       .update(postTargets)

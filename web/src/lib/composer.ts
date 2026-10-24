@@ -14,6 +14,8 @@
 import {
   ComposeCaptionsResponse,
   GeneratedImagesResponse,
+  IMAGE_BRIEF_CAPTION_MAX,
+  IMAGE_MODES,
   IMAGE_PROMPT_DIRECTIONS,
   IMAGE_STYLES,
   ImagePromptResponse,
@@ -34,6 +36,7 @@ import {
   type GenerateImagesRequest,
   type GeneratedImageDto,
   type ImageErrorCode,
+  type ImageMode,
   type ImagePromptDirection,
   type ImagePromptRequest,
   type ImageStyle,
@@ -403,6 +406,22 @@ const IMAGE_STYLE_LABEL: Record<ImageStyle, string> = {
 }
 export const IMAGE_STYLE_OPTIONS: { value: ImageStyle; label: string }[] = IMAGE_STYLES.map((value) => ({ value, label: IMAGE_STYLE_LABEL[value] }))
 
+/**
+ * Kiểu ảnh (Story 6.8, ô "Kiểu ảnh" cạnh "Phong cách"): ảnh quảng cáo theo ý tưởng bài (mặc định, được có chữ tiếng Việt
+ * ngắn) / ảnh chụp sạch không chữ — đúng thứ tự `IMAGE_MODES`.
+ */
+const IMAGE_MODE_LABEL: Record<ImageMode, string> = {
+  ad: 'Ảnh quảng cáo',
+  clean: 'Ảnh chụp sạch',
+}
+export const IMAGE_MODE_OPTIONS: { value: ImageMode; label: string }[] = IMAGE_MODES.map((value) => ({ value, label: IMAGE_MODE_LABEL[value] }))
+
+/** Gợi ý dưới ô "Kiểu ảnh" — nói rõ ảnh có chữ hay không. */
+export const IMAGE_MODE_HINT: Record<ImageMode, string> = {
+  ad: 'AI dựng ảnh quảng cáo theo ý tưởng bài, có thể kèm tiêu đề ngắn tiếng Việt.',
+  clean: 'Ảnh chụp sạch, không có chữ trên ảnh.',
+}
+
 /** Chip "AI viết mô tả" (Story 6.7, theo "Gợi ý prompt nhanh" của FlowMate) — đúng thứ tự `IMAGE_PROMPT_DIRECTIONS`. */
 const IMAGE_PROMPT_DIRECTION_LABEL: Record<ImagePromptDirection, string> = {
   detail: 'Chi tiết hơn',
@@ -424,11 +443,16 @@ export const imagePrompt = (description: string, idea: string): string => descri
 export interface ImageContext {
   goal: ComposeGoal
   pageIds: readonly string[]
+  /** Story 6.8: kiểu ảnh; thiếu → server hiểu `ad`. */
+  imageMode?: ImageMode
+  /** Story 6.8: caption tab đang mở làm brief ảnh (server cắt tóm ý); bỏ khi caption đang được AI viết lại. */
+  caption?: string
 }
 
 /**
  * Body `POST /media-assets/generate`; `null` khi chưa có gì để mô tả. `referenceId` (Story 6.6) → ảnh giữ đúng sản phẩm
  * trong ảnh tham khảo, mô tả là yêu cầu bối cảnh, không gửi phong cách. `context` (Story 6.7) → thêm `goal` + `pageIds`.
+ * Story 6.8: `context` còn mang kiểu ảnh + caption; ý tưởng gửi riêng (`topic`) khi khác mô tả — brief ý tưởng bài.
  */
 export function buildImageBody(
   description: string,
@@ -439,13 +463,25 @@ export function buildImageBody(
 ): GenerateImagesRequest | null {
   const prompt = imagePrompt(description, idea)
   if (!prompt) return null
-  const extra = context ? { goal: context.goal, ...(context.pageIds.length ? { pageIds: [...context.pageIds] } : {}) } : {}
+  const topic = idea.trim()
+  // Server chỉ giữ ≤ IMAGE_BRIEF_CAPTION_MAX ký tự sau khi bỏ hashtag / URL — gửi gấp đôi là đủ, không gửi cả bài dài.
+  const caption = context?.caption?.trim().slice(0, IMAGE_BRIEF_CAPTION_MAX * 2).replace(/[\uD800-\uDBFF]$/, '').trim() ?? ''
+  const extra = context
+    ? {
+        goal: context.goal,
+        ...(context.pageIds.length ? { pageIds: [...context.pageIds] } : {}),
+        ...(context.imageMode ? { imageMode: context.imageMode } : {}),
+        ...(topic && topic !== prompt ? { topic } : {}),
+        ...(caption ? { caption } : {}),
+      }
+    : {}
   return referenceId ? { prompt, referenceId, ...extra } : { prompt, style, ...extra }
 }
 
 /**
  * Body `POST /media-assets/image-prompt` (Story 6.7, chip "AI viết mô tả"): mô tả đang có + ý tưởng + hướng; có ảnh
- * tham khảo thì không gửi phong cách. `null` khi cả mô tả lẫn ý tưởng trống (chip khoá).
+ * tham khảo thì không gửi phong cách. `null` khi cả mô tả lẫn ý tưởng trống (chip khoá). Story 6.8: kèm kiểu ảnh (`ad`
+ * viết brief quảng cáo, `clean` tả cảnh không chữ).
  */
 export function buildImagePromptBody(input: {
   description: string
@@ -465,6 +501,7 @@ export function buildImagePromptBody(input: {
     goal: input.context.goal,
     ...(input.withReference ? { withReference: true } : { style: input.style }),
     ...(input.context.pageIds.length ? { pageIds: [...input.context.pageIds] } : {}),
+    ...(input.context.imageMode ? { imageMode: input.context.imageMode } : {}),
   }
 }
 

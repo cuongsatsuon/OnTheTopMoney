@@ -18,6 +18,8 @@
 //   ảnh từ chữ — mỗi lượt thử lại là một lần trả tiền).
 // - Story 6.7: prompt dựng lúc bấm (lưu ở `media_assets.prompt`): mô tả + mục đích (`goal`) + phong cách + tông màu của
 //   hồ sơ thương hiệu chung của `pageIds` (không chung → bỏ màu).
+// - Story 6.8: prompt là brief ý tưởng bài — mô tả + ý tưởng (`topic`) + tóm ý caption, theo kiểu ảnh (`imageMode`, mặc
+//   định `ad`: ảnh quảng cáo được có chữ tiếng Việt ngắn; `clean`: ảnh chụp sạch). Luồng job / giá không đổi.
 // `ai` không chạm `media_assets` (gateway chỉ trả bytes + ghi `ai_usage`). Không log prompt / mô tả.
 import {
   IMAGE_GENERATE_COUNT,
@@ -96,9 +98,10 @@ export async function requestImageGeneration(deps: RequestImagesDeps, input: Par
   const referenceId = input.referenceId ?? null
   // Story 6.7: mục đích theo mục tiêu bài + tông màu của hồ sơ thương hiệu chung (nếu các trang đích cùng một hồ sơ).
   const brandColors = (await commonBrandProfile(deps.db, input.pageIds))?.colors
+  const brief = { mode: input.imageMode, topic: input.topic, caption: input.caption, goal: input.goal, brandColors }
   const prompt = referenceId
-    ? buildReferenceImagePrompt({ request: input.prompt, goal: input.goal, brandColors })
-    : buildImagePrompt({ description: input.prompt, style: input.style, goal: input.goal, brandColors })
+    ? buildReferenceImagePrompt({ request: input.prompt, ...brief })
+    : buildImagePrompt({ description: input.prompt, style: input.style, ...brief })
   const now = deps.now?.() ?? new Date()
   return deps.db.transaction(async (tx) => {
     if (referenceId) {

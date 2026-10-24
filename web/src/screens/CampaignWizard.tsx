@@ -631,7 +631,10 @@ export default function CampaignWizard() {
                       className="w-full accent-ai"
                       aria-label="Tỉ lệ bài có ảnh AI"
                     />
-                    <p className="mt-1 text-xs text-muted-foreground">Ảnh làm chi phí mỗi bài cao hơn nhưng thường tăng tương tác.</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Ảnh AI là ảnh quảng cáo theo chủ đề và nội dung từng bài, có thể kèm tiêu đề ngắn tiếng Việt. Ảnh làm chi phí mỗi bài
+                      cao hơn nhưng thường tăng tương tác.
+                    </p>
                     {withIg && (
                       <p className="mt-1.5 flex items-center gap-1.5 text-xs font-medium text-slate-700">
                         <ImageIcon size={13} className="text-ai" /> Instagram luôn cần ảnh — bài trên trang Instagram luôn kèm ảnh AI.
