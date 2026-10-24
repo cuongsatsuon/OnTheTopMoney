@@ -21,7 +21,17 @@
 // này (`handoff → ai` `GATE_OPEN`); tin AI gửi lỗi phía gửi → `AI_SEND_FAILED`.
 // Story 5.7: `latestAiReply` — tin AI đã gửi gần nhất cho cao trào Màn chào (`app/read-models/onboarding.ts`).
 // Story 8.3: `aiReplyStats` / `countCustomerMessages` — số liệu "Hiệu quả AI" + KPI "Tin nhắn" của màn Hiệu suất (`analytics`).
+// Story 9.2: phần cuối của luồng xoá dữ liệu — đánh dấu khách chờ xoá, khoá tra cứu cho `webhooks`, queue `inbox.purge`.
 export const MODULE = 'inbox'
+
+export {
+  InboxPurgeRetryableError,
+  handleInboxPurge,
+  markContactForDeletion,
+  purgeMatchKeys,
+  type InboxPurgeDeps,
+  type InboxPurgeResult,
+} from './purge.ts'
 
 export {
   bulkUpdateContacts,

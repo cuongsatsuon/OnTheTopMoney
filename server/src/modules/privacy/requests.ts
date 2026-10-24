@@ -1,15 +1,18 @@
-// Yêu cầu xoá dữ liệu (Story 9.1, AD-22). Chỉ entrypoint gọi qua index.ts.
+// Yêu cầu xoá dữ liệu (Story 9.1, 9.2 — AD-22). Chỉ entrypoint gọi qua index.ts.
 // - `recordMetaRequest`: ghi yêu cầu từ callback Meta, idempotent theo người dùng (`subject_hash`), phát
 //   `privacy.purge_requested` trong CÙNG transaction của bên gọi. Người dùng app không giữ dữ liệu gì (`known=false`)
 //   → dòng `completed` + `matched=false`, KHÔNG phát sự kiện (một tài khoản lạ không được kích hoạt xoá dữ liệu shop).
-// - `getRequestByCode`: đọc trạng thái cho trang công khai `/privacy/status/<code>`.
-// Việc xoá thật + đóng yêu cầu thuộc Story 9.2 (consumer ở từng module).
-import type { DeletionScope, DeletionSource, DeletionStatus } from '@ottm/shared'
+//   Story 9.2: kèm ảnh chụp phạm vi (`pageIds`, `metaAccountId`) và `issued_at`; `findMetaReplay` chặn phát lại.
+// - `requestTargetDeletion`: yêu cầu `contact` (chủ shop bấm xoá) / `page` (cron trang gỡ quá 30 ngày), mỗi đích tối đa
+//   một yêu cầu đang mở.
+// - `getRequestByCode`: đọc trạng thái (kèm tiến độ phần) cho trang công khai `/privacy/status/<code>`.
+// Việc xoá thật ở consumer `<module>.purge` của từng module; điều phối giai đoạn ở `coordinator.ts`.
+import { purgePartCount, type DeletionScope, type DeletionSource, type DeletionStatus } from '@ottm/shared'
 import { createHmac, randomBytes } from 'node:crypto'
-import { desc, eq, sql } from 'drizzle-orm'
+import { and, count, desc, eq, sql } from 'drizzle-orm'
 import type { DbExecutor } from '../../platform/db/index.ts'
 import type { EventPublisher } from '../../platform/events/index.ts'
-import { deletionRequests } from './schema.ts'
+import { deletionRequestParts, deletionRequests } from './schema.ts'
 
 /** Mã xác nhận: 16 byte ngẫu nhiên dạng hex. */
 export const CONFIRMATION_CODE_RE = /^[0-9a-f]{32}$/
@@ -30,6 +33,7 @@ export interface DeletionRequestView {
   id: string
   code: string
   scope: DeletionScope
+  targetId: string | null
   status: DeletionStatus
   source: DeletionSource
   matched: boolean
@@ -37,13 +41,14 @@ export interface DeletionRequestView {
   completedAt: Date | null
 }
 
-type Row = typeof deletionRequests.$inferSelect
+export type Row = typeof deletionRequests.$inferSelect
 
-function toView(row: Row): DeletionRequestView {
+export function toView(row: Row): DeletionRequestView {
   return {
     id: row.id,
     code: row.code,
     scope: row.scope as DeletionScope,
+    targetId: row.targetId,
     status: row.status as DeletionStatus,
     source: row.source as DeletionSource,
     matched: row.matched,
@@ -52,11 +57,58 @@ function toView(row: Row): DeletionRequestView {
   }
 }
 
+/**
+ * Phát giai đoạn 1 (`privacy.purge_requested`) của một dòng — dùng lúc ghi và khi cron resume phát lại. Payload lấy từ
+ * ảnh chụp đã lưu, nên phát lại bao nhiêu lần cũng xoá đúng một tập.
+ */
+export async function publishPurgeRequested(tx: DbExecutor, events: EventPublisher, row: Row): Promise<void> {
+  await events.publishEvent(tx, 'privacy.purge_requested', {
+    id: row.id,
+    scope: row.scope as DeletionScope,
+    targetId: row.targetId,
+    ...(row.conversationIds ? { conversationIds: row.conversationIds } : {}),
+    ...(row.pageIds ? { pageIds: row.pageIds } : {}),
+    ...(row.scope === 'all' ? { metaAccountId: row.metaAccountId } : {}),
+  })
+  await tx.update(deletionRequests).set({ lastPublishedAt: sql`now()` }).where(eq(deletionRequests.id, row.id))
+}
+
+const lockSubject = (tx: DbExecutor, key: string) => tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`privacy:${key}`}, 0))`)
+
+async function latestForSubject(tx: DbExecutor, subjectHash: string): Promise<Row | undefined> {
+  const [latest] = await tx
+    .select()
+    .from(deletionRequests)
+    .where(eq(deletionRequests.subjectHash, subjectHash))
+    .orderBy(desc(deletionRequests.requestedAt), desc(deletionRequests.id))
+    .limit(1)
+  return latest
+}
+
+/**
+ * Chống phát lại `signed_request` (Story 9.2, hoãn từ 9.1): yêu cầu gần nhất của người dùng đã `completed` và
+ * `signed_request` mới KHÔNG mới hơn (`issued_at` ≤ mốc đã thấy, hoặc thiếu `issued_at`) → trả lại yêu cầu đó; bên gọi
+ * không ngắt trang, không tạo yêu cầu. Yêu cầu còn mở thì không chặn ở đây (ngắt trang lặp lại vô hại, `recordMetaRequest`
+ * trả lại yêu cầu mở). Yêu cầu của 9.1 chưa có mốc (`meta_issued_at` null) → không coi là phát lại.
+ * Khoá tư vấn theo người dùng (khoá theo transaction, gọi lại trong cùng transaction không tự chặn).
+ */
+export async function findMetaReplay(tx: DbExecutor, subjectHash: string, issuedAt: number | null): Promise<DeletionRequestView | null> {
+  await lockSubject(tx, subjectHash)
+  const latest = await latestForSubject(tx, subjectHash)
+  if (!latest || latest.status !== 'completed' || latest.metaIssuedAt === null) return null
+  return issuedAt === null || issuedAt <= latest.metaIssuedAt ? toView(latest) : null
+}
+
 export interface RecordMetaRequestInput {
   source: Extract<DeletionSource, 'meta_deauthorize' | 'meta_data_deletion'>
   subjectHash: string
-  /** App có giữ dữ liệu gắn với người dùng này không (tra `connections` ở entrypoint, cùng transaction). */
-  known: boolean
+  /** `issued_at` của `signed_request` (giây epoch) — mốc chống phát lại. */
+  issuedAt: number | null
+  /**
+   * Phạm vi xoá của người dùng đã biết (tra `connections` ở entrypoint, cùng transaction): trang FB + IG lấy token qua
+   * tài khoản này và dòng `meta_accounts` của nó. `null` = app không giữ dữ liệu gì của người này.
+   */
+  scope: { pageIds: string[]; metaAccountId: string } | null
 }
 
 export interface RecordMetaRequestResult {
@@ -68,23 +120,22 @@ export interface RecordMetaRequestResult {
 /**
  * Ghi yêu cầu của callback Meta. Chạy TRONG transaction của bên gọi (`tx`), khoá tư vấn theo `subject_hash` để hai
  * callback song song của cùng người không cùng tạo yêu cầu. Luật trả lại yêu cầu cũ:
- * - còn yêu cầu mở (`pending|processing`) → trả lại nó;
+ * - còn yêu cầu mở (`pending|processing`) → trả lại nó (giữ mốc `issued_at` lớn nhất đã thấy);
  * - yêu cầu gần nhất `completed` + `matched=false` mà người dùng vẫn không có dữ liệu → trả lại nó;
- * - còn lại (chưa có, hoặc đã xoá xong mà nay lại có dữ liệu) → tạo mới.
+ * - còn lại (chưa có, hoặc đã xoá xong mà nay lại có dữ liệu) → tạo mới. Bên gọi đã chặn phát lại bằng `findMetaReplay`.
  */
 export async function recordMetaRequest(
   tx: DbExecutor,
   events: EventPublisher,
   input: RecordMetaRequestInput,
 ): Promise<RecordMetaRequestResult> {
-  await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`privacy:${input.subjectHash}`}, 0))`)
-  const [latest] = await tx
-    .select()
-    .from(deletionRequests)
-    .where(eq(deletionRequests.subjectHash, input.subjectHash))
-    .orderBy(desc(deletionRequests.requestedAt), desc(deletionRequests.id))
-    .limit(1)
-  if (latest && (latest.status !== 'completed' || (!latest.matched && !input.known))) {
+  await lockSubject(tx, input.subjectHash)
+  const known = input.scope !== null
+  const latest = await latestForSubject(tx, input.subjectHash)
+  if (latest && (latest.status !== 'completed' || (!latest.matched && !known))) {
+    if (input.issuedAt !== null && (latest.metaIssuedAt === null || input.issuedAt > latest.metaIssuedAt)) {
+      await tx.update(deletionRequests).set({ metaIssuedAt: input.issuedAt }).where(eq(deletionRequests.id, latest.id))
+    }
     return { request: toView(latest), created: false }
   }
 
@@ -97,23 +148,85 @@ export async function recordMetaRequest(
       targetId: null,
       source: input.source,
       subjectHash: input.subjectHash,
-      matched: input.known,
-      status: input.known ? 'pending' : 'completed',
+      matched: known,
+      status: known ? 'pending' : 'completed',
       requestedAt: now,
-      completedAt: input.known ? null : now,
+      completedAt: known ? null : now,
+      pageIds: input.scope?.pageIds ?? null,
+      metaAccountId: input.scope?.metaAccountId ?? null,
+      metaIssuedAt: input.issuedAt,
     })
     .returning()
-  const request = toView(row!)
-  if (input.known) {
-    // AD-22: `scope=all` — người dùng Meta của app là chủ shop, mọi trang FB/IG đến từ tài khoản này [ASSUMPTION].
-    await events.publishEvent(tx, 'privacy.purge_requested', { id: request.id, scope: 'all', targetId: null })
-  }
-  return { request, created: true }
+  // AD-22: `scope=all` — thu hẹp về trang của đúng tài khoản Meta này (Story 9.2: Threads, tài khoản khác không bị đụng).
+  if (known) await publishPurgeRequested(tx, events, row!)
+  return { request: toView(row!), created: true }
 }
 
-/** Yêu cầu theo mã xác nhận; mã sai dạng hoặc không có → `null`. */
-export async function getRequestByCode(db: DbExecutor, code: string): Promise<DeletionRequestView | null> {
+export interface TargetDeletionInput {
+  scope: Extract<DeletionScope, 'contact' | 'page'>
+  targetId: string
+  source: Extract<DeletionSource, 'manual' | 'page_removed'>
+  /** `contact`: hội thoại của khách lúc ghi. */
+  conversationIds?: string[]
+}
+
+/** Yêu cầu đang mở của một đích, hoặc gần nhất nếu không có cái nào mở. */
+export async function latestTargetRequest(
+  db: DbExecutor,
+  scope: Extract<DeletionScope, 'contact' | 'page'>,
+  targetId: string,
+): Promise<DeletionRequestView | null> {
+  const [row] = await db
+    .select()
+    .from(deletionRequests)
+    .where(and(eq(deletionRequests.scope, scope), eq(deletionRequests.targetId, targetId)))
+    .orderBy(sql`(${deletionRequests.status} <> 'completed') desc`, desc(deletionRequests.requestedAt), desc(deletionRequests.id))
+    .limit(1)
+  return row ? toView(row) : null
+}
+
+/**
+ * Ghi yêu cầu xoá một khách / một trang và phát giai đoạn 1 trong transaction của bên gọi. Còn yêu cầu mở cho đích này →
+ * trả lại nó (`created=false`). Khoá tư vấn theo đích để hai lần bấm song song không cùng tạo.
+ */
+export async function requestTargetDeletion(tx: DbExecutor, events: EventPublisher, input: TargetDeletionInput): Promise<RecordMetaRequestResult> {
+  await lockSubject(tx, `${input.scope}:${input.targetId}`)
+  const [open] = await tx
+    .select()
+    .from(deletionRequests)
+    .where(and(eq(deletionRequests.scope, input.scope), eq(deletionRequests.targetId, input.targetId), sql`${deletionRequests.status} <> 'completed'`))
+    .limit(1)
+  if (open) return { request: toView(open), created: false }
+  const [row] = await tx
+    .insert(deletionRequests)
+    .values({
+      code: newConfirmationCode(),
+      scope: input.scope,
+      targetId: input.targetId,
+      source: input.source,
+      matched: true,
+      status: 'pending',
+      conversationIds: input.scope === 'contact' ? (input.conversationIds ?? []) : null,
+      pageIds: input.scope === 'page' ? [input.targetId] : null,
+    })
+    .returning()
+  await publishPurgeRequested(tx, events, row!)
+  return { request: toView(row!), created: true }
+}
+
+export interface DeletionRequestStatus extends DeletionRequestView {
+  /** Số phần đã xong / tổng số phần (giai đoạn 1 + `inbox`). */
+  partsDone: number
+  partsTotal: number
+}
+
+/** Yêu cầu theo mã xác nhận (kèm tiến độ); mã sai dạng hoặc không có → `null`. */
+export async function getRequestByCode(db: DbExecutor, code: string): Promise<DeletionRequestStatus | null> {
   if (!CONFIRMATION_CODE_RE.test(code)) return null
   const [row] = await db.select().from(deletionRequests).where(eq(deletionRequests.code, code))
-  return row ? toView(row) : null
+  if (!row) return null
+  const [parts] = await db.select({ n: count() }).from(deletionRequestParts).where(eq(deletionRequestParts.requestId, row.id))
+  const view = toView(row)
+  const total = view.matched ? purgePartCount(view.scope) : 0
+  return { ...view, partsDone: view.status === 'completed' ? total : Math.min(parts?.n ?? 0, total), partsTotal: total }
 }

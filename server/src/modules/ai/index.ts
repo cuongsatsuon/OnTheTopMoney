@@ -1,6 +1,9 @@
 // Module `ai` (AD-1, AD-7): sở hữu `ai_model_prices` (Story 1.5), `ai_budget_months`, `ai_reservations`,
 // `ai_usage` (Story 1.6). Điểm DUY NHẤT gọi `adapters/openai`. Phụ thuộc: chỉ module nền (`settings`).
+// Story 9.2: `handleAiPurge` — bỏ tham chiếu tới khách / trang trong `ai_usage` khi xoá dữ liệu theo yêu cầu.
 export const MODULE = 'ai'
+
+export { handleAiPurge, type AiPurgeDeps } from './purge.ts'
 
 export {
   OPENAI_KEY_KIND,

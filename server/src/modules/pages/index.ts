@@ -7,6 +7,8 @@ export {
   getPage,
   getPlatformAccountId,
   listPages,
+  listRemovedBefore,
+  platformAccountIdsOf,
   resolveScope,
   setConnectionStatus,
   setRemoved,

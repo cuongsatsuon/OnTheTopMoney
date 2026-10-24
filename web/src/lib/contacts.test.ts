@@ -10,6 +10,7 @@ import {
   avatarColorOf,
   contactsListKey,
   contactsQueryString,
+  deleteContactConfirmText,
   historyAuthor,
   historySegments,
   historyText,
@@ -113,11 +114,17 @@ describe('tóm tắt AI', () => {
 })
 
 describe('khác', () => {
-  it('câu xác nhận gộp nêu rõ chiều gộp và không hoàn tác; màu avatar ổn định theo id', () => {
+  it('câu xác nhận gộp / xoá nêu rõ phạm vi và không hoàn tác; màu avatar ổn định theo id', () => {
     const text = mergeConfirmText('Hà', 'Thu Hà')
     expect(text).toContain('"Thu Hà" sẽ chuyển sang "Hà"')
     expect(text).toContain('Không hoàn tác được')
     expect(avatarColorOf('abc')).toBe(avatarColorOf('abc'))
+    // Story 9.2: xoá khách — nêu rõ phạm vi, vĩnh viễn, tin còn trên nền tảng.
+    const del = deleteContactConfirmText('Thu Hà')
+    expect(del).toContain('"Thu Hà"')
+    expect(del).toContain('xoá vĩnh viễn')
+    expect(del).toContain('Không hoàn tác được')
+    expect(del).toContain('vẫn còn trên Facebook')
     expect(avatarColorOf('abc')).toMatch(/^#[0-9A-F]{6}$/)
   })
 })

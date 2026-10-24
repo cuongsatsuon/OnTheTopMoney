@@ -204,3 +204,28 @@ export async function findPageByPlatformAccountId(
     .limit(1)
   return row ? toPageDto(row) : null
 }
+
+/**
+ * Story 9.2 (AD-22): trang ĐÃ gỡ trước mốc `before` (kèm `removed_at`) — cron `privacy.removed_pages` tạo yêu cầu xoá
+ * `scope=page` cho trang gỡ quá 30 ngày. Kết nối lại xoá `removed_at` nên trang đó không còn ở đây.
+ */
+export async function listRemovedBefore(db: DbExecutor, before: Date): Promise<{ id: string; removedAt: Date }[]> {
+  const rows = await db
+    .select({ id: pages.id, removedAt: pages.removedAt })
+    .from(pages)
+    .where(sql`${pages.removedAt} is not null and ${pages.removedAt} < ${before.toISOString()}::timestamptz`)
+    .orderBy(asc(pages.removedAt), asc(pages.id))
+  return rows.map((r) => ({ id: r.id, removedAt: r.removedAt! }))
+}
+
+/**
+ * Story 9.2: id nền tảng của các trang (KỂ CẢ đã gỡ) — `webhooks` tìm payload thô của trang cần xoá theo `platform_page_id`
+ * (mục chưa route được không có `page_id`). Trang không còn dòng thì bỏ qua.
+ */
+export async function platformAccountIdsOf(db: DbExecutor, ids: readonly string[]): Promise<{ id: string; platform: Platform; platformAccountId: string }[]> {
+  if (ids.length === 0) return []
+  return db
+    .select({ id: pages.id, platform: pages.platform, platformAccountId: pages.platformAccountId })
+    .from(pages)
+    .where(inArray(pages.id, [...ids])) as Promise<{ id: string; platform: Platform; platformAccountId: string }[]>
+}

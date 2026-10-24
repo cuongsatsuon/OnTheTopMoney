@@ -53,8 +53,8 @@
   summary: Gỡ trang thì huỷ đăng ký `DELETE /{page}/subscribed_apps` ở Meta.
   evidence: `removePage` xoá credential nhưng Meta vẫn gửi sự kiện của trang đã gỡ, và chúng được tính là sự kiện thật trong health.
 - source_spec: `spec-4-3-tin-dm-vao-hop-thu.md`
-  summary: Dọn file đính kèm trên Cloudinary khi xoá khách/hội thoại (Epic 9) và khi đính kèm tải lên xong nhưng transaction ghi `stored` thất bại.
-  evidence: `message_attachments` xoá theo cascade nhưng file `authenticated` ở Cloudinary không bị xoá; `privacy` (Epic 9) cần gọi `PrivateFileStore.delete` theo ref.
+  summary: Dọn file đính kèm trên Cloudinary khi đính kèm tải lên xong nhưng transaction ghi `stored` thất bại (phần "khi xoá khách / hội thoại" đã làm ở Story 9.2 — `inbox/purge.ts` xoá file trước khi xoá dòng).
+  evidence: `inbox/attachments.ts` chỉ xoá file vừa tải khi `UPDATE … WHERE status='pending'` không khớp; lỗi DB khi ghi `stored` để file mồ côi. Gộp với việc dọn mồ côi theo prefix.
 - source_spec: `spec-4-4-binh-luan-vao-hop-thu.md`
   summary: Sửa/thu hồi tin DM (Messenger `message_edit`, IG `is_deleted`) → `inbox.updateMessageText` / `markMessageRemoved`.
   evidence: Hàm đã có từ 4.4 nhưng parser 4.1 cho IG `is_deleted` cùng khoá `messages:<mid>` với tin gốc (bị chặn như trùng) và Messenger `message_edit` thành field `messaging`; cần khoá riêng + chuẩn hoá ở `webhook-message.ts`. Hiện vẫn `ignored`.
@@ -332,11 +332,29 @@
   summary: Callback gỡ app / xoá dữ liệu của Threads app (Uninstall Callback URL, Delete Callback URL trong cài đặt Threads app) — 9.1 chỉ làm cho Meta App (Facebook Login).
   evidence: `server/src/app/privacy.ts` chỉ verify bằng `META_APP_SECRET`. Threads có thể đòi hai URL này khi nộp review; nếu cần thì thêm `POST /privacy/threads/{uninstall,delete}` verify bằng `THREADS_APP_SECRET` (dạng `signed_request` cần xác nhận với tài liệu Threads) — đối chiếu ở 9.4.
 - source_spec: `spec-9-1-chinh-sach-va-callback-xoa.md`
-  summary: Yêu cầu `scope=all` từ Meta chưa nêu ai xoá `connections.meta_accounts` (tên + user token của tài khoản Facebook) — danh sách module tham gia của AD-22 không có `connections`.
-  evidence: AD-22 chỉ liệt kê `inbox`, `autoreply`, `webhooks`, `ai`, `content`. Story 9.2 quyết: thêm `connections` vào danh sách tham gia cho `scope=all`, hoặc ghi rõ là giữ.
-- source_spec: `spec-9-1-chinh-sach-va-callback-xoa.md`
-  summary: Trang chính sách nêu thời hạn lưu theo AD-22 (payload webhook 30 ngày, lượt AI 90 ngày, dữ liệu trang gỡ quá 30 ngày) nhưng cron dọn chưa có — đúng sau Story 9.3 (và 9.2 cho trang gỡ quá 30 ngày). Nên xong cả hai trước khi nộp App Review.
+  summary: Trang chính sách nêu thời hạn lưu theo AD-22 (payload webhook 30 ngày, lượt AI 90 ngày) nhưng cron dọn chưa có — đúng sau Story 9.3 (phần "trang gỡ quá 30 ngày" đã có từ 9.2: cron `privacy.removed_pages`). Nên xong trước khi nộp App Review.
   evidence: `server/src/app/privacy-pages.ts` mục 5; chưa có queue `privacy.retention`.
-- source_spec: `spec-9-1-chinh-sach-va-callback-xoa.md`
-  summary: Callback Meta không kiểm độ mới của `signed_request` (`issued_at`) — một `signed_request` hợp lệ bị lộ có thể gửi lại sau khi yêu cầu cũ đã xoá xong và chủ shop kết nối lại cùng tài khoản Facebook → yêu cầu `scope=all` mới (xoá sạch lần nữa khi 9.2 chạy).
-  evidence: `server/src/modules/privacy/signed-request.ts` chỉ đọc `issued_at`, `recordMetaRequest` tạo mới khi yêu cầu gần nhất `completed matched=true` (review lượt 1). Khó khai thác (cần body POST HTTPS của Meta). Hướng làm ở 9.2: từ chối `issued_at` quá cũ (vd > 1 ngày, chọn theo cửa sổ retry của Meta) hoặc nhớ `issued_at` lớn nhất theo `subject_hash`.
+- source_spec: `spec-9-2-xoa-du-lieu.md`
+  summary: Kiểm bằng trình duyệt "Xoá khách" ở `/khach-hang?id=` với phiên chủ shop + worker: hộp xác nhận (ô "Tôi hiểu…" bắt buộc), khách biến mất khỏi danh sách / Hộp thư, link "Xem trạng thái xoá" mở `/privacy/status/<code>` trên host api (cả chế độ tách) và chuyển "Đã xoá xong".
+  evidence: Chỉ có test API (Postgres thật, pg-boss thật, Cloudinary giả — `server/test/privacy-purge.test.ts`) và test helper web (`web/src/lib/contacts.test.ts`); chưa chạy UI (dev không có mật khẩu mẫu).
+- source_spec: `spec-9-2-xoa-du-lieu.md`
+  summary: Yêu cầu `scope=all` chỉ xoá dữ liệu khách / hội thoại / bài + `meta_accounts`; token trang và dòng `pages` giữ nguyên [quyết định hẹp]. Callback "xin xoá dữ liệu" (không kèm gỡ app) không ngắt trang → trang vẫn nhận tin mới sau khi xoá xong.
+  evidence: `connections/purge.ts`, `app/privacy.ts` (chỉ deauthorize ngắt trang, như 9.1). Nếu chính sách cần "xoá xong thì không nhận thêm": ngắt trang ở data-deletion, hoặc xoá token / soft-remove trang trong phần `connections`.
+- source_spec: `spec-9-2-xoa-du-lieu.md`
+  summary: Yêu cầu `scope=all` của 9.1 tạo trước bản này (không có `page_ids`) không được phát lại — cron `privacy.purge_resume` bỏ qua + log cảnh báo; cần xử lý tay nếu production có dòng như vậy.
+  evidence: `privacy/coordinator.ts` `resumeStalledRequests` (`skippedLegacy`). Kiểm `select id from deletion_requests where scope='all' and page_ids is null and status <> 'completed'` trước khi lên bản.
+- source_spec: `spec-9-2-xoa-du-lieu.md`
+  summary: Cửa sổ đua nhỏ khi xoá khách: tin có đính kèm tới giữa vòng lô và transaction cuối bị xoá theo cascade mà không xoá file (file mồ côi); hội thoại mới của khách tạo sau ảnh chụp để lại `autoreply_runs` / `ai_usage.ref` (chỉ id, không PII) — dọn theo hạn ở 9.3.
+  evidence: `inbox/purge.ts` `purgeContact` (transaction cuối xoá nốt tin theo định danh, không gọi kho); module giai đoạn 1 dùng `conversationIds` chụp lúc ghi.
+- source_spec: `spec-9-2-xoa-du-lieu.md`
+  summary: Xoá `scope=page|all` không phát sự kiện realtime theo khách → Hộp thư / Khách hàng của trang vẫn đang mở (vd trang bị ngắt ở `all`) chỉ đổi khi refetch.
+  evidence: `inbox/purge.ts` chỉ phát `contact.deleted` cho `scope=contact`. Hướng làm: một sự kiện tổng `privacy.purge_completed` realtime=true hoặc `conversation`/`contact` hint theo trang.
+- source_spec: `spec-9-2-xoa-du-lieu.md`
+  summary: Xoá khách là tác giả bình luận gốc thì cả hội thoại bình luận bị xoá, gồm trả lời của khách KHÁC trong luồng đó (và payload thô của chúng, vì `webhooks` khớp `thread_key` = id bình luận gốc) — cần quyết định sản phẩm (review lượt 1).
+  evidence: `inbox/schema.ts` `conversations.contact_identity_id` NOT NULL `on delete cascade` tới định danh tác giả gốc; `inbox/purge.ts` `purgeContact` xoá theo `conversationIds`, `purgeMatchKeys` đưa `thread_key` + id tin của mọi tin trong hội thoại. Hướng làm: chuyển hội thoại cho định danh của người trả lời sớm nhất (giữ tin của họ, chỉ xoá tin của khách bị xoá) hoặc ghi rõ là chấp nhận trong chính sách.
+- source_spec: `spec-9-2-xoa-du-lieu.md`
+  summary: `webhook_events` của khách tới sau khi phần `webhooks` (giai đoạn 1) chạy mà trước giai đoạn cuối (khách đang chờ xoá vẫn nhắn; pipeline kẹt thì cửa sổ dài) không bị xoá — cron resume chỉ phát lại giai đoạn cuối (review lượt 1).
+  evidence: `webhooks/purge.ts` cần `inbox.purgeMatchKeys` nên chạy trước `inbox`; `privacy/coordinator.ts` `resumeStalledRequests` khi `final_requested_at` khác null chỉ phát `purge_final_requested`. Retention payload 30 ngày của 9.3 sẽ dọn; hoặc chặn ingest / route tin của khách đang chờ xoá.
+- source_spec: `spec-9-2-xoa-du-lieu.md`
+  summary: `scope=all` từ callback "xin xoá dữ liệu" (không gỡ app) xoá `meta_accounts` nhưng trang vẫn chạy → `page_credentials.meta_account_id = null`; callback deauthorize / xoá dữ liệu sau đó của cùng người thành "người lạ" (`matched=false`) → không ngắt trang, không xoá dữ liệu nhận thêm (review lượt 1).
+  evidence: `connections/purge.ts` (khoá ngoại `set null`), `connections/deauthorize.ts` `findAccountId` theo `meta_accounts.fb_user_id`. Gộp với việc hoãn "token / ngắt trang khi `all`": ngắt trang ở data-deletion, hoặc giữ `fb_user_id` dạng băm để vẫn khớp.

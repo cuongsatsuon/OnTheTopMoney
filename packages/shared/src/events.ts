@@ -52,6 +52,8 @@ export const EVENTS = {
   'contact.updated': event(true, {}),
   // Story 4.9: khách `id` đã được gộp vào khách `intoId` (đã xoá) — web làm cũ danh sách, đóng hồ sơ cũ.
   'contact.merged': event(true, { intoId: Id }),
+  // Story 9.2: khách `id` đã bị xoá hẳn (yêu cầu quyền riêng tư) — web làm cũ Khách hàng / Hộp thư.
+  'contact.deleted': event(true, {}),
   'post_target.published': event(true, { pageId: Id, campaignId: Id.nullable() }),
   'post_target.failed': event(true, { pageId: Id, campaignId: Id.nullable(), errorCode: ErrorCode }),
   'post_target.cancelled': event(true, { pageId: Id, campaignId: Id.nullable() }),
@@ -91,10 +93,22 @@ export const EVENTS = {
   // Story 1.4: module `notifications` vừa tạo một thông báo — web refetch danh sách + hiện toast.
   'notification.created': event(true, {}),
   'job.failed': event(false, { queue: z.string(), jobId: Id }),
+  // Story 9.2 (AD-22): `id` = requestId. Giai đoạn 1 → mọi module phụ thuộc (`PURGE_MODULES[scope]`) tự xoá phần của mình.
+  // `conversationIds` (scope `contact`) / `pageIds` (`page|all`, ảnh chụp lúc ghi yêu cầu) / `metaAccountId` (`all`) để module
+  // không phải đọc dữ liệu của `inbox` sau khi nó xoá. Không mang id nền tảng hay PII.
   'privacy.purge_requested': event(false, {
     scope: DeletionScope,
     targetId: Id.nullable(),
     conversationIds: z.array(Id).optional(),
+    pageIds: z.array(Id).optional(),
+    metaAccountId: Id.nullable().optional(),
+  }),
+  // Story 9.2: giai đoạn cuối — `privacy` phát khi mọi phần giai đoạn 1 đã xong; chỉ `inbox` (PURGE_FINAL_MODULE) nghe.
+  'privacy.purge_final_requested': event(false, {
+    scope: DeletionScope,
+    targetId: Id.nullable(),
+    conversationIds: z.array(Id).optional(),
+    pageIds: z.array(Id).optional(),
   }),
   'privacy.purge_part_completed': event(false, { module: z.string() }),
   'privacy.purge_completed': event(false, {}),

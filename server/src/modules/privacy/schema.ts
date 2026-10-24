@@ -5,9 +5,13 @@
 // - `subject_hash`: HMAC của id người dùng Meta (không lưu id thô) — khoá idempotent của callback Meta; `null` với yêu cầu tay.
 // - `matched`: lúc nhận, app có giữ dữ liệu gắn với người yêu cầu không. `false` → không có gì để xoá, dòng `completed` ngay.
 // - `target_id` KHÔNG có FK: trang / khách đích sẽ bị chính luồng xoá xoá đi, dòng yêu cầu vẫn phải còn để tra trạng thái.
-import { DELETION_SCOPES, DELETION_SOURCES, DELETION_STATUSES } from '@ottm/shared'
+// Story 9.2: ảnh chụp phạm vi lúc ghi (`conversation_ids` cho `contact`, `page_ids` cho `page|all`, `meta_account_id` cho `all`)
+// để phát lại giai đoạn nào cũng xoá đúng tập cũ; `meta_issued_at` chống phát lại `signed_request`; `final_requested_at` =
+// đã phát giai đoạn cuối (đúng một lần); `last_published_at` cho cron resume. `deletion_request_parts`: phần đã xong.
+// Không cột nào chứa id nền tảng hay PII (id nội bộ UUID).
+import { DELETION_SCOPES, DELETION_SOURCES, DELETION_STATUSES, PURGE_MODULE_NAMES } from '@ottm/shared'
 import { sql } from 'drizzle-orm'
-import { boolean, check, index, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core'
+import { bigint, boolean, check, index, pgTable, primaryKey, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core'
 
 const inList = (xs: readonly string[]) => sql.raw(xs.map((s) => `'${s}'`).join(', '))
 const ts = (name: string) => timestamp(name, { withTimezone: true, precision: 3 })
@@ -26,6 +30,16 @@ export const deletionRequests = pgTable(
     matched: boolean('matched').notNull().default(true),
     requestedAt: ts('requested_at').notNull().defaultNow(),
     completedAt: ts('completed_at'),
+    /** Hội thoại của khách lúc ghi (`scope=contact`). */
+    conversationIds: uuid('conversation_ids').array(),
+    /** Trang trong phạm vi lúc ghi (`scope=page|all`); `null` ở yêu cầu `all` của 9.1 (thiếu ảnh chụp — không phát lại). */
+    pageIds: uuid('page_ids').array(),
+    /** Tài khoản Meta (`connections.meta_accounts`) của yêu cầu `all` — `connections` xoá dòng đó. Không FK. */
+    metaAccountId: uuid('meta_account_id'),
+    /** `issued_at` (giây epoch) của `signed_request` đã tạo yêu cầu — chống phát lại. */
+    metaIssuedAt: bigint('meta_issued_at', { mode: 'number' }),
+    finalRequestedAt: ts('final_requested_at'),
+    lastPublishedAt: ts('last_published_at'),
   },
   (t) => [
     check('deletion_requests_scope_check', sql`${t.scope} in (${inList(DELETION_SCOPES)})`),
@@ -38,5 +52,26 @@ export const deletionRequests = pgTable(
       .on(t.subjectHash)
       .where(sql`${t.status} <> 'completed' and ${t.subjectHash} is not null`),
     index('deletion_requests_subject_idx').on(t.subjectHash, t.requestedAt),
+    // Story 9.2: mỗi khách / trang tối đa một yêu cầu đang mở (bấm xoá hai lần, cron chạy lại).
+    uniqueIndex('deletion_requests_open_target_unique')
+      .on(t.scope, t.targetId)
+      .where(sql`${t.status} <> 'completed' and ${t.targetId} is not null`),
+    index('deletion_requests_target_idx').on(t.targetId, t.requestedAt),
+  ],
+)
+
+/** Phần đã xong của một yêu cầu (Story 9.2): một dòng mỗi module; phát lại `purge_part_completed` không thêm dòng. */
+export const deletionRequestParts = pgTable(
+  'deletion_request_parts',
+  {
+    requestId: uuid('request_id')
+      .notNull()
+      .references(() => deletionRequests.id, { onDelete: 'cascade' }),
+    module: text('module').notNull(),
+    completedAt: ts('completed_at').notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.requestId, t.module] }),
+    check('deletion_request_parts_module_check', sql`${t.module} in (${inList(PURGE_MODULE_NAMES)})`),
   ],
 )

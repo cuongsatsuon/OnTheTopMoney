@@ -7,32 +7,35 @@ import { createEventPublisher, parseEventEnvelope } from '../platform/events/ind
 import { QUEUES, createBoss, createJobSender, ensureQueues, isCriticalQueue, startWorkers } from '../platform/jobs/index.ts'
 import { createSecretCipher } from '../adapters/crypto/index.ts'
 import { createMediaStores } from '../adapters/media/index.ts'
-import { gcReservations, handleAiEvent } from '../modules/ai/index.ts'
+import { gcReservations, handleAiEvent, handleAiPurge } from '../modules/ai/index.ts'
 import { handleCollectPageJob, handleCollectPostsJob, runPageMetricsCron, runPostMetricsCron } from '../modules/analytics/index.ts'
 import { handleCampaignsEvent, handleGenerateJob, handlePreviewJob, runCompleteCheck, runGenerateWindow } from '../modules/campaigns/index.ts'
-import { handleRunJob, handleTriageEvent } from '../modules/autoreply/index.ts'
+import { handleAutoreplyPurge, handleRunJob, handleTriageEvent } from '../modules/autoreply/index.ts'
 import {
   cleanupExpiredOAuth,
   createMetaClients,
   enqueueMissingSubscriptions,
+  handleConnectionsPurge,
   handleSubscribeJob,
   recordSubscribeError,
   runTokenCheck,
   subscribePage,
 } from '../modules/connections/index.ts'
-import { gcOrphanMedia, handleContentEvent, handleImageGenerateJob, handlePublishJob, requeueTargets } from '../modules/content/index.ts'
+import { gcOrphanMedia, handleContentEvent, handleContentPurge, handleImageGenerateJob, handlePublishJob, requeueTargets } from '../modules/content/index.ts'
 import {
   handleContactSummaryJob,
   handleEchoMatchJob,
   handleFetchAttachmentJob,
   handleFetchPostTextJob,
   handleFetchProfileJob,
+  handleInboxPurge,
   handleSendJob,
   sweepStuckSending,
 } from '../modules/inbox/index.ts'
 import { handleEvent } from '../modules/notifications/index.ts'
+import { handlePrivacyEvent, resumeStalledRequests, sweepRemovedPages } from '../modules/privacy/index.ts'
 import { handleKnowledgeExtractJob, handleProfilesEvent } from '../modules/profiles/index.ts'
-import { handleRouteJob, markEventFailed, routeWebhookEvent, runHealthCheck } from '../modules/webhooks/index.ts'
+import { handleRouteJob, handleWebhooksPurge, markEventFailed, routeWebhookEvent, runHealthCheck } from '../modules/webhooks/index.ts'
 import { HEARTBEAT_INTERVAL_MS, writeHeartbeat } from './heartbeat.ts'
 
 const config = getConfig()
@@ -61,6 +64,12 @@ const appIds = [config.META_APP_ID, config.THREADS_APP_ID].filter((id): id is st
 
 // Story 8.1: phụ thuộc của job thu số liệu (token / quyền qua `connections`, Meta hạng `background`).
 const analyticsDeps = { db: dbHandle.db, events, jobs, cipher, graph, threads, log: logger.child({ component: 'analytics' }) }
+
+/** Story 9.2: kết quả một phần xoá — chỉ id yêu cầu + số đếm (không PII). */
+function logPurge(queue: string, jobId: string, result: object | 'ignored'): void {
+  if (result === 'ignored') logger.debug({ jobId }, `${queue}: bỏ qua`)
+  else logger.info({ jobId, ...result }, queue)
+}
 
 let heartbeatTimer: NodeJS.Timeout | undefined
 let closing = false
@@ -300,6 +309,29 @@ try {
       'inbox.send_sweep': async () => {
         const swept = await sweepStuckSending({ db: dbHandle.db, events })
         if (swept > 0) logger.warn({ swept }, 'inbox: tin kẹt đang gửi → SEND_UNKNOWN')
+      },
+      // Story 9.2 (AD-22): luồng xoá dữ liệu hai giai đoạn. Mỗi module xoá bảng của mình theo lô rồi báo `privacy`; lỗi tạm ném
+      // lại (lô rollback, lần sau xoá tiếp). Log chỉ id yêu cầu + số đếm.
+      'autoreply.purge': async (job) => logPurge('autoreply.purge', job.id, await handleAutoreplyPurge({ db: dbHandle.db, events }, job.data)),
+      'webhooks.purge': async (job) => logPurge('webhooks.purge', job.id, await handleWebhooksPurge({ db: dbHandle.db, events }, job.data)),
+      'ai.purge': async (job) => logPurge('ai.purge', job.id, await handleAiPurge({ db: dbHandle.db, events }, job.data)),
+      'content.purge': async (job) =>
+        logPurge('content.purge', job.id, await handleContentPurge({ db: dbHandle.db, events, media, log: logger.child({ component: 'content_purge' }) }, job.data)),
+      'connections.purge': async (job) => logPurge('connections.purge', job.id, await handleConnectionsPurge({ db: dbHandle.db, events }, job.data)),
+      'inbox.purge': async (job) =>
+        logPurge('inbox.purge', job.id, await handleInboxPurge({ db: dbHandle.db, events, media, log: logger.child({ component: 'inbox_purge' }) }, job.data)),
+      'events.privacy': async (job) => {
+        const result = await handlePrivacyEvent({ db: dbHandle.db, events }, job.data)
+        if (result === 'completed') logger.info({ jobId: job.id }, 'privacy: yêu cầu xoá đã hoàn tất')
+        else logger.debug({ jobId: job.id, result }, 'events.privacy')
+      },
+      'privacy.purge_resume': async () => {
+        const result = await resumeStalledRequests({ db: dbHandle.db, events, log: logger.child({ component: 'privacy' }) })
+        if (result.republished > 0 || result.skippedLegacy > 0 || result.closedReconnected > 0) logger.warn(result, 'privacy: phát lại yêu cầu xoá đang dở')
+      },
+      'privacy.removed_pages': async () => {
+        const created = await sweepRemovedPages({ db: dbHandle.db, events, log: logger.child({ component: 'privacy' }) })
+        if (created > 0) logger.info({ created }, 'privacy: yêu cầu xoá dữ liệu trang gỡ quá 30 ngày')
       },
       // Story 4.2: sức khoẻ webhook mỗi 5 phút; phát `webhook.stalled|recovered` khi đổi trạng thái.
       'webhooks.health': async () => {

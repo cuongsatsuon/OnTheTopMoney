@@ -4,7 +4,10 @@
 // - `disconnectMetaUserTx`: trong transaction của bên gọi, chuyển mọi trang có `page_credentials.meta_account_id` của
 //   tài khoản (kèm IG dùng chung token Fanpage) sang `disconnected` qua `markDisconnectedTx` (phát `page.disconnected`,
 //   bỏ qua trang đã gỡ / đã ngắt — gọi lại không phát lại). Trang Threads (app/token riêng) không bị đụng.
-import { eq } from 'drizzle-orm'
+// - Story 9.2 `metaUserPurgeScope`: ảnh chụp phạm vi xoá `scope=all` của người dùng — dòng `meta_accounts` + trang
+//   lấy token qua tài khoản (Fanpage có `meta_account_id`, IG có `token_source_page_id` về các Fanpage đó). Không có
+//   Threads, không có trang của tài khoản Meta khác (hẹp, an toàn: gỡ app Facebook không xoá dữ liệu Threads).
+import { eq, inArray, or } from 'drizzle-orm'
 import type { DbExecutor } from '../../platform/db/index.ts'
 import { markDisconnectedTx, type TokenCheckDeps } from './token-check.ts'
 import { metaAccounts, pageCredentials } from './schema.ts'
@@ -39,4 +42,18 @@ export async function disconnectMetaUserTx(
     }
   }
   return { known: true, disconnected }
+}
+
+export async function metaUserPurgeScope(tx: DbExecutor, fbUserId: string): Promise<{ metaAccountId: string; pageIds: string[] } | null> {
+  const accountId = await findAccountId(tx, fbUserId)
+  if (!accountId) return null
+  const own = (await tx.select({ pageId: pageCredentials.pageId }).from(pageCredentials).where(eq(pageCredentials.metaAccountId, accountId))).map((r) => r.pageId)
+  const rows =
+    own.length === 0
+      ? []
+      : await tx
+          .select({ pageId: pageCredentials.pageId })
+          .from(pageCredentials)
+          .where(or(inArray(pageCredentials.pageId, own), inArray(pageCredentials.tokenSourcePageId, own)))
+  return { metaAccountId: accountId, pageIds: [...new Set(rows.map((r) => r.pageId))].sort() }
 }

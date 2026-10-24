@@ -78,3 +78,13 @@ export function createEventPublisher(boss: Pick<PgBoss, 'publish'>): EventPublis
     },
   }
 }
+
+/**
+ * Payload đã kiểm của job nếu đúng là sự kiện `name`, ngược lại `null` (sai tên / sai dạng) — consumer bỏ qua thay vì ném
+ * ZodError đốt lượt retry.
+ */
+export function envelopePayload<N extends EventName>(data: unknown, name: N): EventPayload<N> | null {
+  if (!isEventEnvelope(data) || data.event !== name) return null
+  const parsed = EVENTS[name].payload.safeParse(data.payload)
+  return parsed.success ? (parsed.data as EventPayload<N>) : null
+}

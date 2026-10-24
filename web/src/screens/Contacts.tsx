@@ -3,8 +3,9 @@
 // gợi ý gộp (Meta xác nhận cùng người), hồ sơ sửa được (`ContactProfile`: giai đoạn, thẻ, tên, SĐT, ghi chú, tóm tắt AI
 // "AI tạo"), lịch sử nhắn tin của mọi hội thoại (mỗi đoạn ghi rõ trang), "Gộp khách" (chọn khách khác → gộp vào khách
 // đang mở, xác nhận vì không hoàn tác). `pageIds`, "Xử lý bởi" là trường dẫn xuất của server. Xuất CSV: sắp có.
-import { CONTACT_STAGES, type ContactDetailDto, type ContactDto, type ContactStage } from '@ottm/shared'
-import { Download, GitMerge, MessageSquareText, Phone, Search, Tag, Users, X } from 'lucide-react'
+// Story 9.2: "Xoá khách" → hộp xác nhận (ô "Tôi hiểu…" bắt buộc) → yêu cầu xoá + link trang trạng thái công khai.
+import { CONTACT_STAGES, type ContactDeletionResponse, type ContactDetailDto, type ContactDto, type ContactStage } from '@ottm/shared'
+import { Download, ExternalLink, GitMerge, MessageSquareText, Phone, Search, Tag, Trash2, Users, X } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { Content } from '../components/AppShell'
@@ -18,6 +19,7 @@ import {
   STAGE_OPTIONS,
   STAGE_STYLE,
   avatarColorOf,
+  deleteContactConfirmText,
   historyAuthor,
   historySegments,
   historyText,
@@ -27,6 +29,7 @@ import {
   useContactFacets,
   useContactHistory,
   useContacts,
+  useDeleteContact,
   useMergeContacts,
   type ContactFilters,
 } from '../lib/contacts'
@@ -379,8 +382,12 @@ function ContactDrawer({ id, onClose, onOpenContact }: { id: string; onClose: ()
   const navigate = useNavigate()
   const contact = useContact(id)
   const [merging, setMerging] = useState<{ sourceId?: string } | null>(null)
+  const [deleting, setDeleting] = useState(false)
+  const [deleted, setDeleted] = useState<ContactDeletionResponse | null>(null)
   const c = contact.data
 
+  // Sau khi gửi yêu cầu xoá: chỉ còn hộp "Đã nhận" (chi tiết khách đã thành 404 — khách bị ẩn ngay).
+  if (deleted) return <DeletionDoneModal deletion={deleted} onClose={onClose} />
   if (!c) {
     return (
       <Drawer open onClose={onClose} width={460} title="Hồ sơ khách hàng">
@@ -420,6 +427,9 @@ function ContactDrawer({ id, onClose, onOpenContact }: { id: string; onClose: ()
       }
       footer={
         <>
+          <Button variant="danger" icon={<Trash2 size={15} />} onClick={() => setDeleting(true)} className="mr-auto">
+            Xoá khách
+          </Button>
           <Button icon={<GitMerge size={15} />} onClick={() => setMerging({})}>
             Gộp khách
           </Button>
@@ -470,6 +480,7 @@ function ContactDrawer({ id, onClose, onOpenContact }: { id: string; onClose: ()
       </div>
 
       {merging && <MergeModal target={c} initialSourceId={merging.sourceId ?? null} onClose={() => setMerging(null)} />}
+      {deleting && <DeleteContactModal contact={c} onCancel={() => setDeleting(false)} onDeleted={setDeleted} />}
     </Drawer>
   )
 }
@@ -617,6 +628,82 @@ function MergeModal({ target, initialSourceId, onClose }: { target: ContactDetai
           )}
         </ul>
         {source.data && <p className="rounded-md bg-amber-50 p-3 text-xs text-amber-900">{mergeConfirmText(targetName, nameOf(source.data))}</p>}
+      </div>
+    </Modal>
+  )
+}
+
+/**
+ * Story 9.2: "Xoá khách và toàn bộ hội thoại". Phá huỷ, không hoàn tác → phải tích ô "Tôi hiểu…" mới bấm được. Gửi xong
+ * thì ngăn hồ sơ chuyển sang `DeletionDoneModal` (link trang trạng thái công khai `statusUrl` trên host api).
+ */
+function DeleteContactModal({ contact, onCancel, onDeleted }: { contact: ContactDetailDto; onCancel: () => void; onDeleted: (d: ContactDeletionResponse) => void }) {
+  const { notify } = useApp()
+  const [understood, setUnderstood] = useState(false)
+  const del = useDeleteContact()
+  const name = nameOf(contact)
+
+  const confirm = () => {
+    if (!understood) return
+    del.mutate(contact.id, {
+      onSuccess: (res) => {
+        notify(`Đang xoá "${name}" và toàn bộ hội thoại`)
+        onDeleted(res)
+      },
+      onError: (err) => notify(errorMessageOf(err)),
+    })
+  }
+
+  return (
+    <Modal
+      open
+      onClose={onCancel}
+      title={`Xoá khách "${name}"?`}
+      width={480}
+      footer={
+        <>
+          <Button variant="ghost" onClick={onCancel}>
+            Huỷ
+          </Button>
+          <Button variant="danger" icon={<Trash2 size={15} />} onClick={confirm} disabled={!understood || del.isPending}>
+            {del.isPending ? 'Đang gửi…' : 'Xoá khách và toàn bộ hội thoại'}
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-3">
+        <p className="rounded-md bg-red-50 p-3 text-xs text-red-900">{deleteContactConfirmText(name)}</p>
+        <label className="flex items-start gap-2 text-[13px]">
+          <input type="checkbox" checked={understood} onChange={(e) => setUnderstood(e.target.checked)} className="mt-0.5" />
+          <span>Tôi hiểu dữ liệu của khách sẽ bị xoá vĩnh viễn.</span>
+        </label>
+      </div>
+    </Modal>
+  )
+}
+
+function DeletionDoneModal({ deletion, onClose }: { deletion: ContactDeletionResponse; onClose: () => void }) {
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={deletion.status === 'completed' ? 'Khách đã được xoá' : 'Đã nhận yêu cầu xoá'}
+      width={480}
+      footer={
+        <Button variant="primary" onClick={onClose}>
+          Đóng
+        </Button>
+      }
+    >
+      <div className="space-y-3 text-[13px]">
+        <p>
+          {deletion.status === 'completed'
+            ? 'Hồ sơ, hội thoại, tin nhắn và tệp đính kèm của khách đã được xoá khỏi ứng dụng.'
+            : 'Khách đã được ẩn khỏi danh sách. Hội thoại, tin nhắn và tệp đính kèm đang được xoá ở nền, thường xong trong vài giây.'}
+        </p>
+        <a href={deletion.statusUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 font-medium text-primary hover:underline">
+          Xem trạng thái xoá <ExternalLink size={13} />
+        </a>
       </div>
     </Modal>
   )

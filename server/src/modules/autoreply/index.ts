@@ -3,6 +3,7 @@
 // Story 4.3: bước triage. Story 5.3: hàm quyết định dùng chung (cổng sẵn sàng AI, luật chuyển người, LLM + hậu kiểm)
 // và lượt "Thử AI". Story 5.4: chuỗi cổng AD-16 ở triage, lượt chạy `autoreply.run` (bảng `autoreply_runs`), AI tự trả
 // lời tin nhắn và chuyển cho người. Story 5.5: AI trả lời bình luận (công khai / nhắn riêng / cả hai; Threads chỉ công khai).
+// Story 9.2: xoá `autoreply_runs` theo yêu cầu quyền riêng tư.
 export const MODULE = 'autoreply'
 
 export { decideTriage, handleTriageEvent, type TriageDeps, type TriageOutcome } from './triage.ts'
@@ -35,3 +36,5 @@ export {
 } from './decide.ts'
 export { ASK_HUMAN_PHRASES, foldForMatch, matchHandoffRule, type HandoffRuleConfig, type HandoffRuleMatch } from './rules.ts'
 export { runAutoreplyTest } from './test-run.ts'
+// Story 9.2: phần `autoreply` của luồng xoá dữ liệu (queue `autoreply.purge`).
+export { handleAutoreplyPurge, type AutoreplyPurgeDeps } from './purge.ts'

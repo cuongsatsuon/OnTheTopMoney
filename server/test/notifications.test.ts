@@ -405,6 +405,15 @@ describe('worker thật: publish → events.notifications → thông báo; job h
         'analytics.page_metrics': async () => {},
         'analytics.collect_posts': async () => {},
         'analytics.collect_page': async () => {},
+        'autoreply.purge': async () => {},
+        'webhooks.purge': async () => {},
+        'ai.purge': async () => {},
+        'content.purge': async () => {},
+        'connections.purge': async () => {},
+        'inbox.purge': async () => {},
+        'events.privacy': async () => {},
+        'privacy.purge_resume': async () => {},
+        'privacy.removed_pages': async () => {},
         'events.notifications': async (job) => {
           await handleEvent(workerDeps, parseEventEnvelope(job.data))
         },

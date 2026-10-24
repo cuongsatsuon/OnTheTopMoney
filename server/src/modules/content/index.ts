@@ -2,7 +2,10 @@
 // `post_target_media`. Public API chỉ export từ file này.
 // Gọi `pages` (base), `profiles` (nhận dạng ảnh; hồ sơ hiệu lực — 6.2), `ai` (caption 6.2, ảnh 6.3), `connections` (6.4);
 // được `campaigns`, `analytics` gọi (bảng mũi tên AD-1).
+// Story 9.2: `handleContentPurge` — xoá bài / ảnh của trang khi xoá dữ liệu theo yêu cầu (`scope=page|all`).
 export const MODULE = 'content'
+
+export { handleContentPurge, type ContentPurgeDeps, type ContentPurgeResult } from './purge.ts'
 
 // Bài + đích từng trang: một cửa tạo (AD-13), sửa nháp, đọc.
 export { createPost, getPost, updateDraftPost, type CreateManualPostInput, type CreatePostInput, type CreateSlotPostInput } from './posts.ts'

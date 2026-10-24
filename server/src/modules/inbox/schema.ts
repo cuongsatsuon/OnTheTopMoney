@@ -11,6 +11,7 @@
 //   `reply_to_platform_id` bình luận được trả lời / nhắn riêng, `queued_at` lần đưa vào hàng gửi, `sending_at` lúc job chiếm.
 // - Story 5.4: `conversations.ai_typing_at` (chấm "đang gõ" của AI), `messages.sent_at` (đo độ trễ AI trả lời).
 // - Story 8.3: index `messages (page_id, platform_timestamp)` cho số liệu "Hiệu quả AI" (`stats.ts`).
+// - Story 9.2: `purge.ts` xoá khách / dữ liệu trang theo yêu cầu quyền riêng tư (phần cuối của luồng `privacy`).
 // Khoá ngoại tới `pages` `on delete cascade`: trang chỉ bị soft-delete (`removed_at`), xoá cứng chỉ xảy ra ở test/xoá
 // dữ liệu (Epic 9).
 import {
@@ -58,6 +59,11 @@ export const contacts = pgTable(
     aiSummaryRequestedAt: ts('ai_summary_requested_at'),
     /** Mã lỗi của lần tóm tắt gần nhất (`ErrorCode`, kiểm ở TypeScript — không CHECK để thêm mã không cần migration); xoá khi yêu cầu lại. */
     aiSummaryError: text('ai_summary_error'),
+    /**
+     * Story 9.2: chủ shop đã yêu cầu xoá khách (luồng `privacy`) — ẩn khỏi danh sách / chi tiết / tìm kiếm ngay, dòng bị xoá
+     * hẳn ở giai đoạn cuối của luồng xoá.
+     */
+    deletionRequestedAt: ts('deletion_requested_at'),
     createdAt: ts('created_at').notNull().defaultNow(),
     updatedAt: ts('updated_at').notNull().defaultNow(),
   },

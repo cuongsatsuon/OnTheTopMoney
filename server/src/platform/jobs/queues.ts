@@ -86,6 +86,16 @@ export interface QueuePayloads {
   /** Story 8.1: thu số liệu bài / trang của một trang; `deferredSince` = lần hoãn `RATE_LIMITED` đầu (ISO). */
   'analytics.collect_posts': { pageId: string; deferredSince?: string }
   'analytics.collect_page': { pageId: string; deferredSince?: string }
+  /** Story 9.2: phần xoá dữ liệu của từng module (consumer `privacy.purge_requested` / `purge_final_requested`). */
+  'autoreply.purge': EventEnvelope
+  'webhooks.purge': EventEnvelope
+  'ai.purge': EventEnvelope
+  'content.purge': EventEnvelope
+  'connections.purge': EventEnvelope
+  'inbox.purge': EventEnvelope
+  'events.privacy': EventEnvelope
+  'privacy.purge_resume': Record<string, never>
+  'privacy.removed_pages': Record<string, never>
   /** Story 4.5: tin của chính trang chưa khớp tin nào của app — bản chuẩn hoá (dạng JSON) để thử khớp lại. */
   'inbox.echo_match': {
     pageId: string
@@ -102,6 +112,20 @@ export interface QueuePayloads {
     }
   }
 }
+
+/** Queue xoá dữ liệu của một module (Story 9.2) — cùng policy, chỉ khác sự kiện nghe. */
+const PURGE_DEF = <const E extends readonly EventName[]>(subscribes: E) =>
+  ({
+    policy: 'standard',
+    retryLimit: 5,
+    retryDelay: 10,
+    retryBackoff: true,
+    concurrency: 1,
+    expireInSeconds: 900,
+    pollingIntervalSeconds: 0.5,
+    subscribes,
+    critical: true,
+  }) as const
 
 export const QUEUES = {
   // Ghi `worker_heartbeats` cho `/healthz` (AD-24 dòng Cron: retry 1, concurrency 1).
@@ -506,6 +530,49 @@ export const QUEUES = {
     retryBackoff: true,
     concurrency: 2,
     expireInSeconds: 300,
+  },
+  // Story 9.2 (AD-22, AD-24, AD-1): luồng xoá dữ liệu hai giai đoạn. Mỗi module xoá bảng của mình trong queue `<module>.purge`
+  // (giai đoạn 1 nghe `privacy.purge_requested`; `inbox` — phần cuối — nghe `privacy.purge_final_requested`), theo lô, rồi
+  // phát `privacy.purge_part_completed`. Handler idempotent (xoá phần còn lại, phát lại phần đã xong — `privacy` bỏ trùng) nên
+  // retry / worker chết giữa chừng đều chạy tiếp được. Retry 5 backoff (AD-24 `events.<module>`), concurrency 1 (một lượt
+  // xoá mỗi module mỗi lúc). Hạn 900 giây > lô lớn của trang nhiều tin (job hết hạn thì lần retry chạy tiếp). `critical`:
+  // hết retry → thông báo `system_error`; cron `privacy.purge_resume` phát lại sau 1 giờ. Hỏi job 0,5 giây để khách bị xoá
+  // biến mất khỏi Hộp thư sớm.
+  'autoreply.purge': PURGE_DEF(['privacy.purge_requested']),
+  'webhooks.purge': PURGE_DEF(['privacy.purge_requested']),
+  'ai.purge': PURGE_DEF(['privacy.purge_requested']),
+  'content.purge': PURGE_DEF(['privacy.purge_requested']),
+  'connections.purge': PURGE_DEF(['privacy.purge_requested']),
+  'inbox.purge': PURGE_DEF(['privacy.purge_final_requested']),
+  // Module `privacy` (Story 9.2): ghi phần đã xong, phát giai đoạn cuối / đóng yêu cầu. Khoá dòng yêu cầu nên idempotent.
+  'events.privacy': {
+    policy: 'standard',
+    retryLimit: 5,
+    retryDelay: 2,
+    retryBackoff: true,
+    concurrency: 1,
+    expireInSeconds: 60,
+    pollingIntervalSeconds: 0.5,
+    subscribes: ['privacy.purge_part_completed'],
+    critical: true,
+  },
+  // Module `privacy` (Story 9.2): mỗi giờ (phút 20) phát lại giai đoạn đang dở của yêu cầu mở quá 1 giờ không tiến triển.
+  // Idempotent; cron chạy lại giờ sau → retry 1.
+  'privacy.purge_resume': {
+    policy: 'standard',
+    retryLimit: 1,
+    concurrency: 1,
+    expireInSeconds: 120,
+    cron: { expression: '20 * * * *', tz: CRON_TZ },
+  },
+  // Module `privacy` (Story 9.2, AD-22 retention): 2h30 sáng (giờ VN) tạo yêu cầu `scope=page` cho trang gỡ quá 30 ngày.
+  // Idempotent (mỗi lần gỡ tối đa một yêu cầu); cron chạy lại ngày sau → retry 1.
+  'privacy.removed_pages': {
+    policy: 'standard',
+    retryLimit: 1,
+    concurrency: 1,
+    expireInSeconds: 300,
+    cron: { expression: '30 2 * * *', tz: CRON_TZ },
   },
 } as const satisfies { [N in keyof QueuePayloads]: QueueDef }
 

@@ -1,9 +1,12 @@
 // Khách hàng phía web (Story 4.9, AD-3, AD-11, AD-18): danh sách theo phạm vi + lọc, hồ sơ (thẻ, giai đoạn, ghi chú, SĐT,
 // tên), lịch sử nhiều trang, gộp khách, tóm tắt AI. Đọc/ghi qua REST; realtime chỉ làm cũ cache (`contact.*`,
 // `message.*`, `conversation.*` → gốc `['contacts', …]`, xem `lib/realtime.ts`). Helper thuần tách để test.
+// Story 9.2: "Xoá khách và toàn bộ hội thoại" (`POST /contacts/:id/deletion {confirm:true}`) — server ẩn khách ngay, xoá
+// thật chạy nền; `contact.deleted` (realtime) làm cũ danh sách khi xoá xong.
 import {
   BulkUpdateContactsResponse,
   CONTACT_STAGES,
+  ContactDeletionResponse,
   CONTACT_TAG_MAX_LENGTH,
   CONTACT_TAGS_MAX,
   ContactDetailDto,
@@ -135,6 +138,20 @@ export function useMergeContacts() {
   })
 }
 
+/** Story 9.2: yêu cầu xoá khách (server đòi `confirm: true` — web chỉ gửi sau hộp xác nhận). */
+export function useDeleteContact() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => apiFetch(`/contacts/${id}/deletion`, { method: 'POST', body: { confirm: true }, schema: ContactDeletionResponse }),
+    onSuccess: (_res, id) => {
+      queryClient.removeQueries({ queryKey: contactKey(id) })
+      queryClient.removeQueries({ queryKey: contactHistoryKey(id) })
+      void queryClient.invalidateQueries({ queryKey: CONTACTS_KEY })
+      void queryClient.invalidateQueries({ queryKey: CONVERSATIONS_KEY })
+    },
+  })
+}
+
 export function useSummarizeContact() {
   const after = useAfterWrite()
   return useMutation({
@@ -218,6 +235,11 @@ export function summaryNote(c: Pick<ContactDto, 'aiSummaryStatus' | 'aiSummaryEr
 /** Câu xác nhận "Gộp khách": nguồn chuyển hết vào khách đang mở, không hoàn tác. */
 export function mergeConfirmText(targetName: string, sourceName: string): string {
   return `Mọi trang, hội thoại, thẻ và ghi chú của "${sourceName}" sẽ chuyển sang "${targetName}", rồi "${sourceName}" bị xoá khỏi danh sách. Không hoàn tác được.`
+}
+
+/** Câu xác nhận "Xoá khách" (Story 9.2): xoá vĩnh viễn trong app, không hoàn tác; tin vẫn còn trên nền tảng. */
+export function deleteContactConfirmText(name: string): string {
+  return `Hồ sơ của "${name}" (tên, SĐT, ghi chú, thẻ, tóm tắt AI), mọi hội thoại, tin nhắn và tệp đính kèm của khách trên mọi trang sẽ bị xoá vĩnh viễn khỏi ứng dụng. Không hoàn tác được. Tin nhắn vẫn còn trên Facebook, Instagram, Threads.`
 }
 
 const AVATAR_COLORS = ['#FDE68A', '#BFDBFE', '#FBCFE8', '#C7D2FE', '#A7F3D0', '#FED7AA', '#FECACA', '#DDD6FE']

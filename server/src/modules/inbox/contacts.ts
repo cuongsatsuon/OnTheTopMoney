@@ -20,7 +20,7 @@ import {
   type ConversationState,
   type MergeSuggestionReason,
 } from '@ottm/shared'
-import { and, desc, eq, inArray, lt, ne, or, sql, type SQL } from 'drizzle-orm'
+import { and, desc, eq, inArray, isNull, lt, ne, or, sql, type SQL } from 'drizzle-orm'
 import type { Db, DbExecutor } from '../../platform/db/index.ts'
 import { phoneMatch, searchTerms, textMatch, textRank } from '../../platform/db/search.ts'
 import { AppError } from '../../platform/errors/index.ts'
@@ -49,8 +49,9 @@ const toRecord = (row: typeof contacts.$inferSelect): ContactRecord => ({ ...row
 const inList = (ids: readonly string[]) => sql.join(ids.map((id) => sql`${id}`), sql`, `)
 
 /** Khách có định danh trên một trang của tập (tập khác rỗng). */
+/** Khách có định danh trên tập trang và KHÔNG đang chờ xoá (Story 9.2: ẩn ngay khi chủ shop yêu cầu xoá). */
 const hasIdentityIn = (pageIds: readonly string[]) =>
-  sql`exists (select 1 from ${contactIdentities} ci where ci.contact_id = ${contacts.id} and ci.page_id in (${inList(pageIds)}))`
+  sql`(${contacts.deletionRequestedAt} is null and exists (select 1 from ${contactIdentities} ci where ci.contact_id = ${contacts.id} and ci.page_id in (${inList(pageIds)})))`
 
 /** Mốc hoạt động: tin mới nhất (không tính `system`) của hội thoại trên các trang của tập; chưa có → lúc tạo khách. */
 const activityIn = (pageIds: readonly string[]) => sql<Date>`coalesce((
@@ -181,10 +182,13 @@ export async function contactFacets(db: DbExecutor, pageIds: readonly string[]):
   return { total, stages, tags }
 }
 
-/** Một khách theo id; `null` khi không có. Bên gọi kiểm khách còn định danh trên trang chưa gỡ (`contactActivity`). */
+/**
+ * Một khách theo id; `null` khi không có hoặc đang chờ xoá (Story 9.2). Bên gọi kiểm khách còn định danh trên trang chưa
+ * gỡ (`contactActivity`).
+ */
 export async function getContact(db: DbExecutor, id: string): Promise<ContactRecord | null> {
   if (!UUID_RE.test(id)) return null
-  const [row] = await db.select().from(contacts).where(eq(contacts.id, id))
+  const [row] = await db.select().from(contacts).where(and(eq(contacts.id, id), isNull(contacts.deletionRequestedAt)))
   return row ? toRecord(row) : null
 }
 
@@ -352,7 +356,8 @@ export async function mergeContacts(deps: ContactsDeps, targetId: string, source
       .for('update')
     const target = locked.find((c) => c.id === targetId)
     const source = locked.find((c) => c.id === sourceId)
-    if (!target || !source) return { status: 'missing' }
+    // Story 9.2: khách đang chờ xoá coi như không còn (khoá dòng trước nên không đua với yêu cầu xoá).
+    if (!target || !source || target.deletionRequestedAt || source.deletionRequestedAt) return { status: 'missing' }
 
     await tx.update(contactIdentities).set({ contactId: targetId }).where(eq(contactIdentities.contactId, sourceId))
     const keepSummary = target.aiSummary !== null

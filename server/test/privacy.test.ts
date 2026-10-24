@@ -85,7 +85,7 @@ afterAll(async () => {
   for (const e of SINK_EVENTS) await boss.unsubscribe(e, SINK)
   await boss.deleteQueue(SINK)
   // `page.disconnected` còn tới queue sự kiện thật (notifications, campaigns…) — không để test khác nhận.
-  await handle.sql.unsafe(`delete from ${BOSS_SCHEMA}.job where name like 'events.%'`)
+  await handle.sql.unsafe(`delete from ${BOSS_SCHEMA}.job where name like 'events.%' or name like '%.purge'`)
   await boss.stop({ graceful: false })
   await handle.close()
 })
@@ -130,7 +130,8 @@ async function seed() {
   return { fb: fb.id, ig: ig.id, th: th.id, fb2: fb2.id }
 }
 
-const signed = (userId: string, secret = SECRET) => signRequestForTest({ algorithm: 'HMAC-SHA256', issued_at: 1_790_000_000, user_id: userId }, secret)
+const signed = (userId: string, secret = SECRET, issuedAt = 1_790_000_000) =>
+  signRequestForTest({ algorithm: 'HMAC-SHA256', issued_at: issuedAt, user_id: userId }, secret)
 
 function callback(kind: 'deauthorize' | 'data-deletion', signedRequest: string | null, opts: { app?: FastifyInstance; contentType?: string; body?: string } = {}) {
   const form = signedRequest === null ? '' : `signed_request=${encodeURIComponent(signedRequest)}`
@@ -239,7 +240,8 @@ describe('POST /privacy/meta/data-deletion', () => {
     const first = MetaDataDeletionResponse.parse((await callback('data-deletion', signed(OWNER))).json())
     await handle.sql`update deletion_requests set status = 'completed', completed_at = now()`
     await boss.deleteAllJobs(SINK)
-    const next = MetaDataDeletionResponse.parse((await callback('data-deletion', signed(OWNER))).json())
+    // Story 9.2: `signed_request` mới hơn (cùng `issued_at` = phát lại → mã cũ, xem privacy-purge.test.ts).
+    const next = MetaDataDeletionResponse.parse((await callback('data-deletion', signed(OWNER, SECRET, 1_790_000_100))).json())
     expect(next.confirmation_code).not.toBe(first.confirmation_code)
     expect((await requests()).map((r) => r.status)).toEqual(['completed', 'pending'])
     expect(await sinkEvents('privacy.purge_requested')).toHaveLength(1)

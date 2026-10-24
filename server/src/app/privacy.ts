@@ -7,15 +7,30 @@
 //   `{url, confirmation_code}` theo dạng Meta yêu cầu.
 // - GET /privacy/status/:code: trang trạng thái công khai (no-store, no-referrer, noindex); mã lạ → 404 HTML.
 // - GET /api/v1/privacy/config: URL để dán vào Meta App (dưới guard phiên).
+// Story 9.2: callback chặn phát lại `signed_request` (trước khi ngắt trang) và chụp phạm vi `all` (trang FB + IG của đúng
+// tài khoản); `POST /api/v1/contacts/:id/deletion {confirm:true}` — chủ shop xoá khách và toàn bộ hội thoại.
 // Log chỉ mang id yêu cầu + cờ; không bao giờ `signed_request`, `user_id`, mã xác nhận (AD-12).
-import { PRIVACY_PATHS, type DeletionSource, type MetaDataDeletionResponse, type PrivacyConfigResponse } from '@ottm/shared'
-import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
-import { disconnectMetaUserTx, isKnownMetaUser } from '../modules/connections/index.ts'
 import {
+  ContactDeletionBody,
+  PRIVACY_PATHS,
+  type ContactDeletionResponse,
+  type DeletionSource,
+  type MetaDataDeletionResponse,
+  type PrivacyConfigResponse,
+} from '@ottm/shared'
+import { z } from 'zod'
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
+import { disconnectMetaUserTx, metaUserPurgeScope } from '../modules/connections/index.ts'
+import { markContactForDeletion } from '../modules/inbox/index.ts'
+import {
+  findMetaReplay,
   getRequestByCode,
+  latestTargetRequest,
   metaSubjectHash,
   recordMetaRequest,
+  requestTargetDeletion,
   verifySignedRequest,
+  type DeletionRequestView,
   type RecordMetaRequestResult,
 } from '../modules/privacy/index.ts'
 import type { Db } from '../platform/db/index.ts'
@@ -80,17 +95,19 @@ export function registerPrivacy(app: FastifyInstance, deps: PrivacyDeps): void {
       throw new AppError('VALIDATION_FAILED', 400, { message: 'Invalid signed_request' })
     }
     const subjectHash = metaSubjectHash(deps.metaAppSecret!, verified.userId)
-    const result: RecordMetaRequestResult & { disconnected: number } = await deps.db.transaction(async (tx) => {
-      let known: boolean
+    const result: RecordMetaRequestResult & { disconnected: number; replay: boolean } = await deps.db.transaction(async (tx) => {
+      // Story 9.2: `signed_request` không mới hơn yêu cầu đã xoá xong của cùng người → trả mã cũ, KHÔNG ngắt trang (chủ
+      // shop có thể đã kết nối lại), không tạo yêu cầu mới.
+      const replayed = await findMetaReplay(tx, subjectHash, verified.issuedAt)
+      if (replayed) return { request: replayed, created: false, disconnected: 0, replay: true }
       let disconnected = 0
       if (source === 'meta_deauthorize') {
-        const out = await disconnectMetaUserTx(tx, { events: deps.events, log: deps.log }, verified.userId)
-        known = out.known
-        disconnected = out.disconnected.length
-      } else {
-        known = await isKnownMetaUser(tx, verified.userId)
+        disconnected = (await disconnectMetaUserTx(tx, { events: deps.events, log: deps.log }, verified.userId)).disconnected.length
       }
-      return { ...(await recordMetaRequest(tx, deps.events, { source, subjectHash, known })), disconnected }
+      // Ảnh chụp phạm vi `all` (Story 9.2): trang FB + IG của đúng tài khoản này + dòng `meta_accounts`; `null` = người lạ.
+      const scope = await metaUserPurgeScope(tx, verified.userId)
+      const recorded = await recordMetaRequest(tx, deps.events, { source, subjectHash, issuedAt: verified.issuedAt, scope })
+      return { ...recorded, disconnected, replay: false }
     })
     req.log.info(
       {
@@ -100,6 +117,7 @@ export function registerPrivacy(app: FastifyInstance, deps: PrivacyDeps): void {
         matched: result.request.matched,
         status: result.request.status,
         disconnected: result.disconnected,
+        replay: result.replay,
       },
       'privacy: nhận yêu cầu từ Meta',
     )
@@ -139,6 +157,31 @@ export function registerPrivacy(app: FastifyInstance, deps: PrivacyDeps): void {
       const body: MetaDataDeletionResponse = { url: statusUrl(request.code), confirmation_code: request.code }
       return reply.code(200).header('Cache-Control', 'no-store').send(body)
     })
+  })
+
+  // --- Khách hàng › "Xoá khách và toàn bộ hội thoại" (Story 9.2, dưới guard phiên + kiểm Origin + rate-limit ghi) ---
+  // Một transaction: `inbox` đánh dấu khách chờ xoá (ẩn ngay) + chụp hội thoại, `privacy` ghi yêu cầu `contact` và phát
+  // `privacy.purge_requested`. Đã có yêu cầu mở / đã xong cho khách này → trả lại nó (200), không tạo thêm.
+  const deletionResponse = (r: DeletionRequestView): ContactDeletionResponse => ({
+    requestId: r.id,
+    code: r.code,
+    scope: r.scope,
+    status: r.status,
+    statusUrl: statusUrl(r.code),
+  })
+  app.post('/api/v1/contacts/:id/deletion', async (req, reply): Promise<ContactDeletionResponse> => {
+    const { id } = z.object({ id: z.uuid() }).parse(req.params)
+    ContactDeletionBody.parse(req.body ?? {})
+    const out = await deps.db.transaction(async (tx) => {
+      const existing = await latestTargetRequest(tx, 'contact', id)
+      if (existing && existing.status !== 'completed') return { request: existing, created: false }
+      const target = await markContactForDeletion(tx, id)
+      if (!target) return existing ? { request: existing, created: false } : null
+      return requestTargetDeletion(tx, deps.events, { scope: 'contact', targetId: id, source: 'manual', conversationIds: target.conversationIds })
+    })
+    if (!out) throw new AppError('NOT_FOUND', 404, { message: 'Khách không tồn tại' })
+    if (out.created) req.log.info({ requestId: out.request.id }, 'privacy: chủ shop yêu cầu xoá khách')
+    return reply.code(out.created ? 202 : 200).send(deletionResponse(out.request))
   })
 
   // --- Cài đặt › Tài khoản Meta (dưới guard phiên) ---

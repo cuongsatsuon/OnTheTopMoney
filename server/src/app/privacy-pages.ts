@@ -1,9 +1,9 @@
 // Trang HTML công khai của `/privacy/*` (Story 9.1, AD-22): chính sách quyền riêng tư, trạng thái yêu cầu xoá, 404 của
-// trang trạng thái. HTML tĩnh, tiếng Việt, không JS, không style nội tuyến: CSS ở `/privacy/assets/privacy.css` để CSP
+// trang trạng thái. Story 9.2: trang trạng thái thêm phạm vi + tiến độ "đã xong n/m phần". HTML tĩnh, tiếng Việt, không JS, không style nội tuyến: CSS ở `/privacy/assets/privacy.css` để CSP
 // của api (`PRIVACY_CSP`) chỉ cần `style-src 'self'`. Mọi giá trị từ env / DB đều qua `escapeHtml`.
 // Nội dung pháp lý là khung theo AD-22 (dữ liệu, OpenAI `store: false`, thời hạn lưu, cách xoá) — chủ dự án rà lại
 // trước khi nộp App Review; tên đơn vị vận hành + email lấy từ env, thiếu thì hiện chỗ trống đánh dấu rõ.
-import type { DeletionRequestView } from '../modules/privacy/index.ts'
+import type { DeletionRequestStatus } from '../modules/privacy/index.ts'
 import { PRIVACY_PATHS } from '@ottm/shared'
 
 /** Ngày cập nhật hiện trên trang chính sách — đổi khi sửa nội dung bên dưới. */
@@ -140,7 +140,14 @@ const VN_DATE_TIME = new Intl.DateTimeFormat('vi-VN', {
   hour12: false,
 })
 
-function statusView(req: DeletionRequestView): { label: string; detail: string; tone: 'pending' | 'done' } {
+/** Phạm vi hiện trên trang trạng thái — không bao giờ kèm tên khách / trang (trang công khai, ai có mã cũng xem được). */
+const SCOPE_LABEL: Record<DeletionRequestStatus['scope'], string> = {
+  contact: 'Một khách và toàn bộ hội thoại của khách',
+  page: 'Dữ liệu khách và hội thoại của một trang',
+  all: 'Dữ liệu gắn với tài khoản Facebook đã cấp quyền',
+}
+
+function statusView(req: DeletionRequestStatus): { label: string; detail: string; tone: 'pending' | 'done' } {
   if (req.status === 'completed') {
     return req.matched
       ? { label: 'Đã xoá xong', detail: 'Dữ liệu gắn với yêu cầu này đã được xoá khỏi ứng dụng.', tone: 'done' }
@@ -149,11 +156,14 @@ function statusView(req: DeletionRequestView): { label: string; detail: string; 
   if (req.status === 'processing') {
     return { label: 'Đang xoá dữ liệu', detail: 'Ứng dụng đang xoá dữ liệu gắn với yêu cầu này.', tone: 'pending' }
   }
-  return { label: 'Đã nhận — đang chờ xoá', detail: 'Chúng tôi đã nhận yêu cầu và sẽ xoá dữ liệu gắn với tài khoản này.', tone: 'pending' }
+  return { label: 'Đã nhận — đang chờ xoá', detail: 'Chúng tôi đã nhận yêu cầu và sẽ xoá dữ liệu gắn với yêu cầu này.', tone: 'pending' }
 }
 
-export function statusHtml(req: DeletionRequestView): string {
+export function statusHtml(req: DeletionRequestStatus): string {
   const view = statusView(req)
+  const progress =
+    req.status !== 'completed' && req.partsTotal > 0 ? `<dt>Tiến độ</dt><dd>Đã xong ${req.partsDone}/${req.partsTotal} phần</dd>` : ''
+  const scope = req.matched ? `<dt>Phạm vi</dt><dd>${SCOPE_LABEL[req.scope]}</dd>` : ''
   const completed = req.completedAt
     ? `<dt>Hoàn tất lúc</dt><dd>${escapeHtml(VN_DATE_TIME.format(req.completedAt))} (giờ Việt Nam)</dd>`
     : ''
@@ -168,7 +178,9 @@ export function statusHtml(req: DeletionRequestView): string {
   <p>${view.detail}</p>
   <dl>
     <dt>Mã xác nhận</dt><dd><code>${escapeHtml(req.code)}</code></dd>
+    ${scope}
     <dt>Nhận lúc</dt><dd>${escapeHtml(VN_DATE_TIME.format(req.requestedAt))} (giờ Việt Nam)</dd>
+    ${progress}
     ${completed}
   </dl>
   <p class="muted"><a href="${PRIVACY_PATHS.policy}">Chính sách quyền riêng tư</a></p>
