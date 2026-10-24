@@ -504,7 +504,10 @@ export default function Composer() {
       onSuccess: (asset) => {
         setPool((p) => [asset, ...p])
         if (activeId) setDrafts((d) => assignUploaded(d, targetIds, activeId, asset.id))
-        notify('Đã tải ảnh lên')
+        // Ảnh tải lên thường là ảnh sản phẩm thật → tự làm ảnh tham khảo (như FlowMate "Ảnh sản phẩm gốc") để "Tạo ảnh AI" /
+        // "Tạo bằng AI" giữ đúng sản phẩm; chủ shop bỏ bằng nút X nếu chỉ muốn đăng ảnh gốc hoặc vẽ ảnh mới từ chữ.
+        if (canUseAsReference(asset)) setReferenceId(asset.id)
+        notify('Đã tải ảnh lên — AI sẽ tạo ảnh giữ đúng sản phẩm trong ảnh này')
       },
       onError: (err) => notify(composerErrorMessage(err)),
     })
