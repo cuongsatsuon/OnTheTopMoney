@@ -78,6 +78,8 @@ export {
   type SlotOutcome,
   type SlotPlan,
 } from './slots.ts'
+// Story 7.8: kế hoạch nội dung (brief từng slot) lên theo lô trước khi viết — `campaigns` truyền ngữ cảnh chiến dịch.
+export { PLAN_CONCURRENCY, planCampaignSlots, type CampaignPlanRequest, type PlanSlotsResult } from './slot-plans.ts'
 // "Tự đăng" (Story 7.3 / 7.4): duyệt luôn bài chờ duyệt không mã lỗi của chiến dịch.
 export { autoApproveCampaignSlots, type AutoApproveOutcome } from './slots-approve.ts'
 // "Bắt đầu chiến dịch" (Story 7.3): tạo phần slot còn lại, bỏ `held` bài xem trước ("Tự đăng" → duyệt); tiến độ cho read-model.

@@ -33,6 +33,7 @@ import { createDb, type DbHandle } from '../src/platform/db/index.ts'
 import { createEventPublisher, type EventPublisher } from '../src/platform/events/index.ts'
 import { createBoss, createJobSender, ensureQueues, type JobSender } from '../src/platform/jobs/index.ts'
 import { createLogger } from '../src/platform/log/index.ts'
+import { captionRequests, isPlanRequest, planRequests } from './helpers/plan.ts'
 
 const ORIGIN = 'http://localhost:5173'
 const GOOD = 'sk-proj-PREVIEW-key-aaaa1111'
@@ -237,10 +238,12 @@ describe('lưu nháp → 7 slot + job campaigns.preview', () => {
     expect(await runJob(c.id)).toEqual({ generated: 7, errors: 0 })
     const usage = await handle.sql<{ feature: string; page_id: string; ref: string }[]>`select feature, page_id, ref from ai_usage order by created_at`
     const rows = await slotRows(c.id)
-    expect(usage).toHaveLength(7)
+    // Story 7.8: một lời gọi kế hoạch (`ref` = chiến dịch) trước 7 caption (`ref` = target).
+    expect(usage).toHaveLength(8)
     expect(usage.every((u) => u.feature === 'campaign_generate' && u.page_id === fb)).toBe(true)
-    expect(new Set(usage.map((u) => u.ref))).toEqual(new Set(rows.map((r) => r.id)))
-    expect(openai.responseRequests[0]!.input).toContain('Ý tưởng bài: «Mẹo hay')
+    expect(new Set(usage.map((u) => u.ref))).toEqual(new Set([c.id, ...rows.map((r) => r.id)]))
+    expect(isPlanRequest(openai.responseRequests[0]!)).toBe(true)
+    expect(captionRequests(openai)[0]!.input).toContain('Ý tưởng bài: «Mẹo hay')
 
     let p = await preview(c.id)
     expect(p.items[0]).toMatchObject({ status: 'planned', imagePending: true, aiCaption: true, media: [] })
@@ -273,7 +276,7 @@ describe('lưu nháp → 7 slot + job campaigns.preview', () => {
     expect(res.statusCode, res.body).toBe(200)
     await runJob(c.id)
     expect((await slotRows(c.id)).map((r) => r.id)).toEqual(before)
-    expect(openai.responseRequests).toHaveLength(7)
+    expect([captionRequests(openai).length, planRequests(openai).length]).toEqual([7, 1])
   })
 
   it('đổi cấu hình: đổi giờ đăng → slot cũ bị xoá, slot mới `planned`; đổi thời lượng → giữ nguyên, slot đã xoá vẫn `cancelled`', async () => {
@@ -312,7 +315,7 @@ describe('job campaigns.preview — lỗi', () => {
     expect(p.items.map((s) => [s.status, s.errorCode, s.caption, s.imagePending])).toEqual(
       Array.from({ length: 3 }, () => ['pending_approval', 'AI_POLICY_BLOCKED', 'Siêu GIẢM GIÁ hôm nay', false]),
     )
-    expect(openai.responseRequests).toHaveLength(6)
+    expect(captionRequests(openai)).toHaveLength(6)
     expect(await jobCount('content.image.generate')).toBe(0)
   })
 
@@ -455,9 +458,12 @@ describe('POST /campaigns/:id/slots/:targetId/transition', () => {
     const planned = await action(c.id, s.id, { action: 'regenerate', version: again.version })
     expect([planned.statusCode, errorOf(planned).code]).toEqual([409, 'VERSION_CONFLICT'])
 
-    const calls = openai.responseRequests.length
+    const calls = captionRequests(openai).length
+    const plans = planRequests(openai).length
     expect(await runJob(c.id)).toEqual({ generated: 1, errors: 0 })
-    expect(openai.responseRequests).toHaveLength(calls + 1)
+    expect(captionRequests(openai)).toHaveLength(calls + 1)
+    // Story 7.8: Tạo lại bỏ brief → brief mới cho đúng slot đó.
+    expect(planRequests(openai)).toHaveLength(plans + 1)
     expect((await preview(c.id)).items[0]).toMatchObject({ status: 'planned', imagePending: true })
   })
 

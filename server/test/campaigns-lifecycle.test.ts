@@ -34,6 +34,7 @@ import { createDb, type DbHandle } from '../src/platform/db/index.ts'
 import { createEventPublisher, type EventPublisher } from '../src/platform/events/index.ts'
 import { createBoss, createJobSender, ensureQueues, type JobSender } from '../src/platform/jobs/index.ts'
 import { createLogger } from '../src/platform/log/index.ts'
+import { isPlanRequest } from './helpers/plan.ts'
 
 const ORIGIN = 'http://localhost:5173'
 const GOOD = 'sk-proj-LIFECYCLE-key-aaaa1111'
@@ -346,7 +347,9 @@ describe('tạm dừng', () => {
     const fb = await page()
     const c = await running(fb.id)
     let calls = 0
-    openai.onResponse(async () => {
+    openai.onResponse(async (req) => {
+      // Story 7.8: lời gọi kế hoạch của lô đi trước (chiến dịch còn chạy) — đếm caption.
+      if (isPlanRequest(req)) return ok('{"posts":[]}')
       if (++calls === 1) await systemPause(c.id, 'MANUAL')
       return ok(`Bài ${calls}`)
     })

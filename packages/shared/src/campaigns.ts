@@ -12,9 +12,10 @@
 // (`DeleteCampaignResponse` — bài đã đăng / đang đăng giữ nguyên).
 // Story 7.7: ảnh sản phẩm của chiến dịch (`productImageId` khi lưu nháp, `productImage` khi đọc) — mọi bài có ảnh sinh từ
 // ảnh này qua Images API edits để giữ đúng sản phẩm. Chỉ đặt / đổi khi còn nháp.
+// Story 7.8: slot mang kế hoạch nội dung (`CampaignSlotDto.plan` — định dạng, góc) do model chữ lên theo lô trước khi viết.
 import { z } from 'zod'
 import { ScopeParam } from './scope.ts'
-import { MediaAssetDto, POST_CAPTION_MAX, POST_TARGETS_MAX } from './content.ts'
+import { MediaAssetDto, POST_CAPTION_MAX, POST_TARGETS_MAX, SlotPlanSummary } from './content.ts'
 import { CampaignFrequency, CampaignGoal, CampaignMode, CampaignStatus, PauseReason, PostTargetStatus, type Platform } from './enums.ts'
 import { ErrorCode } from './errors.ts'
 import { MetricComparison } from './metrics.ts'
@@ -275,6 +276,8 @@ export const CampaignSlotDto = z.object({
   /** Khoá lạc quan (AD-13) — body của hành động slot. */
   version: z.number().int().nonnegative(),
   errorCode: ErrorCode.nullable(),
+  /** Story 7.8: kế hoạch nội dung của bài (định dạng, góc…); `null` = chưa lên / lên lỗi (bài viết theo chủ đề như cũ). */
+  plan: SlotPlanSummary.nullable(),
 })
 export type CampaignSlotDto = z.infer<typeof CampaignSlotDto>
 

@@ -59,8 +59,8 @@ const oneLine = (text: string) => text.replace(/\s+/g, ' ').trim()
 /** Dữ liệu chủ shop nhập, đặt trong «»: dấu «» bên trong đổi thành `"` để không thoát được khỏi khung (như `compose.ts`). */
 const quoted = (text: string): string => `«${text.replace(/[«»]/gu, '"')}»`
 
-/** Cắt ≤ `max` ký tự ở ranh giới từ (đếm theo `length` như zod); không để nửa cặp surrogate ở cuối. */
-function cutAtWord(s: string, max: number): string {
+/** Cắt ≤ `max` ký tự ở ranh giới từ (đếm theo `length` như zod); không để nửa cặp surrogate ở cuối. Story 7.8 dùng lại. */
+export function cutAtWord(s: string, max: number): string {
   if (s.length <= max) return s
   const cut = s.slice(0, max).replace(/[\uD800-\uDBFF]$/, '')
   const space = cut.lastIndexOf(' ')

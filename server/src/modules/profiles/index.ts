@@ -43,6 +43,7 @@ export {
   autoreplyRunSources,
   capKnowledge,
   autoreplyTestSources,
+  pageKnowledge,
   type AutoreplyRunSources,
   type AutoreplyTestSources,
 } from './autoreply.ts'

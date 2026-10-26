@@ -32,6 +32,7 @@ import { createDb, type DbHandle } from '../src/platform/db/index.ts'
 import { createEventPublisher, type EventPublisher } from '../src/platform/events/index.ts'
 import { createBoss, createJobSender, ensureQueues, type JobSender } from '../src/platform/jobs/index.ts'
 import { createLogger } from '../src/platform/log/index.ts'
+import { captionRequests, planRequests } from './helpers/plan.ts'
 
 const ORIGIN = 'http://localhost:5173'
 const GOOD = 'sk-proj-START-key-aaaa1111'
@@ -233,8 +234,8 @@ describe('POST /campaigns/:id/start', () => {
     expect(fresh.every((r) => r.status === 'planned' && r.caption === '' && r.scheduled_at?.getTime() === r.slot_at.getTime())).toBe(true)
     expect(await publishJobs()).toHaveLength(0)
     expect(emittedOf('campaign.started')).toEqual([{ id: c.id }])
-    // Bắt đầu không gọi AI thêm (7 lời gọi là của bài xem trước).
-    expect(openai.responseRequests).toHaveLength(7)
+    // Bắt đầu không gọi AI thêm (7 caption + 1 kế hoạch — Story 7.8 — là của bài xem trước).
+    expect([captionRequests(openai).length, planRequests(openai).length]).toEqual([7, 1])
   })
 
   it('chế độ tự đăng: bài xem trước không lỗi → scheduled + job `publish.target` startAfter = slot_at; bài có mã giữ chờ duyệt; IG mất ảnh → MEDIA_REQUIRED; bài đang tạo ảnh vẫn planned; slot mới planned', async () => {

@@ -12,6 +12,7 @@
 // - Story 7.7: ảnh sản phẩm của nháp → mọi slot có ảnh sinh ảnh từ ảnh đó (`referenceAssetId`). Đổi / bỏ ảnh ở nháp → lưu
 //   nháp và job làm lại ảnh của bài đã có ảnh từ ảnh khác (`content.refreshSlotImages`, giữ caption). Job làm cả bước này
 //   dưới khoá `FOR SHARE`: slot đang viết dở lúc lưu (ô ảnh ghi theo ảnh cũ) được lượt sau sửa.
+// - Story 7.8: trước khi viết, lên brief cho từng bài xem trước (`runSlotBatch({plan})`); "Tạo lại" bỏ brief → brief mới.
 import {
   CAMPAIGN_PREVIEW_COUNT,
   campaignSlots,
@@ -149,6 +150,8 @@ export async function runPreview(
     concurrency: opts.concurrency ?? PREVIEW_CONCURRENCY,
     onStop: 'mark',
     referenceAssetId: campaign.productImage?.id ?? null,
+    // Story 7.8: brief từng bài trước khi viết.
+    plan: { campaignId, campaignName: campaign.name, campaignGoal: campaign.goal, withReference: campaign.productImage !== null },
     // Story 7.5: nháp bị xoá giữa lượt → dừng (vừa "Bắt đầu" thì viết tiếp — 7.4).
     active: () => campaignIn(deps.db, campaignId, ['draft', 'running']),
   })

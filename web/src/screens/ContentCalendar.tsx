@@ -7,6 +7,7 @@
 // Story 7.4: bài chiến dịch chờ duyệt có "Duyệt" ngay trong ngăn (cùng route hành động slot với "Bài chờ duyệt"); quá giờ
 // hoặc server trả `SCHEDULE_IN_PAST` → hỏi giờ mới; ô quá giờ ghi "Quá giờ".
 // Story 7.5: bài của chiến dịch tạm dừng ghi "Tạm dừng" trên ô + ghi chú trong ngăn (đăng lại khi chiến dịch tiếp tục).
+// Story 7.8: nhãn định dạng bài (kế hoạch nội dung) trên ô và trong ngăn.
 // Story 8.5: `?bai=<targetId>&ngay=<YYYY-MM-DD>` (link từ Tổng quan) mở lịch ở tháng / tuần của ngày đó rồi mở ngăn của bài.
 import type { CalendarItemDto, PageDto, Platform, PostTargetStatus } from '@ottm/shared'
 import { AlertTriangle, CalendarX, Check, ChevronLeft, ChevronRight, Clock, ExternalLink, Loader2, Megaphone, Pause, Pencil, Plus, RotateCcw, Send, Trash2 } from 'lucide-react'
@@ -34,6 +35,7 @@ import {
   groupCalls,
   groupKeyOfTarget,
   groupPages,
+  groupFormatLabel,
   groupTitle,
   groupsByDay,
   isCampaignGroup,
@@ -598,6 +600,7 @@ function GroupDrawer({
             {CALENDAR_STATUS_LABEL[group.status]}
           </Chip>
           {group.ai && <AiBadge />}
+          {groupFormatLabel(group) && <Chip tone="ai">{groupFormatLabel(group)}</Chip>}
           {held && (
             <Chip tone="warning" icon={<Pause size={11} />}>
               Tạm dừng
@@ -758,14 +761,15 @@ function Pill({
   const statusText = groupStatusText(group)
   const platforms = [...new Set(groupPages(group, pages).map((p) => p.platform))] as Platform[]
   const title = groupTitle(group)
+  const format = groupFormatLabel(group)
   return (
     <button
       draggable={draggable}
       onDragStart={(e) => onDragStart(e, group)}
       onDragEnd={onDragEnd}
       onClick={onOpen}
-      title={`${title} · ${statusText}${draggable ? '' : ' · không kéo được'}`}
-      aria-label={`${group.time} ${title}, ${group.items.length} trang, ${statusText}${group.ai ? ', AI tạo' : ''}`}
+      title={`${format ? `${format} · ` : ''}${title} · ${statusText}${draggable ? '' : ' · không kéo được'}`}
+      aria-label={`${group.time} ${format ? `${format}: ` : ''}${title}, ${group.items.length} trang, ${statusText}${group.ai ? ', AI tạo' : ''}`}
       className={cn(
         'block w-full rounded border px-1.5 py-1 text-left text-[11px] leading-tight transition-shadow hover:shadow-sm',
         pillClass(group.status),
@@ -786,7 +790,10 @@ function Pill({
         {group.status === 'publishing' && <Loader2 size={11} className="shrink-0 animate-spin" />}
         {group.ai && <span className="ml-auto shrink-0 text-[9px] font-bold text-ai">AI tạo</span>}
       </span>
-      <span className="mt-0.5 block truncate">{title}</span>
+      <span className="mt-0.5 block truncate">
+        {format && <span className="font-semibold text-ai">{format} · </span>}
+        {title}
+      </span>
       {(group.status === 'pending_approval' || group.status === 'failed') && (
         <span className={cn('mt-0.5 block text-[10px] font-semibold', group.status === 'pending_approval' ? 'text-amber-800' : 'text-danger')}>{statusText}</span>
       )}

@@ -18,6 +18,8 @@
 // Phần thuần tách khỏi hook để test được (campaigns.test.ts).
 import {
   CAMPAIGN_SLOT_MIN_LEAD_MS,
+  CONTENT_FORMAT_LABEL,
+  type SlotPlanSummary,
   CampaignActionResponse,
   CampaignDto,
   CampaignListResponse,
@@ -392,6 +394,16 @@ export const PREVIEW_POLL_MS = 5_000
 export function previewView(items: readonly CampaignSlotDto[]): { shown: CampaignSlotDto[]; removed: number; generating: boolean } {
   const shown = items.filter((s) => s.status !== 'cancelled')
   return { shown, removed: items.length - shown.length, generating: items.some((s) => s.status === 'planned') }
+}
+
+/**
+ * Story 7.8: kế hoạch nội dung của bài → nhãn định dạng (chip) + dòng "tiêu đề · góc" trên thẻ xem trước / hàng chờ duyệt,
+ * để chủ shop thấy các bài khác nhau. `null` = bài chưa có kế hoạch (viết theo chủ đề).
+ */
+export function slotPlanView(plan: SlotPlanSummary | null): { format: string; line: string } | null {
+  if (!plan) return null
+  const angle = plan.angle.trim()
+  return { format: CONTENT_FORMAT_LABEL[plan.format], line: angle && angle !== plan.title ? `${plan.title} · ${angle}` : plan.title }
 }
 
 /** Pha của một thẻ: AI đang viết caption, đang tạo ảnh (đã có caption), sẵn sàng xem / sửa. */

@@ -186,14 +186,15 @@ export async function transitionTarget(
 
   if (transition.action === 'edit' || transition.action === 'regenerate') {
     // Sửa: chủ shop đã xem lại nội dung → bỏ mã lỗi (AI / hậu kiểm); nhãn "AI tạo" giữ nguyên (UX-DR10).
-    // Tạo lại: về `planned`, bỏ caption / mã / ảnh gắn (ô ảnh cũ thành ảnh không gắn — cron dọn sau 7 ngày).
+    // Tạo lại: về `planned`, bỏ caption / mã / ảnh gắn (ô ảnh cũ thành ảnh không gắn — cron dọn sau 7 ngày). Story 7.8: bỏ
+    // cả brief → lô kế lên brief MỚI (khác các bài khác của chiến dịch), không viết lại đúng ý cũ.
     if (transition.action === 'regenerate') await tx.delete(postTargetMedia).where(eq(postTargetMedia.postTargetId, targetId))
     const [row] = await tx
       .update(postTargets)
       .set({
         ...(transition.action === 'edit'
           ? { caption: transition.caption }
-          : { status: 'planned' satisfies PostTargetStatus, caption: '', aiCaption: false, generateLeaseUntil: null }),
+          : { status: 'planned' satisfies PostTargetStatus, caption: '', aiCaption: false, generateLeaseUntil: null, plan: null }),
         errorCode: null,
         version: sql`${postTargets.version} + 1`,
         updatedAt: sql`now()`,

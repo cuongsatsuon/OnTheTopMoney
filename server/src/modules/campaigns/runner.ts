@@ -7,10 +7,20 @@
 // Story 7.5: `active()` kiểm trước mỗi slot (chiến dịch vừa tạm dừng / xoá giữa lô → dừng, không gọi AI thêm); slot đang
 // viết dở thì viết xong (bài `held` không được "Tự đăng" duyệt luôn).
 // Story 7.7: `referenceAssetId` = ảnh sản phẩm của chiến dịch — mọi slot có ảnh trong lô sinh ảnh từ ảnh này (edits).
+// Story 7.8: `plan` = ngữ cảnh chiến dịch → trước khi viết, `content.planCampaignSlots` lên brief cho các slot của lô chưa
+// có brief (một lời gọi mỗi trang; chiến dịch thôi chạy / đã huỷ thì không lên). Lỗi kế hoạch không chặn lô.
 import type { CampaignStatus, ComposeGoal, ErrorCode } from '@ottm/shared'
 import { eq } from 'drizzle-orm'
 import type { DbExecutor } from '../../platform/db/index.ts'
-import { AI_STOP_CODES, SlotGenerateRetryableError, failSlot, generateSlot, type SlotGenerateDeps } from '../content/index.ts'
+import {
+  AI_STOP_CODES,
+  SlotGenerateRetryableError,
+  failSlot,
+  generateSlot,
+  planCampaignSlots,
+  type CampaignPlanRequest,
+  type SlotGenerateDeps,
+} from '../content/index.ts'
 import { campaigns } from './schema.ts'
 
 /** Chiến dịch còn tồn tại và ở một trong `statuses` (đọc không khoá — kiểm giữa lô sinh). */
@@ -49,9 +59,16 @@ export async function runSlotBatch(
     referenceAssetId?: string | null
     /** Chiến dịch còn nhận sinh nội dung không — kiểm trước mỗi slot. */
     active?: () => Promise<boolean>
+    /** Story 7.8: lên brief cho slot của lô trước khi viết (thiếu = viết theo chủ đề như cũ). */
+    plan?: CampaignPlanRequest & { campaignId: string }
   },
 ): Promise<SlotBatchResult> {
   const out: SlotBatchResult = { generated: 0, errors: 0, scheduled: 0, stopCode: null, retryCode: null, inactive: false }
+  if (opts.plan && todo.length && !opts.signal?.aborted) {
+    if (opts.active && !(await opts.active())) return { ...out, inactive: true }
+    const { campaignId, ...req } = opts.plan
+    await planCampaignSlots(deps, campaignId, todo, req, opts.signal)
+  }
   let fatal: unknown = null
   let next = 0
   const worker = async () => {

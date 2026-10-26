@@ -22,6 +22,7 @@ import {
   groupCalls,
   groupKeyOfTarget,
   groupPages,
+  groupFormatLabel,
   groupTitle,
   groupStatusText,
   groupsByDay,
@@ -61,6 +62,8 @@ const item = (n: number, over: Partial<CalendarItemDto> = {}): CalendarItemDto =
   topic: null,
   thumbnailUrl: null,
   held: false,
+  planTitle: null,
+  planFormat: null,
   ...over,
 })
 
@@ -201,6 +204,19 @@ describe('ngăn chi tiết', () => {
     const key = calendarKey('all', SAT, SAT)
     expect(hintInvalidates(key[0], 'campaign')).toBe(true)
     expect(hintInvalidates('campaigns', 'campaign')).toBe(true)
+  })
+})
+
+describe('kế hoạch nội dung trên lịch (Story 7.8)', () => {
+  it('ô `planned` có kế hoạch → "AI sẽ viết · <tiêu đề kế hoạch>" + nhãn định dạng; đã viết giữ đầu caption; không kế hoạch → không nhãn', () => {
+    const campaign = { ai: true, source: 'campaign' as const, campaignId: id(77) }
+    const [planned] = groupCalendarItems([item(1, { status: 'planned', title: null, topic: 'Mẹo hay', planTitle: 'Ba mẹo nồi chiên', planFormat: 'tip', ...campaign })])
+    expect(groupTitle(planned!)).toBe('AI sẽ viết · Ba mẹo nồi chiên')
+    expect(groupFormatLabel(planned!)).toBe('Mẹo')
+    const [written] = groupCalendarItems([item(2, { status: 'pending_approval', title: 'Bài đã viết', planTitle: 'Ba mẹo', planFormat: 'question', ...campaign })])
+    expect(groupTitle(written!)).toBe('Bài đã viết')
+    expect(groupFormatLabel(written!)).toBe('Hỏi đáp')
+    expect(groupFormatLabel(groupCalendarItems([item(3)])[0]!)).toBeNull()
   })
 })
 

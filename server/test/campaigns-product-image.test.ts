@@ -251,7 +251,8 @@ describe('slot có ảnh dùng ảnh sản phẩm', () => {
     expect(prompt).toBe(
       buildReferenceImagePrompt({ request: '', topic: 'Mẹo hay', caption: before[0]!.caption, mode: 'ad', goal: 'engagement', brandColors: ['#112233'] }),
     )
-    expect(prompt).toMatch(/^Ý tưởng bài đăng: Mẹo hay\nNội dung bài: Bài số 1 cho shop nhé\n/)
+    // Story 7.8: kế hoạch giả không đọc được (chữ thường) → prompt như 7.7.
+    expect(prompt).toMatch(/^Ý tưởng bài đăng: Mẹo hay\nNội dung bài: Bài số \d+ cho shop nhé\n/)
     expect(prompt).toContain('Giữ NGUYÊN sản phẩm')
     expect(prompt).toContain('tông màu thương hiệu: #112233')
     expect(prompt).toContain(IMAGE_NO_FAKE_UI)

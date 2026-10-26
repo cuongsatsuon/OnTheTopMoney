@@ -55,6 +55,7 @@ import {
   slotCanEdit,
   slotNote,
   slotPhase,
+  slotPlanView,
   slotWhen,
   splitEven,
   deleteConfirmText,
@@ -297,6 +298,7 @@ const slot = (over: Partial<CampaignSlotDto>): CampaignSlotDto => ({
   imagePending: false,
   version: 2,
   errorCode: null,
+  plan: null,
   ...over,
 })
 
@@ -313,6 +315,13 @@ describe('xem trước 7 bài đầu', () => {
     expect(view.generating).toBe(true)
     expect(previewView([ready, removed]).generating).toBe(false)
     expect([writing, imaging, ready, failed].map(slotPhase)).toEqual(['writing', 'image', 'ready', 'ready'])
+  })
+
+  it('Story 7.8: kế hoạch bài → nhãn định dạng + "tiêu đề · góc" (góc trùng tiêu đề / rỗng thì chỉ tiêu đề); chưa có → null', () => {
+    const plan = { format: 'comparison' as const, funnelStage: 'consideration' as const, title: 'Nồi chiên vs lò nướng', angle: 'Chọn theo nhu cầu gia đình' }
+    expect(slotPlanView(plan)).toEqual({ format: 'So sánh', line: 'Nồi chiên vs lò nướng · Chọn theo nhu cầu gia đình' })
+    expect(slotPlanView({ ...plan, angle: ' ' })).toEqual({ format: 'So sánh', line: 'Nồi chiên vs lò nướng' })
+    expect(slotPlanView(slot({}).plan)).toBeNull()
   })
 
   it('giờ VN của slot; ghi chú theo mã (hậu kiểm, ảnh lỗi, thiếu hồ sơ, hết hạn mức); hành động được phép', () => {

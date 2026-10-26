@@ -14,6 +14,7 @@
 //   "Tiếp tục" huỷ bài lỡ giờ (`MISSED_WHILE_PAUSED`) thay vì viết bù bài đã quá giờ (tốn tiền).
 // - Idempotent: slot đã sinh bỏ qua; lease của `generateSlot` chặn hai lượt cùng viết một slot (không tính tiền hai lần).
 // - Story 7.7: slot có ảnh sinh ảnh từ ảnh sản phẩm của chiến dịch (`referenceAssetId` — không đổi sau khi bắt đầu).
+// - Story 7.8: mỗi lô lên brief từng bài trước khi viết (`runSlotBatch({plan})`); retry không lên lại slot đã có brief.
 import { CAMPAIGN_GENERATE_WINDOW_MS, type CampaignStatus, type ErrorCode, type PauseReason } from '@ottm/shared'
 import { eq } from 'drizzle-orm'
 import type { Db } from '../../platform/db/index.ts'
@@ -128,6 +129,8 @@ export async function runGenerate(
     onStop: 'halt',
     autoApprove: campaign.mode === 'auto',
     referenceAssetId: campaign.productImage?.id ?? null,
+    // Story 7.8: brief từng bài trước khi viết.
+    plan: { campaignId, campaignName: campaign.name, campaignGoal: campaign.goal, withReference: campaign.productImage !== null },
     // Story 7.5: tạm dừng / xoá giữa lô → dừng trước slot kế (AC: cron sinh nội dung bỏ qua chiến dịch tạm dừng).
     active: () => campaignIn(deps.db, campaignId, ['running']),
   })

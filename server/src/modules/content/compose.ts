@@ -19,7 +19,7 @@ import {
 } from '@ottm/shared'
 import { inArray } from 'drizzle-orm'
 import type { MediaStores } from '../../adapters/media/index.ts'
-import { buildComposePrompt, checkOutput, generateText, retryNote, type AiDeps, type AiInputImage, type CheckBrand } from '../ai/index.ts'
+import { buildComposePrompt, checkOutput, generateText, retryNote, type AiDeps, type AiInputImage, type CheckBrand, type ComposePlan } from '../ai/index.ts'
 import { getPage } from '../pages/index.ts'
 import { resolveEffectiveOrNull } from '../profiles/index.ts'
 import { AppError } from '../../platform/errors/index.ts'
@@ -148,10 +148,15 @@ function imageLoader(deps: ComposeDeps, signal: AbortSignal): (url: string) => P
   }
 }
 
-/** Nội dung cần viết cho một trang: ý tưởng, mục tiêu, độ dài, yêu cầu sửa (nếu có), ảnh của tab (Story 6.6). */
+/**
+ * Nội dung cần viết cho một trang: ý tưởng, mục tiêu, độ dài, yêu cầu sửa (nếu có), ảnh của tab (Story 6.6). Story 7.8 (slot
+ * chiến dịch): `plan` = brief của slot, `recent` = câu mở các bài gần nhất cùng chiến dịch + trang (không lặp).
+ */
 export type ComposeBrief = Pick<ParsedComposeCaptionsRequest, 'topic' | 'goal' | 'length'> & {
   revise?: ParsedComposeCaptionsRequest['revise']
   image?: AiInputImage | null
+  plan?: ComposePlan | null
+  recent?: readonly string[]
 }
 
 /**
@@ -178,6 +183,8 @@ export async function composeCaptionForPage(
     maxChars,
     revise: brief.revise ?? null,
     hasImage: !!brief.image,
+    plan: brief.plan ?? null,
+    recent: brief.recent ?? [],
   })
   const checkBrand: CheckBrand = { bannedWords: brand.bannedWords, allowedDomains: brand.allowedDomains }
   const generate = async (note = '') =>

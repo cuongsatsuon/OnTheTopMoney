@@ -6,14 +6,15 @@
 // - Story 7.2: slot chiến dịch (1 post : 1 target) có `campaign_id` + `slot_at` (giờ dự kiến ban đầu, bất biến) và khoá
 //   duy nhất `(campaign_id, page_id, slot_at)`; `held` do `campaigns` bật/tắt qua `content` (AD-15) — job đăng bỏ qua
 //   target `held`. `campaign_id` KHÔNG có FK: `content` không biết bảng `campaigns` (AD-1). Story 7.4: `generate_lease_until`
-//   = job đang viết slot (chiếm trước khi gọi AI — hai job không cùng viết / cùng tính tiền một slot).
+//   = job đang viết slot (chiếm trước khi gọi AI — hai job không cùng viết / cùng tính tiền một slot). Story 7.8: `plan`
+//   = kế hoạch nội dung (brief) của slot.
 // - `media_assets` chỉ chứa ảnh bài (không logo, không đính kèm của khách); ảnh gắn vào target qua `post_target_media`.
 //   Story 6.6: ô ảnh AI sinh từ ảnh tham khảo trỏ `reference_asset_id` tới ảnh đó — FK KHÔNG cascade: ảnh tham khảo không
 //   bị xoá khi còn ô nào trỏ tới (cron dọn bỏ qua, xoá theo yêu cầu gặp lỗi khoá ngoại thì giữ).
 // - FK tới `pages`/`posts` `on delete cascade`: trang chỉ bị xoá cứng khi xoá dữ liệu theo yêu cầu (gỡ trang là soft-delete).
 import { CANCEL_REASONS, IMAGE_ERROR_CODES, MEDIA_ASSET_SOURCES, MEDIA_ASSET_STATUSES, POST_SOURCES, POST_TARGET_STATUSES } from '@ottm/shared'
 import { sql } from 'drizzle-orm'
-import { boolean, check, index, integer, pgTable, primaryKey, text, timestamp, unique, uuid, type AnyPgColumn } from 'drizzle-orm/pg-core'
+import { boolean, check, index, integer, jsonb, pgTable, primaryKey, text, timestamp, unique, uuid, type AnyPgColumn } from 'drizzle-orm/pg-core'
 import { pagesTable } from '../pages/index.ts'
 
 const inList = (xs: readonly string[]) => sql.raw(xs.map((s) => `'${s}'`).join(', '))
@@ -58,6 +59,11 @@ export const postTargets = pgTable(
     held: boolean('held').notNull().default(false),
     /** Story 7.4: job sinh nội dung đang giữ slot tới lúc này (lease tự hết hạn khi job chết giữa chừng). */
     generateLeaseUntil: timestamp('generate_lease_until', { withTimezone: true, precision: 3 }),
+    /**
+     * Story 7.8: kế hoạch nội dung của slot (`StoredSlotPlan` — brief do model chữ lên theo lô, hoặc `{status:'failed'}`
+     * khi đã lên mà hỏng); `null` = chưa lên. Tạo lại xoá về `null`. Không log.
+     */
+    plan: jsonb('plan'),
     /** Khoá lạc quan (AD-13): tăng mỗi lần target đổi. */
     version: integer('version').notNull().default(0),
     /** Tăng mỗi lần đổi `scheduled_at` hoặc vào/rời `scheduled` (Story 6.4). */

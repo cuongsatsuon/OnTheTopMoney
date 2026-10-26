@@ -4,13 +4,16 @@
 // `cancel` — không có đường ghi riêng. Story 7.4: bài chiến dịch chờ duyệt duyệt ngay trên lịch qua CÙNG route hành động
 // slot của "Bài chờ duyệt" (`POST /campaigns/:id/slots/:targetId/transition`, `approve`); quá giờ → hỏi giờ mới.
 // Story 7.5: bài của chiến dịch tạm dừng (`held`) ghi "Tạm dừng" trên ô và trong ngăn.
+// Story 7.8: slot chiến dịch có kế hoạch nội dung → nhãn định dạng trên ô / ngăn, bài chưa viết hiện tiêu đề kế hoạch.
 // Lưới tính theo ngày giờ VN (UTC+7 cố định) bất kể múi giờ trình duyệt; khoá ngày `YYYY-MM-DD`.
 // Phần thuần tách khỏi hook để test được (calendar.test.ts).
 import {
   CAMPAIGN_SLOT_MIN_LEAD_MS,
+  CONTENT_FORMAT_LABEL,
   CalendarResponse,
   type CalendarItemDto,
   type CampaignSlotActionRequest,
+  type ContentFormat,
   type PageDto,
   type Platform,
   type PostTargetStatus,
@@ -108,6 +111,9 @@ export interface CalendarGroup {
   title: string | null
   /** Story 7.3: chủ đề — slot chiến dịch chưa viết hiện "AI sẽ viết · <chủ đề>". */
   topic: string | null
+  /** Story 7.8: tiêu đề kế hoạch nội dung (ưu tiên hơn chủ đề khi bài chưa viết) + định dạng bài. */
+  planTitle: string | null
+  planFormat: ContentFormat | null
   thumbnailUrl: string | null
   /** Story 7.5: có bài bị giữ không đăng (chiến dịch tạm dừng). */
   held: boolean
@@ -130,6 +136,8 @@ export function groupCalendarItems(items: readonly CalendarItemDto[]): CalendarG
       g.ai ||= it.ai
       g.title ??= it.title
       g.topic ??= it.topic
+      g.planTitle ??= it.planTitle
+      g.planFormat ??= it.planFormat
       g.thumbnailUrl ??= it.thumbnailUrl
       g.held ||= it.held
       continue
@@ -148,6 +156,8 @@ export function groupCalendarItems(items: readonly CalendarItemDto[]): CalendarG
       ai: it.ai,
       title: it.title,
       topic: it.topic,
+      planTitle: it.planTitle,
+      planFormat: it.planFormat,
       thumbnailUrl: it.thumbnailUrl,
       held: it.held,
     })
@@ -327,11 +337,22 @@ export function approveCalls(g: Pick<CalendarGroup, 'items' | 'campaignId' | 'sc
   }))
 }
 
-/** Tiêu đề ô: đầu caption; slot chiến dịch AI chưa viết (Story 7.3) → "AI sẽ viết · <chủ đề>"; còn lại bài chỉ có ảnh. */
-export function groupTitle(g: Pick<CalendarGroup, 'title' | 'status' | 'topic'>): string {
+/**
+ * Tiêu đề ô: đầu caption; slot chiến dịch AI chưa viết (Story 7.3) → "AI sẽ viết · <tiêu đề kế hoạch (7.8) hoặc chủ đề>";
+ * còn lại bài chỉ có ảnh.
+ */
+export function groupTitle(g: Pick<CalendarGroup, 'title' | 'status' | 'topic'> & { planTitle?: string | null }): string {
   if (g.title) return g.title
-  if (g.status === 'planned') return g.topic ? `AI sẽ viết · ${g.topic}` : 'AI sẽ viết'
+  if (g.status === 'planned') {
+    const what = g.planTitle || g.topic
+    return what ? `AI sẽ viết · ${what}` : 'AI sẽ viết'
+  }
   return 'Bài chỉ có ảnh'
+}
+
+/** Story 7.8: nhãn định dạng bài theo kế hoạch nội dung (ô lịch, ngăn chi tiết); `null` = không có. */
+export function groupFormatLabel(g: Pick<CalendarGroup, 'planFormat'>): string | null {
+  return g.planFormat ? CONTENT_FORMAT_LABEL[g.planFormat] : null
 }
 
 /**

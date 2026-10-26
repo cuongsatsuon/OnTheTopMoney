@@ -10,7 +10,30 @@ export {
   formalityGuide,
   type CaptionBrand,
 } from './caption.ts'
-export { COMPOSE_MAX_OUTPUT_TOKENS, buildComposePrompt, composeInput, composeInstructions, type ComposeContext } from './compose.ts'
+export {
+  COMPOSE_MAX_OUTPUT_TOKENS,
+  COMPOSE_RECENT_MAX,
+  buildComposePrompt,
+  composeInput,
+  composeInstructions,
+  type ComposeContext,
+  type ComposePlan,
+} from './compose.ts'
+export {
+  CAMPAIGN_PLAN_FIELD_MAX,
+  CAMPAIGN_PLAN_HISTORY_MAX,
+  FORMAT_GUIDE,
+  buildCampaignPlanPrompt,
+  campaignPlanInput,
+  campaignPlanInstructions,
+  campaignPlanMaxOutputTokens,
+  campaignPlanOutputSchema,
+  parseCampaignPlanOutput,
+  type CampaignPlanContext,
+  type CampaignPlanHistoryItem,
+  type CampaignPlanItem,
+  type CampaignPlanSlot,
+} from './campaign-plan.ts'
 export {
   REPLY_MAX_OUTPUT_TOKENS,
   buildReplyPrompt,

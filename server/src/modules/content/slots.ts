@@ -21,6 +21,9 @@
 // tới ảnh sản phẩm và prompt dựng bằng mẫu ảnh tham khảo kiểu `ad` → job ảnh có sẵn đi đường Images API edits (6.6), giữ
 // đúng sản phẩm. Ảnh không còn `ready` → prompt 6.8 (không chặn bài). `refreshSlotImages`: nháp đổi ảnh sản phẩm → làm lại
 // ảnh của bài xem trước đã có ảnh từ ảnh khác (giữ caption).
+// Story 7.8 (kế hoạch nội dung — `slot-plans.ts` lên trước mỗi lô): caption viết từ brief của slot (định dạng, góc, câu mở,
+// ý chính, CTA) + câu mở của các bài gần nhất cùng chiến dịch + trang (không lặp — có cả khi slot không có brief); ảnh dựng
+// từ ý ảnh + tiêu đề của brief. Không có brief → như cũ.
 // Không log caption / prompt.
 import {
   type BrandProfileDto,
@@ -34,13 +37,14 @@ import { bossDbFor, type Db, type DbExecutor } from '../../platform/db/index.ts'
 import { AppError } from '../../platform/errors/index.ts'
 import type { EventPublisher } from '../../platform/events/index.ts'
 import type { JobSender } from '../../platform/jobs/index.ts'
-import { buildImagePrompt, buildReferenceImagePrompt, isMaybeBilled } from '../ai/index.ts'
+import { COMPOSE_RECENT_MAX, buildImagePrompt, buildReferenceImagePrompt, isMaybeBilled } from '../ai/index.ts'
 import { getPage } from '../pages/index.ts'
 import { resolveEffectiveOrNull } from '../profiles/index.ts'
 import { composeCaptionForPage, type ComposeDeps } from './compose.ts'
 import { toMediaAssetDto } from './media.ts'
 import { createPost } from './posts.ts'
 import { mediaAssets, postTargetMedia, postTargets, posts } from './schema.ts'
+import { composePlanOf, planSummary, readSlotPlan, recentOpenings, type OkSlotPlan } from './slot-plan-store.ts'
 import { autoApproveSlot } from './slots-approve.ts'
 
 /** Một slot theo kế hoạch của `campaigns`. */
@@ -136,6 +140,7 @@ async function readSlots(db: DbExecutor, where: SQL | undefined, opts: { bySched
       imagePending: own.some((m) => m.asset.status === 'pending'),
       version: t.version,
       errorCode: (t.errorCode as ErrorCode | null) ?? null,
+      plan: planSummary(t.plan),
     }
   })
 }
@@ -187,8 +192,11 @@ export async function slotCampaignOf(db: DbExecutor, targetId: string): Promise<
   return row?.campaignId ?? null
 }
 
-/** Slot `planned` chưa sinh: caption rỗng, chưa gắn ô ảnh, không có job nào đang giữ (lease còn hạn). */
-const toGenerate = (db: DbExecutor) =>
+/**
+ * Slot `planned` chưa sinh: caption rỗng, chưa gắn ô ảnh, không có job nào đang giữ (lease còn hạn). Story 7.8: lên kế
+ * hoạch (`slot-plans.ts`) chiếm slot bằng cùng điều kiện + lease.
+ */
+export const toGenerate = (db: DbExecutor) =>
   and(
     eq(postTargets.status, 'planned' satisfies PostTargetStatus),
     eq(postTargets.caption, ''),
@@ -301,12 +309,23 @@ export async function slotOfAsset(db: DbExecutor, mediaAssetId: string): Promise
  * tóm ý caption (cắt ở `imageBriefCaption`), luôn kiểu `ad` — chiến dịch không có cài đặt kiểu ảnh.
  * Story 7.7: có ảnh sản phẩm → mẫu ảnh tham khảo (giữ NGUYÊN sản phẩm trong ảnh), KHÔNG kèm dòng "Shop bán": ảnh là nguồn
  * sự thật của sản phẩm, liệt kê sản phẩm khác dễ làm model ghép thêm sản phẩm khác vào ảnh.
+ * Story 7.8: có brief → phần chính = ý ảnh của brief (bố cục / bối cảnh / góc máy khác nhau giữa các bài), "Ý tưởng bài
+ * đăng" = tiêu đề kế hoạch (chữ in lên ảnh nếu có), vẫn kèm tóm ý caption; không brief → như 7.7.
  */
-export function slotImagePrompt(input: { topic: string; caption: string; goal: ComposeGoal; profile: BrandProfileDto; withReference: boolean }): string {
-  const brief = { topic: input.topic, caption: input.caption, mode: 'ad' as const, goal: input.goal, brandColors: input.profile.colors }
-  if (input.withReference) return buildReferenceImagePrompt({ request: '', ...brief })
+export function slotImagePrompt(input: {
+  topic: string
+  caption: string
+  goal: ComposeGoal
+  profile: BrandProfileDto
+  withReference: boolean
+  plan?: Pick<OkSlotPlan, 'title' | 'imageIdea'> | null | undefined
+}): string {
+  const main = input.plan?.imageIdea ?? ''
+  const topic = input.plan?.title || input.topic
+  const brief = { topic, caption: input.caption, mode: 'ad' as const, goal: input.goal, brandColors: input.profile.colors }
+  if (input.withReference) return buildReferenceImagePrompt({ request: main, ...brief })
   return buildImagePrompt({
-    description: '',
+    description: main,
     style: 'product',
     ...brief,
     // Slot không có ảnh tham khảo: nói rõ shop bán gì để ảnh `ad` không vẽ sản phẩm khác (nhất là chế độ Tự đăng).
@@ -339,7 +358,7 @@ export async function refreshSlotImages(
 ): Promise<number> {
   const reference = await usableReference(tx, opts.referenceAssetId)
   const rows = await tx
-    .select({ id: postTargets.id, pageId: postTargets.pageId, caption: postTargets.caption, topic: posts.topic, assetId: mediaAssets.id })
+    .select({ id: postTargets.id, pageId: postTargets.pageId, caption: postTargets.caption, plan: postTargets.plan, topic: posts.topic, assetId: mediaAssets.id })
     .from(postTargets)
     .innerJoin(posts, eq(posts.id, postTargets.postId))
     .innerJoin(postTargetMedia, eq(postTargetMedia.postTargetId, postTargets.id))
@@ -365,7 +384,14 @@ export async function refreshSlotImages(
       .update(mediaAssets)
       .set({ status: 'failed', errorCode: 'IMAGE_FAILED' })
       .where(and(eq(mediaAssets.id, slot.assetId), eq(mediaAssets.status, 'pending')))
-    const prompt = slotImagePrompt({ topic: slot.topic ?? '', caption: slot.caption, goal: opts.goal, profile: effective.config, withReference: reference !== null })
+    const prompt = slotImagePrompt({
+      topic: slot.topic ?? '',
+      caption: slot.caption,
+      goal: opts.goal,
+      profile: effective.config,
+      withReference: reference !== null,
+      plan: readSlotPlan(slot.plan),
+    })
     const [asset] = await tx.insert(mediaAssets).values({ source: 'ai', status: 'pending', prompt, referenceAssetId: reference }).returning({ id: mediaAssets.id })
     await tx.insert(postTargetMedia).values({ postTargetId: slot.id, mediaAssetId: asset!.id, position: 0 })
     const [row] = await tx
@@ -449,7 +475,15 @@ async function generateClaimed(
   opts: SlotGenerateOptions,
 ): Promise<SlotOutcome> {
   const [slot] = await deps.db
-    .select({ status: postTargets.status, caption: postTargets.caption, pageId: postTargets.pageId, topic: posts.topic })
+    .select({
+      status: postTargets.status,
+      caption: postTargets.caption,
+      pageId: postTargets.pageId,
+      campaignId: postTargets.campaignId,
+      slotAt: postTargets.slotAt,
+      plan: postTargets.plan,
+      topic: posts.topic,
+    })
     .from(postTargets)
     .innerJoin(posts, eq(posts.id, postTargets.postId))
     .where(eq(postTargets.id, targetId))
@@ -465,12 +499,19 @@ async function generateClaimed(
   const effective = await resolveEffectiveOrNull<BrandProfileDto>(deps.db, page.id, 'brand')
   if (!effective) return fail('CONFIG_MISSING')
 
+  // Story 7.8: brief của slot (nếu đã lên) + câu mở của các bài gần nhất cùng chiến dịch + trang.
+  const plan = readSlotPlan(slot.plan)
+  const recent = slot.campaignId && slot.slotAt ? await recentOpenings(deps.db, { id: targetId, campaignId: slot.campaignId, pageId: slot.pageId, slotAt: slot.slotAt }, COMPOSE_RECENT_MAX) : []
   let result
   try {
-    result = await composeCaptionForPage(deps, page, effective.config, { topic: slot.topic ?? '', goal: opts.goal, length: 'medium' }, opts.signal, {
-      feature: 'campaign_generate',
-      ref: targetId,
-    })
+    result = await composeCaptionForPage(
+      deps,
+      page,
+      effective.config,
+      { topic: slot.topic ?? '', goal: opts.goal, length: plan?.format === 'question' ? 'short' : 'medium', plan: plan ? composePlanOf(plan) : null, recent },
+      opts.signal,
+      { feature: 'campaign_generate', ref: targetId },
+    )
   } catch (err) {
     if (opts.signal?.aborted) throw err
     if (err instanceof AppError) {
@@ -506,7 +547,7 @@ async function generateClaimed(
       .returning({ pageId: postTargets.pageId, campaignId: postTargets.campaignId, version: postTargets.version })
     if (!row) return { status: 'skipped' }
     const reference = await usableReference(tx, opts.referenceAssetId)
-    const prompt = slotImagePrompt({ topic: slot.topic ?? '', caption, goal: opts.goal, profile: effective.config, withReference: reference !== null })
+    const prompt = slotImagePrompt({ topic: slot.topic ?? '', caption, goal: opts.goal, profile: effective.config, withReference: reference !== null, plan })
     const [asset] = await tx.insert(mediaAssets).values({ source: 'ai', status: 'pending', prompt, referenceAssetId: reference }).returning({ id: mediaAssets.id })
     await tx.insert(postTargetMedia).values({ postTargetId: targetId, mediaAssetId: asset!.id, position: 0 })
     // "Tự đăng": job ảnh duyệt luôn khi ảnh xong (cờ đi cùng payload — `content` không đọc chế độ chiến dịch).

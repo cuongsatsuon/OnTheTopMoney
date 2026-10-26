@@ -6,6 +6,7 @@
 // Story 7.4: hàng đợi "Bài chờ duyệt" thật (`GET /campaigns/pending-slots?scope=`): Duyệt / Sửa / Tạo lại / Từ chối qua cùng
 // route hành động slot với Lịch nội dung; bài quá giờ (hoặc server trả `SCHEDULE_IN_PAST`) → ô chọn giờ mới; "Duyệt tất
 // cả" chỉ duyệt bài không lỗi, chưa quá giờ, tuần tự (lỗi giữa chừng → "Đã xong k/n bài").
+// Story 7.8: thẻ bài chờ duyệt có nhãn định dạng + dòng "tiêu đề · góc" của kế hoạch nội dung.
 import { AlertTriangle, CalendarDays, Check, CircleAlert, Clock, Coins, Megaphone, Pause, Pencil, Play, Plus, RefreshCw, ShieldCheck, Trash2, X, Zap } from 'lucide-react'
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
@@ -39,6 +40,7 @@ import {
   nextPostLabel,
   pausedNote,
   pendingNote,
+  slotPlanView,
   resumeErrorText,
   slotTime,
   slotWhen,
@@ -405,6 +407,7 @@ function PendingQueue({ pages }: { pages: readonly PageDto[] }) {
             const page = pages.find((p) => p.id === slot.pageId)
             const overdue = isOverdue(slot, now)
             const note = pendingNote(slot, now)
+            const plan = slotPlanView(slot.plan)
             const block = approveBlock(slot)
             const isEditing = editing?.id === slot.id
             const when = times[slot.id] ?? (overdue ? approveInput(slot, now) : null)
@@ -417,9 +420,11 @@ function PendingQueue({ pages }: { pages: readonly PageDto[] }) {
                     {page ? <PageLabel page={toUiPage(page)} sub={`${slot.campaignName} · ${slotWhen(slotTime(slot))}`} /> : <span className="text-sm">Trang đã gỡ</span>}
                   </div>
                   {overdue && <Chip tone="warning">Quá giờ</Chip>}
+                  {plan && <Chip tone="ai">{plan.format}</Chip>}
                   {slot.topic && <Chip>{slot.topic}</Chip>}
                   {slot.aiCaption && <AiBadge />}
                 </div>
+                {plan && <p className="mt-2 text-[13px] font-medium text-foreground">{plan.line}</p>}
                 <div className="mt-3">
                   {isEditing ? (
                     <Textarea rows={5} value={editing.text} onChange={(e) => setEditing({ id: slot.id, text: e.target.value })} aria-label="Nội dung bài" className="w-full" />

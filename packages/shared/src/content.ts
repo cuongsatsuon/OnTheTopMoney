@@ -398,6 +398,43 @@ export const CALENDAR_ITEMS_MAX = 2_000
 /** Độ dài tiêu đề ô lịch (code point đầu của caption). */
 export const CALENDAR_TITLE_MAX = 120
 
+/* ---------- Kế hoạch nội dung của slot chiến dịch (Story 7.8) ---------- */
+
+/**
+ * Định dạng bài của kế hoạch nội dung (model chữ lên brief cho từng slot trước khi viết — Story 7.8). `promo` /
+ * `feedback` chỉ được chọn khi dữ liệu của shop có ưu đãi / phản hồi thật (luật ở prompt).
+ */
+export const CONTENT_FORMATS = ['tip', 'product', 'how_to', 'comparison', 'question', 'behind_scenes', 'feedback', 'story', 'promo'] as const
+export const ContentFormat = z.enum(CONTENT_FORMATS)
+export type ContentFormat = z.infer<typeof ContentFormat>
+
+/** Nhãn ngắn của định dạng (chip trên thẻ bài, Lịch). */
+export const CONTENT_FORMAT_LABEL: Record<ContentFormat, string> = {
+  tip: 'Mẹo',
+  product: 'Giới thiệu SP',
+  how_to: 'Hướng dẫn',
+  comparison: 'So sánh',
+  question: 'Hỏi đáp',
+  behind_scenes: 'Hậu trường',
+  feedback: 'Feedback',
+  story: 'Câu chuyện',
+  promo: 'Khuyến mãi',
+}
+
+/** Giai đoạn phễu của bài: nhận biết → cân nhắc → chuyển đổi. */
+export const FUNNEL_STAGES = ['awareness', 'consideration', 'conversion'] as const
+export const FunnelStage = z.enum(FUNNEL_STAGES)
+export type FunnelStage = z.infer<typeof FunnelStage>
+
+/** Phần kế hoạch của slot trả cho FE (Story 7.8): định dạng, giai đoạn phễu, tiêu đề ngắn, góc nội dung. */
+export const SlotPlanSummary = z.object({
+  format: ContentFormat,
+  funnelStage: FunnelStage,
+  title: z.string(),
+  angle: z.string(),
+})
+export type SlotPlanSummary = z.infer<typeof SlotPlanSummary>
+
 /**
  * Query `GET /api/v1/calendar`: phạm vi (`all|group:<id>|page:<id>`, mặc định `all`) + khoảng `[from, to)` ISO UTC (FE
  * đổi từ lưới ngày giờ VN). `from < to`, dài tối đa `CALENDAR_RANGE_MAX_MS`.
@@ -437,6 +474,10 @@ export const CalendarItemDto = z.object({
   thumbnailUrl: z.url().nullable(),
   /** Story 7.5: bài bị giữ không đăng (chiến dịch tạm dừng) — Lịch ghi "Tạm dừng". */
   held: z.boolean(),
+  /** Story 7.8: tiêu đề kế hoạch của slot chiến dịch (bài chưa viết hiện "AI sẽ viết · <tiêu đề>"); `null` = chưa có. */
+  planTitle: z.string().nullable(),
+  /** Story 7.8: định dạng bài theo kế hoạch; `null` = chưa có / không phải slot. */
+  planFormat: ContentFormat.nullable(),
 })
 export type CalendarItemDto = z.infer<typeof CalendarItemDto>
 

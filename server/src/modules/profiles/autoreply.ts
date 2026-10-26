@@ -254,3 +254,17 @@ export async function autoreplyRunSources(db: DbExecutor, pageId: string): Promi
     pageName: page?.name ?? effective.source.name,
   }
 }
+
+/* ---------- Kế hoạch nội dung chiến dịch (Story 7.8) ---------- */
+
+/**
+ * Kho kiến thức `ready` của một trang cho kế hoạch nội dung chiến dịch — cùng chủ kho "Thử AI" (Story 5.3): trang dùng
+ * riêng / không nhóm → kho trang; trang theo nhóm → kho nhóm. Giữ các mục theo thứ tự tới `maxTokens` (`capKnowledge`).
+ * Trang không có / đã gỡ → `[]`. Không log.
+ */
+export async function pageKnowledge(db: DbExecutor, pageId: string, maxTokens: number): Promise<ReadyKnowledgeEntry[]> {
+  const page = await getPage(db, pageId)
+  if (!page) return []
+  const owner: ProfileOwner = (await usesOwn(db, page)) ? { ownerType: 'page', ownerId: page.id } : { ownerType: 'group', ownerId: page.groupId! }
+  return capKnowledge(await listReadyKnowledge(db, owner), maxTokens).kept
+}

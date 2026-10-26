@@ -33,6 +33,7 @@ import { createDb, type DbHandle } from '../src/platform/db/index.ts'
 import { createEventPublisher, type EventPublisher } from '../src/platform/events/index.ts'
 import { createBoss, createJobSender, ensureQueues, type JobSender } from '../src/platform/jobs/index.ts'
 import { createLogger } from '../src/platform/log/index.ts'
+import { captionRequests, isPlanRequest, planRequests } from './helpers/plan.ts'
 
 const ORIGIN = 'http://localhost:5173'
 const GOOD = 'sk-proj-GENERATE-key-aaaa1111'
@@ -209,7 +210,8 @@ describe('cron campaigns.generate_window + job campaigns.generate', () => {
     expect(rows.slice(0, 3).every((r) => r.caption !== '' && r.error_code === null && r.lease === null)).toBe(true)
     const usage = await handle.sql<{ feature: string; page_id: string; ref: string }[]>`select feature, page_id, ref from ai_usage`
     expect(usage.every((u) => u.feature === 'campaign_generate' && u.page_id === fb)).toBe(true)
-    expect(new Set(usage.map((u) => u.ref))).toEqual(new Set(rows.slice(0, 3).map((r) => r.id)))
+    // Story 7.8: một lời gọi kế hoạch cho lô (`ref` = chiến dịch) + caption từng slot (`ref` = target).
+    expect(new Set(usage.map((u) => u.ref))).toEqual(new Set([c.id, ...rows.slice(0, 3).map((r) => r.id)]))
     // Không đăng gì ở chế độ "Duyệt trước"; chiến dịch khác không bị đụng.
     expect(await jobCount('publish.target')).toBe(0)
     expect(await gen(paused.id)).toBe('skipped')
@@ -222,10 +224,11 @@ describe('cron campaigns.generate_window + job campaigns.generate', () => {
     const c = await running([{ pageId: fb, frequency: null }])
     const [a, b] = await Promise.all([gen(c.id), gen(c.id)])
     expect([a, b].map((r) => (typeof r === 'object' && 'generated' in r ? r.generated : -1)).reduce((x, y) => x + y, 0)).toBe(3)
-    expect(openai.responseRequests).toHaveLength(3)
+    // Story 7.8: kế hoạch cũng đúng một lời gọi cho lô dù hai lượt chạy song song (lease).
+    expect([captionRequests(openai).length, planRequests(openai).length]).toEqual([3, 1])
     expect(await gen(c.id)).toMatchObject({ generated: 0 })
-    expect(openai.responseRequests).toHaveLength(3)
-    expect((await handle.sql<{ n: number }[]>`select count(*)::int as n from ai_usage`)[0]!.n).toBe(3)
+    expect(openai.responseRequests).toHaveLength(4)
+    expect((await handle.sql<{ n: number }[]>`select count(*)::int as n from ai_usage`)[0]!.n).toBe(4)
 
     // Slot ngày 3 đang bị một lượt khác giữ → lượt này không viết; lease hết hạn → viết.
     const day3 = (await slotRows(c.id))[3]!
@@ -376,8 +379,9 @@ describe('hạn mức AI', () => {
     const c = await running([{ pageId: fb, frequency: null }])
     await setOpenAiPrefs(handle.db, events, { ...DEFAULT_OPENAI_PREFS, monthlyLimitVnd: 1_000_000 })
     let n = 0
-    openai.onResponse(async () => {
-      // Lời gọi đầu xong thì hạn mức tháng đã dùng hết (tính cả lời gọi khác).
+    openai.onResponse(async (req) => {
+      if (isPlanRequest(req)) return ok('{"posts":[]}')
+      // Lời gọi caption đầu xong thì hạn mức tháng đã dùng hết (tính cả lời gọi khác).
       if (++n === 1) await handle.sql`update ai_budget_months set spent_vnd = 1000000`
       return ok(`Bài số ${n} cho shop nhé`)
     })
@@ -388,7 +392,7 @@ describe('hạn mức AI', () => {
       ['pending_approval', 'AI_BUDGET_EXCEEDED'],
       ['planned', null],
     ])
-    expect(openai.responseRequests).toHaveLength(1)
+    expect(captionRequests(openai)).toHaveLength(1)
     expect(await jobCount('campaigns.generate')).toBe(0)
   })
 })
@@ -488,9 +492,12 @@ describe('POST /campaigns/:id/slots/:targetId/transition — chiến dịch đan
     const now = await action(c.id, rows[0]!.id, { action: 'regenerate', version: rows[0]!.version, immediate: true })
     expect(now.statusCode, now.body).toBe(200)
     expect(await jobCount('campaigns.generate')).toBe(1)
-    const calls = openai.responseRequests.length
+    const calls = captionRequests(openai).length
+    const plans = planRequests(openai).length
     expect(await gen(c.id)).toMatchObject({ generated: 2 })
-    expect(openai.responseRequests).toHaveLength(calls + 2)
+    expect(captionRequests(openai)).toHaveLength(calls + 2)
+    // Story 7.8: Tạo lại bỏ brief → lượt viết lại lên brief mới (một lời gọi cho 2 slot).
+    expect(planRequests(openai)).toHaveLength(plans + 1)
     expect((await statuses(c.id)).slice(0, 3)).toEqual(Array(3).fill('pending_approval'))
   })
 

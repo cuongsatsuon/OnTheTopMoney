@@ -9,6 +9,7 @@
 // Story 7.7: bước 3 có thẻ "Ảnh sản phẩm" (tuỳ chọn, 1 ảnh tải lên — dùng chung `POST /media-assets` với Soạn bài): mọi bài
 // có ảnh AI sinh từ ảnh này để giữ đúng sản phẩm. Bước 4 hiện ảnh đang dùng; đổi ảnh ở nháp thì ảnh bài xem trước được
 // làm lại (giữ caption). Sau khi bắt đầu không đổi được (như các ô cấu hình khác).
+// Story 7.8: thẻ bài xem trước có nhãn định dạng + dòng "tiêu đề · góc" của kế hoạch nội dung (Tạo lại = kế hoạch mới).
 import { type CampaignDuration, type CampaignFrequency, type CampaignGoal, type CampaignSlotDto, type PageDto, CAMPAIGN_FREQUENCIES } from '@ottm/shared'
 import {
   ArrowLeft,
@@ -86,6 +87,7 @@ import {
   slotCanCancel,
   slotCanEdit,
   slotNote,
+  slotPlanView,
   slotPhase,
   slotWhen,
   splitEven,
@@ -944,14 +946,17 @@ function PreviewList({ campaignId, pages }: { campaignId: string; pages: readonl
         const page = pages.find((p) => p.id === slot.pageId)
         const phase = slotPhase(slot)
         const note = slotNote(slot.errorCode)
+        const plan = slotPlanView(slot.plan)
         const isEditing = editing?.id === slot.id
         return (
           <div key={slot.id} className="rounded-lg border border-border bg-surface p-4">
             <div className="flex flex-wrap items-center gap-2">
               <div className="min-w-0 flex-1">{page ? <PageLabel page={toUiPage(page)} sub={slotWhen(slot.slotAt)} /> : <span className="text-sm">Trang đã gỡ</span>}</div>
+              {plan && <Chip tone="ai">{plan.format}</Chip>}
               {slot.topic && <Chip>{slot.topic}</Chip>}
               {slot.aiCaption && <AiBadge />}
             </div>
+            {plan && <p className="mt-2 text-[13px] font-medium text-foreground">{plan.line}</p>}
 
             <div className="mt-3">
               {phase === 'writing' ? (
