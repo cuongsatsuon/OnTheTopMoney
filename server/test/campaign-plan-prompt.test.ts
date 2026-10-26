@@ -160,6 +160,18 @@ describe('buildComposePrompt — caption từ brief (Story 7.8)', () => {
     expect(p.instructions).not.toContain('Không lặp lại câu mở')
     expect(p.input.endsWith('Hãy viết caption cho bài đăng theo ý tưởng trên, đúng giọng văn và ràng buộc.')).toBe(true)
   })
+
+  it('độ dài + trình bày: Facebook vừa = 6–9 câu, bắt buộc xuống dòng / dòng trống giữa đoạn; Threads tính theo câu', () => {
+    const fb = buildComposePrompt(brand, base).instructions
+    expect(fb).toContain('Độ dài: vừa, khoảng 6–9 câu')
+    expect(fb).toContain('KHÔNG viết thành một khối chữ liền')
+    expect(fb).toContain('các đoạn cách nhau MỘT dòng trống')
+    expect(fb).toContain('hashtag (nếu có) ở dòng cuối cùng')
+    const th = buildComposePrompt(brand, { ...base, platform: 'threads', maxChars: 500 }).instructions
+    expect(th).toContain('Độ dài: vừa, khoảng 2–4 câu.')
+    expect(th).not.toContain('500–900 ký tự')
+    expect(th).toContain('xuống dòng giữa các ý')
+  })
 })
 
 describe('slotImagePrompt — ảnh từ brief (Story 7.8)', () => {

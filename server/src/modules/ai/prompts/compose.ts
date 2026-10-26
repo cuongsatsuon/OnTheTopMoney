@@ -56,7 +56,7 @@ const IMAGE_GUIDE = [
 ].join('\n')
 
 const PLATFORM_GUIDE: Record<Platform, string> = {
-  facebook: 'Nền tảng: Facebook Fanpage. Câu mở đầu thu hút, thân bài nêu rõ lợi ích/ưu đãi, có thể chia đoạn ngắn; hashtag (nếu có) để cuối bài, tối đa 5.',
+  facebook: 'Nền tảng: Facebook Fanpage. Câu mở đầu thu hút, thân bài nêu rõ lợi ích/ưu đãi; hashtag (nếu có) để cuối bài, tối đa 5.',
   instagram:
     'Nền tảng: Instagram. Câu đầu thật cuốn (người xem chỉ thấy 1–2 dòng đầu), xuống dòng thoáng; hashtag để cuối bài, 5–10 hashtag liên quan, KHÔNG quá 30.',
   threads:
@@ -70,9 +70,35 @@ const GOAL_GUIDE: Record<ComposeGoal, string> = {
 }
 
 const LENGTH_GUIDE: Record<ComposeLength, string> = {
+  short: 'Độ dài: ngắn, 2–4 câu (khoảng 150–350 ký tự), 2–3 dòng.',
+  medium: 'Độ dài: vừa, khoảng 6–9 câu (khoảng 500–900 ký tự), chia 3–4 đoạn ngắn.',
+  long: 'Độ dài: dài, khoảng 10–15 câu (khoảng 1.000–1.600 ký tự), chia 4–6 đoạn, có thể liệt kê từng ý.',
+}
+
+/** Threads giới hạn 500 ký tự — độ dài tính theo câu, không theo mốc ký tự của Facebook / Instagram. */
+const THREADS_LENGTH_GUIDE: Record<ComposeLength, string> = {
   short: 'Độ dài: ngắn, 1–2 câu.',
-  medium: 'Độ dài: vừa, khoảng 3–5 câu.',
-  long: 'Độ dài: dài, khoảng 6–10 câu, chia đoạn cho dễ đọc.',
+  medium: 'Độ dài: vừa, khoảng 2–4 câu.',
+  long: 'Độ dài: dài, khoảng 4–6 câu, xuống dòng cho dễ đọc.',
+}
+
+/** Cách trình bày: caption phải chia dòng / đoạn bằng ký tự xuống dòng thật, không viết một khối liền. */
+const LAYOUT_GUIDE: Record<Platform, string> = {
+  facebook: [
+    'Trình bày (bắt buộc): KHÔNG viết thành một khối chữ liền. Dùng ký tự xuống dòng thật:',
+    '- Câu mở đầu đứng riêng một dòng.',
+    '- Thân bài chia đoạn ngắn, mỗi đoạn 1–3 câu; các đoạn cách nhau MỘT dòng trống.',
+    '- Khi liệt kê lợi ích / mẹo / bước làm / so sánh: mỗi ý một dòng, mở đầu bằng emoji hoặc "•" hoặc số thứ tự.',
+    '- Lời kêu gọi hành động đứng riêng một dòng; hashtag (nếu có) ở dòng cuối cùng, cách thân bài một dòng trống.',
+  ].join('\n'),
+  instagram: [
+    'Trình bày (bắt buộc): KHÔNG viết thành một khối chữ liền. Dùng ký tự xuống dòng thật:',
+    '- Câu mở đầu đứng riêng một dòng.',
+    '- Thân bài chia đoạn rất ngắn, mỗi đoạn 1–2 câu; các đoạn cách nhau MỘT dòng trống.',
+    '- Khi liệt kê: mỗi ý một dòng, mở đầu bằng emoji hoặc "•".',
+    '- Lời kêu gọi hành động đứng riêng một dòng; hashtag ở dòng cuối cùng, cách thân bài một dòng trống.',
+  ].join('\n'),
+  threads: 'Trình bày: xuống dòng giữa các ý cho dễ đọc (dùng ký tự xuống dòng thật), không viết một khối liền; không liệt kê dài.',
 }
 
 const PLATFORM_NAME: Record<Platform, string> = { facebook: 'Facebook', instagram: 'Instagram', threads: 'Threads' }
@@ -96,8 +122,9 @@ export function composeInstructions(brand: CaptionBrand, ctx: ComposeContext): s
     `Viết MỘT caption tiếng Việt để đăng lên ${PLATFORM_NAME[ctx.platform]} của shop. Chỉ trả về nội dung caption, không thêm giải thích, tiêu đề hay dấu ngoặc kép bao ngoài.`,
     PLATFORM_GUIDE[ctx.platform],
     GOAL_GUIDE[ctx.goal],
-    ctx.revise?.action === 'shorter' ? '' : LENGTH_GUIDE[ctx.length],
+    ctx.revise?.action === 'shorter' ? '' : (ctx.platform === 'threads' ? THREADS_LENGTH_GUIDE : LENGTH_GUIDE)[ctx.length],
     `KHÔNG quá ${ctx.maxChars} ký tự.`,
+    LAYOUT_GUIDE[ctx.platform],
     `Giọng văn: ${brand.tones.length ? brand.tones.join(', ') : 'thân thiện'}; mức độ ${formalityGuide(brand.formality)}.`,
     brand.pronoun ? `Xưng hô: ${brand.pronoun}.` : '',
     EMOJI_GUIDE[brand.emoji],
