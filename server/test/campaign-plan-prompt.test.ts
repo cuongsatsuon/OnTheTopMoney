@@ -9,6 +9,7 @@ import {
   buildCampaignPlanPrompt,
   buildComposePrompt,
   buildImagePrompt,
+  finalizeCaptionHashtags,
   buildReferenceImagePrompt,
   campaignPlanMaxOutputTokens,
   parseCampaignPlanOutput,
@@ -166,11 +167,37 @@ describe('buildComposePrompt — caption từ brief (Story 7.8)', () => {
     expect(fb).toContain('Độ dài: vừa, khoảng 6–9 câu')
     expect(fb).toContain('KHÔNG viết thành một khối chữ liền')
     expect(fb).toContain('các đoạn cách nhau MỘT dòng trống')
-    expect(fb).toContain('hashtag (nếu có) ở dòng cuối cùng')
+    expect(fb).toContain('hashtag ở dòng cuối cùng')
     const th = buildComposePrompt(brand, { ...base, platform: 'threads', maxChars: 500 }).instructions
     expect(th).toContain('Độ dài: vừa, khoảng 2–4 câu.')
     expect(th).not.toContain('500–900 ký tự')
     expect(th).toContain('xuống dòng giữa các ý')
+  })
+
+  it('hashtag bắt buộc ở dòng cuối riêng: có hashtag hồ sơ → nêu đủ; không có → AI tự chọn; Threads 1', () => {
+    const own = buildComposePrompt({ ...brand, hashtags: ['giadung', '#minhphat'] }, base).instructions
+    expect(own).toContain('Hashtag (bắt buộc)')
+    expect(own).toContain('dòng đó phải có đủ hashtag của shop: #giadung #minhphat; có thể thêm hashtag liên quan, tổng tối đa 5.')
+    expect(own).not.toContain('(nếu có)')
+    expect(buildComposePrompt(brand, base).instructions).toContain('chọn 2–4 hashtag liên quan')
+    expect(buildComposePrompt(brand, { ...base, platform: 'threads', maxChars: 500 }).instructions).toContain('chọn 1 hashtag liên quan')
+  })
+})
+
+describe('finalizeCaptionHashtags', () => {
+  const tags = ['phimxinh', '#banphimco']
+  it('thiếu hashtag → thêm dòng cuối riêng; đuôi hashtag dính câu cuối → tách ra dòng riêng + bổ sung cái thiếu', () => {
+    expect(finalizeCaptionHashtags('Câu một.\n\nBình luận nhé!', tags, 'facebook', 2200)).toBe('Câu một.\n\nBình luận nhé!\n\n#phimxinh #banphimco')
+    expect(finalizeCaptionHashtags('Câu một.\n\nBình luận nhé! #phimxinh', tags, 'facebook', 2200)).toBe('Câu một.\n\nBình luận nhé!\n\n#phimxinh #banphimco')
+    expect(finalizeCaptionHashtags('Câu một.\n\n#PhimXinh #banphimco', tags, 'facebook', 2200)).toBe('Câu một.\n\n#PhimXinh #banphimco')
+  })
+  it('giới hạn số hashtag + độ dài nền tảng; không hashtag hồ sơ → chỉ sửa bố cục; caption chỉ có hashtag giữ nguyên', () => {
+    expect(finalizeCaptionHashtags('Hỏi nhé #a', tags, 'threads', 500)).toBe('Hỏi nhé\n\n#a')
+    expect(finalizeCaptionHashtags('Hỏi nhé', tags, 'threads', 500)).toBe('Hỏi nhé\n\n#phimxinh')
+    expect(finalizeCaptionHashtags('Hỏi nhé', tags, 'facebook', 10)).toBe('Hỏi nhé')
+    expect(finalizeCaptionHashtags('Hỏi nhé! #vui', [], 'facebook', 2200)).toBe('Hỏi nhé!\n\n#vui')
+    expect(finalizeCaptionHashtags('#a #b', tags, 'facebook', 2200)).toBe('#a #b')
+    expect(finalizeCaptionHashtags('Giá #1 thị trường', [], 'facebook', 2200)).toBe('Giá #1 thị trường')
   })
 })
 

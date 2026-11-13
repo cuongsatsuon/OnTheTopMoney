@@ -19,7 +19,7 @@ import {
 } from '@ottm/shared'
 import { inArray } from 'drizzle-orm'
 import type { MediaStores } from '../../adapters/media/index.ts'
-import { buildComposePrompt, checkOutput, generateText, retryNote, type AiDeps, type AiInputImage, type CheckBrand, type ComposePlan } from '../ai/index.ts'
+import { buildComposePrompt, checkOutput, finalizeCaptionHashtags, generateText, retryNote, type AiDeps, type AiInputImage, type CheckBrand, type ComposePlan } from '../ai/index.ts'
 import { getPage } from '../pages/index.ts'
 import { resolveEffectiveOrNull } from '../profiles/index.ts'
 import { AppError } from '../../platform/errors/index.ts'
@@ -200,12 +200,14 @@ export async function composeCaptionForPage(
         ...(signal ? { signal } : {}),
       })
     ).text.trim()
+  // Hashtag luôn ở dòng cuối riêng + đủ hashtag hồ sơ (AI hay quên ở bài ngắn) — trước hậu kiểm để kiểm đúng bản sẽ lưu.
+  const finalize = (text: string) => finalizeCaptionHashtags(text, brand.hashtags, page.platform, maxChars)
   const check = (text: string) => checkOutput(text, { brand: checkBrand, kind: 'caption', maxChars, platform: page.platform })
 
-  let caption = await generate()
+  let caption = finalize(await generate())
   let result = check(caption)
   if (!result.clean) {
-    caption = await generate(retryNote(result.violations, 'Bản caption'))
+    caption = finalize(await generate(retryNote(result.violations, 'Bản caption')))
     result = check(caption)
   }
   // Model trả rỗng (vd hết token đầu ra) → lỗi của riêng trang này; không trả `ok` rỗng để FE đè mất caption đang có.

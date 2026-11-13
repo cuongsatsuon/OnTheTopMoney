@@ -163,7 +163,7 @@ describe('buildComposePrompt (mẫu prompt Soạn bài — Story 6.2)', () => {
     const p = buildComposePrompt(brand, ctx)
     expect(p.maxOutputTokens).toBe(1200)
     expect(p.instructions).toContain('đăng lên Threads')
-    expect(p.instructions).toContain('tối đa 1 hashtag')
+    expect(p.instructions).toContain('dòng đó phải có đủ hashtag của shop: #giadung; không thêm hashtag nào khác (tối đa 1).')
     expect(p.instructions).toContain('Mục tiêu: tăng tương tác')
     expect(p.instructions).toContain('Độ dài: dài')
     expect(p.instructions).toContain('KHÔNG quá 500 ký tự.')
@@ -199,7 +199,7 @@ describe('buildComposePrompt (mẫu prompt Soạn bài — Story 6.2)', () => {
   })
 
   it('Facebook / Instagram: cách viết riêng; ghi chú sinh lại nêu "Bản caption"', () => {
-    expect(buildComposePrompt(brand, { ...ctx, platform: 'instagram', maxChars: 2200 }).instructions).toContain('KHÔNG quá 30')
+    expect(buildComposePrompt(brand, { ...ctx, platform: 'instagram', maxChars: 2200 }).instructions).toContain('tổng tối đa 10')
     expect(buildComposePrompt(brand, { ...ctx, platform: 'facebook', maxChars: 2200 }).instructions).toContain('Facebook Fanpage')
     expect(retryNote([{ kind: 'banned_word', text: 'rẻ nhất' }], 'Bản caption')).toContain('Bản caption trước bị chặn')
   })

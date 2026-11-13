@@ -12,9 +12,12 @@ export {
 } from './caption.ts'
 export {
   COMPOSE_MAX_OUTPUT_TOKENS,
+  CAPTION_HASHTAG_LIMIT,
   COMPOSE_RECENT_MAX,
+  brandHashtagsFor,
   buildComposePrompt,
   composeInput,
+  finalizeCaptionHashtags,
   composeInstructions,
   type ComposeContext,
   type ComposePlan,

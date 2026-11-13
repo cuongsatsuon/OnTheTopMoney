@@ -110,6 +110,7 @@ export {
   imageDescriptionInstructions,
   composeInput,
   composeInstructions,
+  finalizeCaptionHashtags,
   contactSummaryInput,
   contactSummaryInstructions,
   buildReplyPrompt,

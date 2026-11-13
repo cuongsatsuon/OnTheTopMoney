@@ -11,7 +11,7 @@ import type { CreateResponseResult } from '../src/adapters/openai/index.ts'
 import { buildApp } from '../src/app/app.ts'
 import { SESSION_COOKIE } from '../src/app/auth/index.ts'
 import { runBrandSample } from '../src/app/brand-sample.ts'
-import { setOpenAiKey, settle } from '../src/modules/ai/index.ts'
+import { budgetMonth, setOpenAiKey, settle } from '../src/modules/ai/index.ts'
 import { DEFAULT_OPENAI_PREFS, createSession, setOpenAiPrefs, type OpenAiPrefs } from '../src/modules/settings/index.ts'
 import { createDb, type DbHandle } from '../src/platform/db/index.ts'
 import { createEventPublisher, type EventPublisher } from '../src/platform/events/index.ts'
@@ -20,7 +20,7 @@ import { createLogger } from '../src/platform/log/index.ts'
 import { waitFor } from './helpers/realtime.ts'
 
 const GOOD = 'sk-proj-SAMPLE-key-aaaa1111'
-const MONTH = '2026-10'
+const MONTH = budgetMonth(new Date())
 const NOW = new Date('2026-10-15T05:00:00Z')
 
 let handle: DbHandle

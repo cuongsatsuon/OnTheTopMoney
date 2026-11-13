@@ -8,7 +8,7 @@
 // Story 6.6: `hasImage` — gateway gửi kèm ảnh của tab; caption tả đúng ảnh, chữ trong ảnh cũng chỉ là dữ liệu.
 // Story 7.8 (slot chiến dịch): `plan` = brief của bài (định dạng, góc, câu mở, ý chính, CTA — `campaign-plan.ts`), `recent`
 // = câu mở của các bài gần nhất cùng chiến dịch + trang → "không lặp". Cả hai trong «» như ý tưởng.
-import { CONTENT_FORMAT_LABEL, type ComposeGoal, type ComposeLength, type ComposeReviseAction, type ContentFormat, type FunnelStage, type Platform } from '@ottm/shared'
+import { CONTENT_FORMAT_LABEL, captionLength, type ComposeGoal, type ComposeLength, type ComposeReviseAction, type ContentFormat, type FunnelStage, type Platform } from '@ottm/shared'
 import { FORMAT_GUIDE, FUNNEL_GUIDE, funnelLabel } from './campaign-plan.ts'
 import { EMOJI_GUIDE, brandFactLines, captionGuardLines, formalityGuide, type CaptionBrand } from './caption.ts'
 
@@ -56,11 +56,70 @@ const IMAGE_GUIDE = [
 ].join('\n')
 
 const PLATFORM_GUIDE: Record<Platform, string> = {
-  facebook: 'Nền tảng: Facebook Fanpage. Câu mở đầu thu hút, thân bài nêu rõ lợi ích/ưu đãi; hashtag (nếu có) để cuối bài, tối đa 5.',
-  instagram:
-    'Nền tảng: Instagram. Câu đầu thật cuốn (người xem chỉ thấy 1–2 dòng đầu), xuống dòng thoáng; hashtag để cuối bài, 5–10 hashtag liên quan, KHÔNG quá 30.',
-  threads:
-    'Nền tảng: Threads. Ngắn gọn, giọng trò chuyện tự nhiên như đang tâm sự; tối đa 1 hashtag. Threads tính mỗi emoji bằng nhiều ký tự nên dùng rất ít emoji.',
+  facebook: 'Nền tảng: Facebook Fanpage. Câu mở đầu thu hút, thân bài nêu rõ lợi ích/ưu đãi.',
+  instagram: 'Nền tảng: Instagram. Câu đầu thật cuốn (người xem chỉ thấy 1–2 dòng đầu), xuống dòng thoáng.',
+  threads: 'Nền tảng: Threads. Ngắn gọn, giọng trò chuyện tự nhiên như đang tâm sự. Threads tính mỗi emoji bằng nhiều ký tự nên dùng rất ít emoji.',
+}
+
+/** Số hashtag tối đa AI dùng trên mỗi nền tảng (Instagram cho 30, nhưng 5–10 là đủ; Threads chỉ 1). */
+export const CAPTION_HASHTAG_LIMIT: Record<Platform, number> = { facebook: 5, instagram: 10, threads: 1 }
+
+/** Hashtag của hồ sơ: thêm `#`, bỏ trùng (không phân biệt hoa thường), cắt theo giới hạn nền tảng. */
+export function brandHashtagsFor(hashtags: readonly string[], platform: Platform): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const raw of hashtags) {
+    const tag = `#${raw.trim().replace(/^#+/u, '')}`
+    if (tag === '#' || /\s/u.test(tag) || seen.has(tag.toLowerCase())) continue
+    seen.add(tag.toLowerCase())
+    out.push(tag)
+  }
+  return out.slice(0, CAPTION_HASHTAG_LIMIT[platform])
+}
+
+/** Hashtag bắt buộc: dòng cuối riêng; có hashtag hồ sơ → phải có đủ, không có → AI tự chọn hashtag liên quan. */
+function hashtagGuide(brand: CaptionBrand, platform: Platform): string {
+  const limit = CAPTION_HASHTAG_LIMIT[platform]
+  const own = brandHashtagsFor(brand.hashtags, platform)
+  const where = 'kết thúc caption bằng MỘT dòng riêng chỉ gồm hashtag (không chung dòng với lời kêu gọi), cách thân bài một dòng trống'
+  if (own.length) {
+    const extra = own.length < limit ? `; có thể thêm hashtag liên quan, tổng tối đa ${limit}` : `; không thêm hashtag nào khác (tối đa ${limit})`
+    return `Hashtag (bắt buộc): ${where}; dòng đó phải có đủ hashtag của shop: ${own.join(' ')}${extra}.`
+  }
+  return `Hashtag (bắt buộc): ${where}; chọn ${platform === 'threads' ? '1 hashtag' : `2–${Math.min(limit, 4)} hashtag`} liên quan đến sản phẩm / chủ đề, viết liền không dấu cách.`
+}
+
+const HASHTAG_LINE_RE = /^(?:#[\p{L}\p{N}_]+\s*)+$/u
+const TRAILING_TAGS_RE = /(?:\s+#[\p{L}\p{N}_]+)+\s*$/u
+
+/**
+ * Hậu xử lý caption AI: hashtag luôn ở dòng cuối riêng (tách đuôi hashtag dính vào câu cuối) và có đủ hashtag hồ sơ còn
+ * thiếu — trong giới hạn số hashtag và độ dài của nền tảng (vượt → giữ bản chưa thêm). Không có hashtag hồ sơ → chỉ sửa bố cục.
+ */
+export function finalizeCaptionHashtags(caption: string, brandTags: readonly string[], platform: Platform, maxChars: number): string {
+  const text = caption.trim()
+  if (!text) return text
+  const lines = text.split('\n')
+  const last = lines.at(-1)!.trim()
+  let body: string
+  let tags: string[]
+  if (HASHTAG_LINE_RE.test(last)) {
+    body = lines.slice(0, -1).join('\n').trimEnd()
+    tags = last.split(/\s+/u)
+  } else {
+    const tail = last.match(TRAILING_TAGS_RE)
+    body = tail ? text.slice(0, text.length - tail[0].length).trimEnd() : text
+    tags = tail ? tail[0].trim().split(/\s+/u) : []
+  }
+  if (!body) return text
+  const have = new Set(tags.map((t) => t.toLowerCase()))
+  const room = Math.max(0, CAPTION_HASHTAG_LIMIT[platform] - tags.length)
+  const missing = brandHashtagsFor(brandTags, platform).filter((t) => !have.has(t.toLowerCase())).slice(0, room)
+  const join = (list: readonly string[]) => (list.length ? `${body}\n\n${list.join(' ')}` : body)
+  const full = join([...tags, ...missing])
+  if (captionLength(full, platform) <= maxChars) return full
+  const moved = join(tags)
+  return captionLength(moved, platform) <= maxChars ? moved : text
 }
 
 const GOAL_GUIDE: Record<ComposeGoal, string> = {
@@ -89,7 +148,7 @@ const LAYOUT_GUIDE: Record<Platform, string> = {
     '- Câu mở đầu đứng riêng một dòng.',
     '- Thân bài chia đoạn ngắn, mỗi đoạn 1–3 câu; các đoạn cách nhau MỘT dòng trống.',
     '- Khi liệt kê lợi ích / mẹo / bước làm / so sánh: mỗi ý một dòng, mở đầu bằng emoji hoặc "•" hoặc số thứ tự.',
-    '- Lời kêu gọi hành động đứng riêng một dòng; hashtag (nếu có) ở dòng cuối cùng, cách thân bài một dòng trống.',
+    '- Lời kêu gọi hành động đứng riêng một dòng; hashtag ở dòng cuối cùng, cách thân bài một dòng trống.',
   ].join('\n'),
   instagram: [
     'Trình bày (bắt buộc): KHÔNG viết thành một khối chữ liền. Dùng ký tự xuống dòng thật:',
@@ -125,6 +184,7 @@ export function composeInstructions(brand: CaptionBrand, ctx: ComposeContext): s
     ctx.revise?.action === 'shorter' ? '' : (ctx.platform === 'threads' ? THREADS_LENGTH_GUIDE : LENGTH_GUIDE)[ctx.length],
     `KHÔNG quá ${ctx.maxChars} ký tự.`,
     LAYOUT_GUIDE[ctx.platform],
+    hashtagGuide(brand, ctx.platform),
     `Giọng văn: ${brand.tones.length ? brand.tones.join(', ') : 'thân thiện'}; mức độ ${formalityGuide(brand.formality)}.`,
     brand.pronoun ? `Xưng hô: ${brand.pronoun}.` : '',
     EMOJI_GUIDE[brand.emoji],
